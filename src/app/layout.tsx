@@ -42,6 +42,9 @@ export default async function RootLayout({
                 </Link>
               </div>
               <nav className="flex items-center gap-6 text-sm">
+                <Link href="/plan" className="transition-colors hover:text-foreground/80 text-foreground/60">
+                  Plan
+                </Link>
                 <Link href="/personas" className="transition-colors hover:text-foreground/80 text-foreground/60">
                   Personas
                 </Link>
