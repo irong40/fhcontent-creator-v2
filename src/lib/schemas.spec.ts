@@ -5,6 +5,8 @@ import {
     contentUpdateSchema,
     topicResponseSchema,
     contentResponseSchema,
+    voiceGenerateSchema,
+    videoGenerateSchema,
 } from './schemas';
 
 describe('topicGenerateSchema', () => {
@@ -230,6 +232,91 @@ describe('contentResponseSchema', () => {
                 { pieceType: 'long', captionLong: 'x', captionShort: 'x' },
                 ...validPieces.slice(1),
             ],
+        });
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('voiceGenerateSchema', () => {
+    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
+    it('accepts valid contentPieceId and voiceId', () => {
+        const result = voiceGenerateSchema.parse({
+            contentPieceId: validUuid,
+            voiceId: 'pNInz6obpgDQGcFmaJgB',
+        });
+        expect(result.contentPieceId).toBe(validUuid);
+        expect(result.voiceId).toBe('pNInz6obpgDQGcFmaJgB');
+    });
+
+    it('rejects non-UUID contentPieceId', () => {
+        const result = voiceGenerateSchema.safeParse({
+            contentPieceId: 'not-uuid',
+            voiceId: 'pNInz6obpgDQGcFmaJgB',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects empty voiceId', () => {
+        const result = voiceGenerateSchema.safeParse({
+            contentPieceId: validUuid,
+            voiceId: '',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing voiceId', () => {
+        const result = voiceGenerateSchema.safeParse({
+            contentPieceId: validUuid,
+        });
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('videoGenerateSchema', () => {
+    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
+    it('accepts valid contentPieceId, avatarId, and audioUrl', () => {
+        const result = videoGenerateSchema.parse({
+            contentPieceId: validUuid,
+            avatarId: 'avatar_abc123',
+            audioUrl: 'https://storage.supabase.co/media/audio.mp3',
+        });
+        expect(result.contentPieceId).toBe(validUuid);
+        expect(result.avatarId).toBe('avatar_abc123');
+        expect(result.audioUrl).toBe('https://storage.supabase.co/media/audio.mp3');
+    });
+
+    it('rejects non-UUID contentPieceId', () => {
+        const result = videoGenerateSchema.safeParse({
+            contentPieceId: 'bad',
+            avatarId: 'avatar_abc123',
+            audioUrl: 'https://example.com/audio.mp3',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects invalid audioUrl', () => {
+        const result = videoGenerateSchema.safeParse({
+            contentPieceId: validUuid,
+            avatarId: 'avatar_abc123',
+            audioUrl: 'not-a-url',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects empty avatarId', () => {
+        const result = videoGenerateSchema.safeParse({
+            contentPieceId: validUuid,
+            avatarId: '',
+            audioUrl: 'https://example.com/audio.mp3',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing fields', () => {
+        const result = videoGenerateSchema.safeParse({
+            contentPieceId: validUuid,
         });
         expect(result.success).toBe(false);
     });

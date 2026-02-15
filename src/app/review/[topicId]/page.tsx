@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { wordCount, estimateDuration } from '@/lib/utils';
-import type { Topic, ContentPiece, HistoricalPoint } from '@/types/database';
+import type { Topic, ContentPiece, AudioAsset, HistoricalPoint, Persona } from '@/types/database';
 
 const TAB_LABELS: Record<string, string> = {
     long: 'Long Video',
@@ -22,24 +22,52 @@ const TAB_LABELS: Record<string, string> = {
     carousel: 'Carousel',
 };
 
+const VIDEO_PIECE_TYPES = ['long', 'short_1', 'short_2', 'short_3', 'short_4'];
+
+interface TopicWithPersona extends Topic {
+    personas: Persona;
+}
+
 export default function ReviewPage() {
     const { topicId } = useParams<{ topicId: string }>();
     const router = useRouter();
     const supabase = createClient();
 
-    const [topic, setTopic] = useState<Topic | null>(null);
+    const [topic, setTopic] = useState<TopicWithPersona | null>(null);
     const [pieces, setPieces] = useState<ContentPiece[]>([]);
+    const [audioAssets, setAudioAssets] = useState<Record<string, AudioAsset>>({});
     const [saving, setSaving] = useState<string | null>(null);
+    const [generating, setGenerating] = useState<string | null>(null);
     const [dirty, setDirty] = useState<Record<string, Partial<ContentPiece>>>({});
     const [error, setError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         const [topicRes, piecesRes] = await Promise.all([
-            supabase.from('topics').select('*').eq('id', topicId).single(),
+            supabase.from('topics').select('*, personas(*)').eq('id', topicId).single(),
             supabase.from('content_pieces').select('*').eq('topic_id', topicId).order('piece_order'),
         ]);
-        if (topicRes.data) setTopic(topicRes.data);
-        if (piecesRes.data) setPieces(piecesRes.data);
+        if (topicRes.data) setTopic(topicRes.data as unknown as TopicWithPersona);
+        if (piecesRes.data) {
+            setPieces(piecesRes.data);
+
+            // Fetch audio assets for all pieces
+            const pieceIds = piecesRes.data.map(p => p.id);
+            if (pieceIds.length > 0) {
+                const { data: audioData } = await supabase
+                    .from('audio_assets')
+                    .select('*')
+                    .in('content_piece_id', pieceIds)
+                    .eq('status', 'ready');
+
+                if (audioData) {
+                    const audioMap: Record<string, AudioAsset> = {};
+                    for (const asset of audioData) {
+                        audioMap[asset.content_piece_id] = asset;
+                    }
+                    setAudioAssets(audioMap);
+                }
+            }
+        }
     }, [supabase, topicId]);
 
     useEffect(() => { load(); }, [load]);
@@ -68,7 +96,6 @@ export default function ReviewPage() {
                 setError(data.error);
                 return;
             }
-            // Clear dirty state and refresh
             setDirty(prev => {
                 const next = { ...prev };
                 delete next[pieceId];
@@ -79,6 +106,69 @@ export default function ReviewPage() {
             setError(e instanceof Error ? e.message : 'Save failed');
         } finally {
             setSaving(null);
+        }
+    }
+
+    async function generateAudio(pieceId: string) {
+        if (!topic) return;
+        setGenerating(pieceId);
+        setError(null);
+        try {
+            const res = await fetch('/api/media/voice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contentPieceId: pieceId,
+                    voiceId: topic.voice_id,
+                }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                setError(data.error);
+                return;
+            }
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Audio generation failed');
+        } finally {
+            setGenerating(null);
+        }
+    }
+
+    async function generateVideo(pieceId: string) {
+        if (!topic) return;
+        const audio = audioAssets[pieceId];
+        if (!audio?.audio_url) {
+            setError('Generate audio first before submitting video');
+            return;
+        }
+        const avatarId = topic.personas?.heygen_avatar_id;
+        if (!avatarId) {
+            setError('No HeyGen avatar configured for this persona');
+            return;
+        }
+        setGenerating(pieceId);
+        setError(null);
+        try {
+            const res = await fetch('/api/media/video', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contentPieceId: pieceId,
+                    avatarId,
+                    audioUrl: audio.audio_url,
+                }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                setError(data.error);
+                return;
+            }
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Video generation failed');
+        } finally {
+            setGenerating(null);
         }
     }
 
@@ -144,6 +234,8 @@ export default function ReviewPage() {
                         const currentCaptionLong = dirty[piece.id]?.caption_long as string ?? piece.caption_long ?? '';
                         const currentCaptionShort = dirty[piece.id]?.caption_short as string ?? piece.caption_short ?? '';
                         const words = wordCount(currentScript);
+                        const isVideoPiece = VIDEO_PIECE_TYPES.includes(piece.piece_type);
+                        const audio = audioAssets[piece.id];
 
                         return (
                             <TabsContent key={piece.id} value={piece.piece_type}>
@@ -185,6 +277,81 @@ export default function ReviewPage() {
                                                 />
                                             </div>
                                         </div>
+
+                                        {/* Audio Preview + Generation (video pieces only) */}
+                                        {isVideoPiece && (
+                                            <>
+                                                <Separator />
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Audio (ElevenLabs TTS)</Label>
+                                                        {audio ? (
+                                                            <Badge variant="outline" className="bg-green-600/20 text-green-400">Ready</Badge>
+                                                        ) : (
+                                                            <Badge variant="outline" className="bg-muted">Not generated</Badge>
+                                                        )}
+                                                    </div>
+                                                    {audio?.audio_url ? (
+                                                        <audio controls className="w-full" src={audio.audio_url}>
+                                                            <track kind="captions" />
+                                                        </audio>
+                                                    ) : (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => generateAudio(piece.id)}
+                                                            disabled={generating === piece.id}
+                                                        >
+                                                            {generating === piece.id ? 'Generating...' : 'Generate Audio'}
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
+
+                                        {/* Video Preview + Generation (video pieces only) */}
+                                        {isVideoPiece && (
+                                            <>
+                                                <Separator />
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Video (HeyGen Avatar)</Label>
+                                                        {piece.heygen_status === 'done' && (
+                                                            <Badge variant="outline" className="bg-green-600/20 text-green-400">Done</Badge>
+                                                        )}
+                                                        {piece.heygen_status === 'processing' && (
+                                                            <Badge variant="outline" className="bg-yellow-600/20 text-yellow-400">Processing</Badge>
+                                                        )}
+                                                        {piece.heygen_status === 'failed' && (
+                                                            <Badge variant="outline" className="bg-red-600/20 text-red-400">Failed</Badge>
+                                                        )}
+                                                        {!piece.heygen_status && (
+                                                            <Badge variant="outline" className="bg-muted">Not submitted</Badge>
+                                                        )}
+                                                    </div>
+                                                    {piece.video_url ? (
+                                                        <video controls className="w-full max-h-96 rounded-md" src={piece.video_url}>
+                                                            <track kind="captions" />
+                                                        </video>
+                                                    ) : audio?.audio_url ? (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => generateVideo(piece.id)}
+                                                            disabled={generating === piece.id || piece.heygen_status === 'processing'}
+                                                        >
+                                                            {piece.heygen_status === 'processing'
+                                                                ? 'Video rendering...'
+                                                                : generating === piece.id
+                                                                    ? 'Submitting...'
+                                                                    : 'Generate Video'}
+                                                        </Button>
+                                                    ) : (
+                                                        <p className="text-xs text-muted-foreground">Generate audio first</p>
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
 
                                         {/* Thumbnail prompt */}
                                         {piece.thumbnail_prompt && (

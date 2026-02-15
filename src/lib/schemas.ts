@@ -61,6 +61,19 @@ export const contentResponseSchema = z.object({
     pieces: z.array(generatedPieceSchema).length(6),
 });
 
+// --- Media request schemas ---
+
+export const voiceGenerateSchema = z.object({
+    contentPieceId: z.string().uuid(),
+    voiceId: z.string().min(1),
+});
+
+export const videoGenerateSchema = z.object({
+    contentPieceId: z.string().uuid(),
+    avatarId: z.string().min(1),
+    audioUrl: z.string().url(),
+});
+
 // --- Inferred types ---
 
 export type TopicGenerateRequest = z.infer<typeof topicGenerateSchema>;
@@ -68,3 +81,5 @@ export type ContentGenerateRequest = z.infer<typeof contentGenerateSchema>;
 export type ContentUpdateRequest = z.infer<typeof contentUpdateSchema>;
 export type GeneratedTopic = z.infer<typeof generatedTopicSchema>;
 export type GeneratedPiece = z.infer<typeof generatedPieceSchema>;
+export type VoiceGenerateRequest = z.infer<typeof voiceGenerateSchema>;
+export type VideoGenerateRequest = z.infer<typeof videoGenerateSchema>;

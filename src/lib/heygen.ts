@@ -3,6 +3,30 @@
  * AI avatar video generation
  */
 
+export interface HeyGenVideoResponse {
+    data: {
+        video_id: string;
+    };
+}
+
+export interface HeyGenStatusResponse {
+    data: {
+        status: 'pending' | 'processing' | 'completed' | 'failed';
+        video_url: string | null;
+        duration: number | null;
+        error: string | null;
+    };
+}
+
+export interface HeyGenAvatarListResponse {
+    data: {
+        avatars: Array<{
+            avatar_id: string;
+            avatar_name: string;
+        }>;
+    };
+}
+
 class HeyGenClient {
     private readonly baseUrl = 'https://api.heygen.com';
     private readonly apiKey: string;
@@ -38,22 +62,40 @@ class HeyGenClient {
         }
     }
 
-    async listAvatars(): Promise<unknown> {
-        return this.request('/v2/avatars');
+    async listAvatars(): Promise<HeyGenAvatarListResponse> {
+        return this.request<HeyGenAvatarListResponse>('/v2/avatars');
     }
 
-    async createVideo(avatarId: string, script: string, voiceId?: string): Promise<unknown> {
-        return this.request('/v2/video/generate', 'POST', {
+    async createVideoFromAudio(avatarId: string, audioUrl: string): Promise<HeyGenVideoResponse> {
+        return this.request<HeyGenVideoResponse>('/v2/video/generate', 'POST', {
             video_inputs: [{
                 character: {
                     type: 'avatar',
                     avatar_id: avatarId,
                     avatar_style: 'normal',
                 },
-                voice: voiceId ? {
+                voice: {
                     type: 'audio',
-                    audio_url: voiceId,
-                } : {
+                    audio_url: audioUrl,
+                },
+                background: {
+                    type: 'color',
+                    value: '#000000',
+                },
+            }],
+            dimension: { width: 1080, height: 1920 },
+        });
+    }
+
+    async createVideoFromText(avatarId: string, script: string): Promise<HeyGenVideoResponse> {
+        return this.request<HeyGenVideoResponse>('/v2/video/generate', 'POST', {
+            video_inputs: [{
+                character: {
+                    type: 'avatar',
+                    avatar_id: avatarId,
+                    avatar_style: 'normal',
+                },
+                voice: {
                     type: 'text',
                     input_text: script,
                 },
@@ -66,8 +108,8 @@ class HeyGenClient {
         });
     }
 
-    async getVideoStatus(videoId: string): Promise<unknown> {
-        return this.request(`/v1/video_status.get?video_id=${videoId}`);
+    async getVideoStatus(videoId: string): Promise<HeyGenStatusResponse> {
+        return this.request<HeyGenStatusResponse>(`/v1/video_status.get?video_id=${videoId}`);
     }
 }
 
