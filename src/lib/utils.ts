@@ -19,3 +19,8 @@ export function estimateDuration(words: number): string {
   if (minutes < 1) return `${Math.round(minutes * 60)}s`;
   return `${minutes.toFixed(1)} min`;
 }
+
+/** ElevenLabs TTS pricing: ~$0.30 per 1K characters */
+export function estimateElevenLabsCost(charCount: number): number {
+  return (charCount / 1000) * 0.30;
+}

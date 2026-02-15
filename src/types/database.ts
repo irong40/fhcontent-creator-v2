@@ -562,3 +562,8 @@ export type VoiceInsert = Database['public']['Tables']['voices']['Insert'];
 export type PersonaUpdate = Database['public']['Tables']['personas']['Update'];
 export type TopicUpdate = Database['public']['Tables']['topics']['Update'];
 export type ContentPieceUpdate = Database['public']['Tables']['content_pieces']['Update'];
+
+// Join types (Supabase select with nested relations)
+export interface TopicWithPersona extends Topic {
+    personas: Persona;
+}

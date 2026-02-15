@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateCost, wordCount, estimateDuration } from './utils';
+import { estimateCost, wordCount, estimateDuration, estimateElevenLabsCost } from './utils';
 
 describe('estimateCost', () => {
     it('returns 0 for zero tokens', () => {
@@ -96,5 +96,26 @@ describe('estimateDuration', () => {
     it('boundary: 150 words switches to minutes', () => {
         const result = estimateDuration(150);
         expect(result).toMatch(/min$/);
+    });
+});
+
+describe('estimateElevenLabsCost', () => {
+    it('returns 0 for zero characters', () => {
+        expect(estimateElevenLabsCost(0)).toBe(0);
+    });
+
+    it('calculates cost for 1K characters', () => {
+        // 1000 chars * $0.30/1K = $0.30
+        expect(estimateElevenLabsCost(1000)).toBeCloseTo(0.30, 6);
+    });
+
+    it('calculates cost for a typical short script (~400 chars)', () => {
+        // 400 / 1000 * 0.30 = $0.12
+        expect(estimateElevenLabsCost(400)).toBeCloseTo(0.12, 6);
+    });
+
+    it('calculates cost for a long script (~3000 chars)', () => {
+        // 3000 / 1000 * 0.30 = $0.90
+        expect(estimateElevenLabsCost(3000)).toBeCloseTo(0.90, 6);
     });
 });

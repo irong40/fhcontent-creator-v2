@@ -4,7 +4,7 @@ import { claude } from '@/lib/claude';
 import { contentGenerateSchema, contentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
 import { estimateCost } from '@/lib/utils';
-import type { PieceType, Topic, Persona } from '@/types/database';
+import type { PieceType, TopicWithPersona } from '@/types/database';
 
 const PIECE_ORDER: Record<PieceType, number> = {
     long: 1,
@@ -14,10 +14,6 @@ const PIECE_ORDER: Record<PieceType, number> = {
     short_4: 5,
     carousel: 6,
 };
-
-interface TopicWithPersona extends Topic {
-    personas: Persona;
-}
 
 export async function POST(request: NextRequest) {
     try {

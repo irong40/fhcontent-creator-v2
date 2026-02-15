@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { wordCount, estimateDuration } from '@/lib/utils';
-import type { Topic, ContentPiece, AudioAsset, HistoricalPoint, Persona } from '@/types/database';
+import type { ContentPiece, AudioAsset, HistoricalPoint, TopicWithPersona } from '@/types/database';
 
 const TAB_LABELS: Record<string, string> = {
     long: 'Long Video',
@@ -23,10 +23,6 @@ const TAB_LABELS: Record<string, string> = {
 };
 
 const VIDEO_PIECE_TYPES = ['long', 'short_1', 'short_2', 'short_3', 'short_4'];
-
-interface TopicWithPersona extends Topic {
-    personas: Persona;
-}
 
 export default function ReviewPage() {
     const { topicId } = useParams<{ topicId: string }>();

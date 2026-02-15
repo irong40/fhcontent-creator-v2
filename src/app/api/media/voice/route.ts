@@ -2,12 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { elevenlabs } from '@/lib/elevenlabs';
 import { uploadAudio } from '@/lib/storage';
+import { estimateElevenLabsCost } from '@/lib/utils';
 import { voiceGenerateSchema } from '@/lib/schemas';
-import type { ContentPiece, Topic } from '@/types/database';
-
-interface PieceWithTopic extends ContentPiece {
-    topics: Topic;
-}
 
 export async function POST(request: NextRequest) {
     try {
@@ -16,21 +12,19 @@ export async function POST(request: NextRequest) {
 
         const supabase = createAdminClient();
 
-        // Fetch content piece with topic
-        const { data, error: fetchError } = await supabase
+        // Fetch content piece
+        const { data: piece, error: fetchError } = await supabase
             .from('content_pieces')
-            .select('*, topics(*)')
+            .select('*')
             .eq('id', contentPieceId)
             .single();
 
-        if (fetchError || !data) {
+        if (fetchError || !piece) {
             return NextResponse.json(
                 { success: false, error: 'Content piece not found' },
                 { status: 404 },
             );
         }
-
-        const piece = data as unknown as PieceWithTopic;
 
         if (!piece.script) {
             return NextResponse.json(
@@ -65,9 +59,8 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Track cost (ElevenLabs charges ~$0.30/1K chars)
-        const charCount = piece.script.length;
-        const costUsd = (charCount / 1000) * 0.30;
+        // Track cost
+        const costUsd = estimateElevenLabsCost(piece.script.length);
 
         await supabase.from('cost_tracking').insert({
             service: 'elevenlabs',
@@ -81,7 +74,7 @@ export async function POST(request: NextRequest) {
             success: true,
             audioAssetId: audioAsset.id,
             audioUrl,
-            charCount,
+            charCount: piece.script.length,
             costUsd,
         });
     } catch (error) {

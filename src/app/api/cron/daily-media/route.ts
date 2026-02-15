@@ -3,13 +3,10 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { elevenlabs } from '@/lib/elevenlabs';
 import { heygen } from '@/lib/heygen';
 import { uploadAudio } from '@/lib/storage';
-import type { ContentPiece, Topic, Persona, PieceType } from '@/types/database';
+import { estimateElevenLabsCost } from '@/lib/utils';
+import type { ContentPiece, TopicWithPersona, PieceType } from '@/types/database';
 
 const VIDEO_PIECE_TYPES: PieceType[] = ['long', 'short_1', 'short_2', 'short_3', 'short_4'];
-
-interface TopicWithPersona extends Topic {
-    personas: Persona;
-}
 
 export async function GET() {
     try {
@@ -101,13 +98,12 @@ export async function GET() {
                         });
 
                         // Track TTS cost
-                        const charCount = piece.script.length;
                         await supabase.from('cost_tracking').insert({
                             service: 'elevenlabs',
                             operation: 'tts_generation',
                             topic_id: topic.id,
                             content_piece_id: piece.id,
-                            cost_usd: (charCount / 1000) * 0.30,
+                            cost_usd: estimateElevenLabsCost(piece.script.length),
                         });
 
                         topicResult.audioGenerated++;
