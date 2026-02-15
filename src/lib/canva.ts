@@ -53,8 +53,44 @@ class CanvaClient {
         });
     }
 
-    async exportDesign(designId: string, format: 'png' | 'jpg' | 'pdf' = 'png'): Promise<unknown> {
-        return this.request(`/v1/designs/${designId}/exports`, 'POST', { format });
+    async exportDesign(designId: string, format: 'png' | 'jpg' | 'pdf' = 'png'): Promise<{ id: string }> {
+        return this.request<{ id: string }>(`/v1/designs/${designId}/exports`, 'POST', { format });
+    }
+
+    /** Create a design from a template using autofill (placeholder replacement) */
+    async createDesignAutofill(templateId: string, data: Record<string, string>): Promise<{ designId: string }> {
+        const result = await this.request<{ design: { id: string } }>('/v1/autofills', 'POST', {
+            brand_template_id: templateId,
+            data,
+        });
+        return { designId: result.design.id };
+    }
+
+    /** Check the status of an export job */
+    async getExportJob(exportId: string): Promise<{ status: string; urls?: string[] }> {
+        const result = await this.request<{ status: string; urls?: Array<{ url: string }> }>(
+            `/v1/exports/${exportId}`,
+        );
+        return {
+            status: result.status,
+            urls: result.urls?.map(u => u.url),
+        };
+    }
+
+    /** Poll an export job until complete or timeout */
+    async pollExport(exportId: string, timeoutMs: number = 60000): Promise<string[]> {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            const job = await this.getExportJob(exportId);
+            if (job.status === 'completed' && job.urls) {
+                return job.urls;
+            }
+            if (job.status === 'failed') {
+                throw new Error('Canva export job failed');
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+        throw new Error('Canva export polling timed out');
     }
 }
 

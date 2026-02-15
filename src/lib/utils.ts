@@ -24,3 +24,9 @@ export function estimateDuration(words: number): string {
 export function estimateElevenLabsCost(charCount: number): number {
   return (charCount / 1000) * 0.30;
 }
+
+/** DALL-E 3 pricing: $0.04/image standard, $0.08/image HD */
+export function estimateDalleCost(count: number, quality: 'standard' | 'hd' = 'standard'): number {
+  const perImage = quality === 'hd' ? 0.08 : 0.04;
+  return count * perImage;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateCost, wordCount, estimateDuration, estimateElevenLabsCost } from './utils';
+import { estimateCost, wordCount, estimateDuration, estimateElevenLabsCost, estimateDalleCost } from './utils';
 
 describe('estimateCost', () => {
     it('returns 0 for zero tokens', () => {
@@ -117,5 +117,35 @@ describe('estimateElevenLabsCost', () => {
     it('calculates cost for a long script (~3000 chars)', () => {
         // 3000 / 1000 * 0.30 = $0.90
         expect(estimateElevenLabsCost(3000)).toBeCloseTo(0.90, 6);
+    });
+});
+
+describe('estimateDalleCost', () => {
+    it('returns 0 for zero images', () => {
+        expect(estimateDalleCost(0)).toBe(0);
+    });
+
+    it('calculates standard quality cost', () => {
+        // 1 image * $0.04 = $0.04
+        expect(estimateDalleCost(1)).toBeCloseTo(0.04, 6);
+    });
+
+    it('calculates HD quality cost', () => {
+        // 1 image * $0.08 = $0.08
+        expect(estimateDalleCost(1, 'hd')).toBeCloseTo(0.08, 6);
+    });
+
+    it('calculates batch cost', () => {
+        // 6 images * $0.04 = $0.24
+        expect(estimateDalleCost(6)).toBeCloseTo(0.24, 6);
+    });
+
+    it('returns negative for negative count', () => {
+        expect(estimateDalleCost(-1)).toBeCloseTo(-0.04, 6);
+    });
+
+    it('handles fractional count', () => {
+        // 0.5 * $0.04 = $0.02
+        expect(estimateDalleCost(0.5)).toBeCloseTo(0.02, 6);
     });
 });

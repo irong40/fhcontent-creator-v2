@@ -74,6 +74,21 @@ export const videoGenerateSchema = z.object({
     audioUrl: z.string().url(),
 });
 
+export const thumbnailGenerateSchema = z.object({
+    contentPieceId: z.string().uuid(),
+});
+
+export const carouselGenerateSchema = z.object({
+    contentPieceId: z.string().uuid(),
+    templateId: z.string().min(1),
+    brandKitId: z.string().optional(),
+});
+
+export const musicGenerateSchema = z.object({
+    contentPieceId: z.string().uuid(),
+    mood: z.string().optional(),
+});
+
 // --- Inferred types ---
 
 export type TopicGenerateRequest = z.infer<typeof topicGenerateSchema>;
@@ -83,3 +98,6 @@ export type GeneratedTopic = z.infer<typeof generatedTopicSchema>;
 export type GeneratedPiece = z.infer<typeof generatedPieceSchema>;
 export type VoiceGenerateRequest = z.infer<typeof voiceGenerateSchema>;
 export type VideoGenerateRequest = z.infer<typeof videoGenerateSchema>;
+export type ThumbnailGenerateRequest = z.infer<typeof thumbnailGenerateSchema>;
+export type CarouselGenerateRequest = z.infer<typeof carouselGenerateSchema>;
+export type MusicGenerateRequest = z.infer<typeof musicGenerateSchema>;

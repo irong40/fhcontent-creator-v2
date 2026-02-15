@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { wordCount, estimateDuration } from '@/lib/utils';
-import type { ContentPiece, AudioAsset, HistoricalPoint, TopicWithPersona } from '@/types/database';
+import type { ContentPiece, AudioAsset, VisualAsset, HistoricalPoint, TopicWithPersona } from '@/types/database';
 
 const TAB_LABELS: Record<string, string> = {
     long: 'Long Video',
@@ -32,6 +32,7 @@ export default function ReviewPage() {
     const [topic, setTopic] = useState<TopicWithPersona | null>(null);
     const [pieces, setPieces] = useState<ContentPiece[]>([]);
     const [audioAssets, setAudioAssets] = useState<Record<string, AudioAsset>>({});
+    const [visualAssets, setVisualAssets] = useState<Record<string, VisualAsset[]>>({});
     const [saving, setSaving] = useState<string | null>(null);
     const [generating, setGenerating] = useState<string | null>(null);
     const [dirty, setDirty] = useState<Record<string, Partial<ContentPiece>>>({});
@@ -46,9 +47,9 @@ export default function ReviewPage() {
         if (piecesRes.data) {
             setPieces(piecesRes.data);
 
-            // Fetch audio assets for all pieces
             const pieceIds = piecesRes.data.map(p => p.id);
             if (pieceIds.length > 0) {
+                // Fetch audio assets
                 const { data: audioData } = await supabase
                     .from('audio_assets')
                     .select('*')
@@ -61,6 +62,23 @@ export default function ReviewPage() {
                         audioMap[asset.content_piece_id] = asset;
                     }
                     setAudioAssets(audioMap);
+                }
+
+                // Fetch visual assets
+                const { data: visualData } = await supabase
+                    .from('visual_assets')
+                    .select('*')
+                    .in('content_piece_id', pieceIds);
+
+                if (visualData) {
+                    const visualMap: Record<string, VisualAsset[]> = {};
+                    for (const asset of visualData) {
+                        if (!visualMap[asset.content_piece_id]) {
+                            visualMap[asset.content_piece_id] = [];
+                        }
+                        visualMap[asset.content_piece_id].push(asset);
+                    }
+                    setVisualAssets(visualMap);
                 }
             }
         }
@@ -168,6 +186,85 @@ export default function ReviewPage() {
         }
     }
 
+    async function generateThumbnail(pieceId: string) {
+        setGenerating(pieceId);
+        setError(null);
+        try {
+            const res = await fetch('/api/media/thumbnail', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contentPieceId: pieceId }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                setError(data.error);
+                return;
+            }
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Thumbnail generation failed');
+        } finally {
+            setGenerating(null);
+        }
+    }
+
+    async function generateCarousel(pieceId: string) {
+        if (!topic) return;
+        const templateId = topic.personas?.canva_carousel_template_id;
+        if (!templateId) {
+            setError('No Canva carousel template configured for this persona');
+            return;
+        }
+        setGenerating(pieceId);
+        setError(null);
+        try {
+            const res = await fetch('/api/media/carousel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contentPieceId: pieceId,
+                    templateId,
+                    brandKitId: topic.personas?.canva_brand_kit_id || undefined,
+                }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                setError(data.error);
+                return;
+            }
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Carousel generation failed');
+        } finally {
+            setGenerating(null);
+        }
+    }
+
+    async function generateMusic(pieceId: string) {
+        setGenerating(pieceId);
+        setError(null);
+        try {
+            const res = await fetch('/api/media/music', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contentPieceId: pieceId }),
+            });
+            const data = await res.json();
+            if (!data.success) {
+                setError(data.error);
+                return;
+            }
+            if (data.skipped && data.reason) {
+                setError(data.reason);
+            }
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Music generation failed');
+        } finally {
+            setGenerating(null);
+        }
+    }
+
     if (!topic) {
         return <div className="container py-8 text-muted-foreground">Loading...</div>;
     }
@@ -232,6 +329,10 @@ export default function ReviewPage() {
                         const words = wordCount(currentScript);
                         const isVideoPiece = VIDEO_PIECE_TYPES.includes(piece.piece_type);
                         const audio = audioAssets[piece.id];
+                        const pieceVisuals = visualAssets[piece.id] || [];
+                        const carouselImages = pieceVisuals.filter(v => v.asset_type === 'carousel_image');
+                        const isCarousel = piece.piece_type === 'carousel';
+                        const musicIsUrl = piece.music_track?.startsWith('http');
 
                         return (
                             <TabsContent key={piece.id} value={piece.piece_type}>
@@ -349,32 +450,131 @@ export default function ReviewPage() {
                                             </>
                                         )}
 
-                                        {/* Thumbnail prompt */}
+                                        {/* Thumbnail */}
                                         {piece.thumbnail_prompt && (
                                             <>
                                                 <Separator />
                                                 <div className="space-y-2">
-                                                    <Label>Thumbnail Prompt</Label>
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Thumbnail</Label>
+                                                        {piece.thumbnail_url ? (
+                                                            <Badge variant="outline" className="bg-green-600/20 text-green-400">Ready</Badge>
+                                                        ) : (
+                                                            <Badge variant="outline" className="bg-muted">Not generated</Badge>
+                                                        )}
+                                                    </div>
+                                                    {piece.thumbnail_url ? (
+                                                        <img
+                                                            src={piece.thumbnail_url}
+                                                            alt="Thumbnail"
+                                                            className="w-full max-w-md rounded-md border"
+                                                        />
+                                                    ) : (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => generateThumbnail(piece.id)}
+                                                            disabled={generating === piece.id}
+                                                        >
+                                                            {generating === piece.id ? 'Generating...' : 'Generate Thumbnail'}
+                                                        </Button>
+                                                    )}
                                                     <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">{piece.thumbnail_prompt}</p>
                                                 </div>
                                             </>
                                         )}
 
                                         {/* Carousel slides */}
-                                        {piece.piece_type === 'carousel' && piece.carousel_slides && (
+                                        {isCarousel && piece.carousel_slides && (
                                             <>
                                                 <Separator />
                                                 <div className="space-y-2">
-                                                    <Label>Carousel Slides</Label>
-                                                    <div className="grid gap-2">
-                                                        {(piece.carousel_slides as Array<{ slide: number; text: string; imagePrompt: string }>).map(slide => (
-                                                            <div key={slide.slide} className="bg-muted rounded-md p-3">
-                                                                <p className="text-xs text-muted-foreground mb-1">Slide {slide.slide}</p>
-                                                                <p className="text-sm font-medium">{slide.text}</p>
-                                                                <p className="text-xs text-muted-foreground mt-1 italic">{slide.imagePrompt}</p>
-                                                            </div>
-                                                        ))}
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Carousel Slides</Label>
+                                                        {piece.canva_design_id ? (
+                                                            <Badge variant="outline" className="bg-green-600/20 text-green-400">Design Created</Badge>
+                                                        ) : (
+                                                            <Badge variant="outline" className="bg-muted">No design</Badge>
+                                                        )}
                                                     </div>
+                                                    <div className="grid gap-2">
+                                                        {(piece.carousel_slides as Array<{ slide: number; text: string; imagePrompt: string }>).map(slide => {
+                                                            const slideImage = carouselImages.find(
+                                                                v => (v.metadata as Record<string, unknown>)?.slide === slide.slide,
+                                                            );
+                                                            return (
+                                                                <div key={slide.slide} className="bg-muted rounded-md p-3">
+                                                                    <p className="text-xs text-muted-foreground mb-1">Slide {slide.slide}</p>
+                                                                    {slideImage?.asset_url && (
+                                                                        <img
+                                                                            src={slideImage.asset_url}
+                                                                            alt={`Slide ${slide.slide}`}
+                                                                            className="w-full max-w-xs rounded-md border mb-2"
+                                                                        />
+                                                                    )}
+                                                                    <p className="text-sm font-medium">{slide.text}</p>
+                                                                    <p className="text-xs text-muted-foreground mt-1 italic">{slide.imagePrompt}</p>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+
+                                                    {/* Carousel design actions */}
+                                                    {piece.carousel_url ? (
+                                                        <img
+                                                            src={piece.carousel_url}
+                                                            alt="Exported carousel"
+                                                            className="w-full max-w-md rounded-md border"
+                                                        />
+                                                    ) : !piece.canva_design_id ? (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => generateCarousel(piece.id)}
+                                                            disabled={generating === piece.id}
+                                                        >
+                                                            {generating === piece.id ? 'Creating...' : 'Generate Carousel Design'}
+                                                        </Button>
+                                                    ) : null}
+
+                                                    {piece.canva_design_id && (
+                                                        <p className="text-xs text-muted-foreground">
+                                                            Canva Design ID: {piece.canva_design_id}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
+
+                                        {/* Music (carousel only) */}
+                                        {isCarousel && (
+                                            <>
+                                                <Separator />
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Background Music</Label>
+                                                        {musicIsUrl ? (
+                                                            <Badge variant="outline" className="bg-green-600/20 text-green-400">Ready</Badge>
+                                                        ) : piece.music_track ? (
+                                                            <Badge variant="outline" className="bg-muted">Mood: {piece.music_track}</Badge>
+                                                        ) : (
+                                                            <Badge variant="outline" className="bg-muted">Not set</Badge>
+                                                        )}
+                                                    </div>
+                                                    {musicIsUrl ? (
+                                                        <audio controls className="w-full" src={piece.music_track!}>
+                                                            <track kind="captions" />
+                                                        </audio>
+                                                    ) : (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => generateMusic(piece.id)}
+                                                            disabled={generating === piece.id}
+                                                        >
+                                                            {generating === piece.id ? 'Generating...' : 'Generate Music'}
+                                                        </Button>
+                                                    )}
                                                 </div>
                                             </>
                                         )}

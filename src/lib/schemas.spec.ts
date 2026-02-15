@@ -7,6 +7,9 @@ import {
     contentResponseSchema,
     voiceGenerateSchema,
     videoGenerateSchema,
+    thumbnailGenerateSchema,
+    carouselGenerateSchema,
+    musicGenerateSchema,
 } from './schemas';
 
 describe('topicGenerateSchema', () => {
@@ -319,5 +322,104 @@ describe('videoGenerateSchema', () => {
             contentPieceId: validUuid,
         });
         expect(result.success).toBe(false);
+    });
+});
+
+describe('thumbnailGenerateSchema', () => {
+    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
+    it('accepts valid contentPieceId', () => {
+        const result = thumbnailGenerateSchema.parse({ contentPieceId: validUuid });
+        expect(result.contentPieceId).toBe(validUuid);
+    });
+
+    it('rejects non-UUID contentPieceId', () => {
+        const result = thumbnailGenerateSchema.safeParse({ contentPieceId: 'not-uuid' });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing contentPieceId', () => {
+        const result = thumbnailGenerateSchema.safeParse({});
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('carouselGenerateSchema', () => {
+    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
+    it('accepts valid contentPieceId and templateId', () => {
+        const result = carouselGenerateSchema.parse({
+            contentPieceId: validUuid,
+            templateId: 'tmpl_abc123',
+        });
+        expect(result.contentPieceId).toBe(validUuid);
+        expect(result.templateId).toBe('tmpl_abc123');
+    });
+
+    it('accepts optional brandKitId', () => {
+        const result = carouselGenerateSchema.parse({
+            contentPieceId: validUuid,
+            templateId: 'tmpl_abc123',
+            brandKitId: 'bk_xyz',
+        });
+        expect(result.brandKitId).toBe('bk_xyz');
+    });
+
+    it('rejects non-UUID contentPieceId', () => {
+        const result = carouselGenerateSchema.safeParse({
+            contentPieceId: 'bad',
+            templateId: 'tmpl_abc123',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects empty templateId', () => {
+        const result = carouselGenerateSchema.safeParse({
+            contentPieceId: validUuid,
+            templateId: '',
+        });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing templateId', () => {
+        const result = carouselGenerateSchema.safeParse({
+            contentPieceId: validUuid,
+        });
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('musicGenerateSchema', () => {
+    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
+    it('accepts valid contentPieceId', () => {
+        const result = musicGenerateSchema.parse({ contentPieceId: validUuid });
+        expect(result.contentPieceId).toBe(validUuid);
+    });
+
+    it('accepts optional mood', () => {
+        const result = musicGenerateSchema.parse({
+            contentPieceId: validUuid,
+            mood: 'inspirational',
+        });
+        expect(result.mood).toBe('inspirational');
+    });
+
+    it('rejects non-UUID contentPieceId', () => {
+        const result = musicGenerateSchema.safeParse({ contentPieceId: 'bad' });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing contentPieceId', () => {
+        const result = musicGenerateSchema.safeParse({});
+        expect(result.success).toBe(false);
+    });
+
+    it('accepts empty string mood', () => {
+        const result = musicGenerateSchema.parse({
+            contentPieceId: validUuid,
+            mood: '',
+        });
+        expect(result.mood).toBe('');
     });
 });
