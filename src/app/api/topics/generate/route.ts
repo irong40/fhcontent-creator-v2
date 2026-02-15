@@ -4,14 +4,8 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
 import { topicGenerateSchema, topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt } from '@/lib/prompts';
+import { estimateCost } from '@/lib/utils';
 import type { Database } from '@/types/database';
-
-const PIECE_ORDER = { long: 1, short_1: 2, short_2: 3, short_3: 4, short_4: 5, carousel: 6 } as const;
-
-function estimateCost(inputTokens: number, outputTokens: number): number {
-    // Claude Sonnet 4.5 pricing: $3/M input, $15/M output
-    return (inputTokens * 3 + outputTokens * 15) / 1_000_000;
-}
 
 export async function POST(request: NextRequest) {
     try {

@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { wordCount, estimateDuration } from '@/lib/utils';
 import type { Topic, ContentPiece, HistoricalPoint } from '@/types/database';
 
 const TAB_LABELS: Record<string, string> = {
@@ -20,16 +21,6 @@ const TAB_LABELS: Record<string, string> = {
     short_4: 'Short 4',
     carousel: 'Carousel',
 };
-
-function wordCount(text: string): number {
-    return text.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function estimateDuration(words: number): string {
-    const minutes = words / 150; // ~150 wpm speaking rate
-    if (minutes < 1) return `${Math.round(minutes * 60)}s`;
-    return `${minutes.toFixed(1)} min`;
-}
 
 export default function ReviewPage() {
     const { topicId } = useParams<{ topicId: string }>();
