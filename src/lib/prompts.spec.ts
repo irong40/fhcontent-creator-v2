@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildTopicPrompt, buildContentPrompt } from './prompts';
-import type { Persona, Topic } from '@/types/database';
+import { buildTopicPrompt, buildContentPrompt, buildRemixPrompt } from './prompts';
+import type { RemixField } from './prompts';
+import type { Persona, Topic, PieceType } from '@/types/database';
 
 const mockPersona: Persona = {
     id: '6ac9adfa-27f1-492b-98e1-f5623cb4eda2',
@@ -152,5 +153,72 @@ describe('buildContentPrompt', () => {
     it('includes persona voice style in system prompt', () => {
         const { system } = buildContentPrompt(mockPersona, mockTopic);
         expect(system).toContain('Authoritative yet accessible');
+    });
+});
+
+describe('buildRemixPrompt', () => {
+    const fields: RemixField[] = ['script', 'caption_long', 'caption_short', 'thumbnail_prompt', 'carousel_slides'];
+    const pieceType: PieceType = 'long';
+    const currentValue = 'Some existing content here';
+
+    it('returns system, user, and maxTokens', () => {
+        const result = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        expect(result).toHaveProperty('system');
+        expect(result).toHaveProperty('user');
+        expect(result).toHaveProperty('maxTokens');
+        expect(typeof result.maxTokens).toBe('number');
+    });
+
+    it('includes persona voice style and no-name rule in system prompt', () => {
+        const { system } = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        expect(system).toContain('Authoritative yet accessible');
+        expect(system).toContain('NEVER mention the creator');
+        expect(system).toContain('Dr. Imani Carter');
+    });
+
+    it('includes current value in user prompt', () => {
+        const { user } = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        expect(user).toContain('Some existing content here');
+    });
+
+    it('includes topic title and historical points', () => {
+        const { user } = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        expect(user).toContain("Gabriel's Rebellion of 1800");
+        expect(user).toContain('Gabriel was enslaved');
+    });
+
+    const fieldKeywords: Record<RemixField, string> = {
+        script: 'script',
+        caption_long: 'long caption',
+        caption_short: 'short caption',
+        thumbnail_prompt: 'thumbnail',
+        carousel_slides: 'carousel slides',
+    };
+
+    it.each(fields)('returns different user prompt for field "%s"', (field) => {
+        const result = buildRemixPrompt(mockPersona, mockTopic, pieceType, field, currentValue);
+        expect(result.user.toLowerCase()).toContain(fieldKeywords[field]);
+    });
+
+    it('uses lower maxTokens for thumbnail_prompt than script', () => {
+        const script = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        const thumb = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'thumbnail_prompt', currentValue);
+        expect(thumb.maxTokens).toBeLessThan(script.maxTokens);
+    });
+
+    it('demands JSON-only output in system prompt', () => {
+        const { system } = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        expect(system).toContain('valid JSON only');
+    });
+
+    it('includes content guidelines when present', () => {
+        const { system } = buildRemixPrompt(mockPersona, mockTopic, pieceType, 'script', currentValue);
+        expect(system).toContain('Always cite primary sources');
+    });
+
+    it('omits guidelines line when null', () => {
+        const noGuidelines = { ...mockPersona, content_guidelines: null };
+        const { system } = buildRemixPrompt(noGuidelines, mockTopic, pieceType, 'script', currentValue);
+        expect(system).not.toContain('Guidelines:');
     });
 });

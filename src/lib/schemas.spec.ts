@@ -15,6 +15,12 @@ import {
     regenerateSchema,
     publishTopicSchema,
     regeneratePieceResponseSchema,
+    remixRequestSchema,
+    remixScriptResponseSchema,
+    remixCaptionLongResponseSchema,
+    remixCaptionShortResponseSchema,
+    remixThumbnailPromptResponseSchema,
+    remixCarouselSlidesResponseSchema,
 } from './schemas';
 import type { RegeneratePieceResponse } from './schemas';
 
@@ -555,5 +561,72 @@ describe('regeneratePieceResponseSchema', () => {
     it('exports RegeneratePieceResponse type', () => {
         const piece: RegeneratePieceResponse = validPiece as RegeneratePieceResponse;
         expect(piece.script).toBe('Test script about history');
+    });
+});
+
+describe('remixRequestSchema', () => {
+    it.each([
+        'script', 'caption_long', 'caption_short', 'thumbnail_prompt', 'carousel_slides',
+    ])('accepts valid field "%s"', (field) => {
+        const result = remixRequestSchema.parse({ field });
+        expect(result.field).toBe(field);
+    });
+
+    it('rejects invalid field name', () => {
+        const result = remixRequestSchema.safeParse({ field: 'title' });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing field', () => {
+        const result = remixRequestSchema.safeParse({});
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects empty string field', () => {
+        const result = remixRequestSchema.safeParse({ field: '' });
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('remix response schemas', () => {
+    it('remixScriptResponseSchema accepts valid script', () => {
+        const result = remixScriptResponseSchema.parse({ script: 'New script text' });
+        expect(result.script).toBe('New script text');
+    });
+
+    it('remixScriptResponseSchema rejects missing script', () => {
+        expect(remixScriptResponseSchema.safeParse({}).success).toBe(false);
+    });
+
+    it('remixCaptionLongResponseSchema accepts valid captionLong', () => {
+        const result = remixCaptionLongResponseSchema.parse({ captionLong: 'A long caption' });
+        expect(result.captionLong).toBe('A long caption');
+    });
+
+    it('remixCaptionShortResponseSchema accepts valid captionShort', () => {
+        const result = remixCaptionShortResponseSchema.parse({ captionShort: 'Short one' });
+        expect(result.captionShort).toBe('Short one');
+    });
+
+    it('remixThumbnailPromptResponseSchema accepts valid thumbnailPrompt', () => {
+        const result = remixThumbnailPromptResponseSchema.parse({ thumbnailPrompt: 'A vivid scene' });
+        expect(result.thumbnailPrompt).toBe('A vivid scene');
+    });
+
+    it('remixCarouselSlidesResponseSchema accepts valid slides', () => {
+        const result = remixCarouselSlidesResponseSchema.parse({
+            carouselSlides: [
+                { slide: 1, text: 'Hook', imagePrompt: 'Scene 1' },
+                { slide: 2, text: 'Point', imagePrompt: 'Scene 2' },
+            ],
+        });
+        expect(result.carouselSlides).toHaveLength(2);
+    });
+
+    it('remixCarouselSlidesResponseSchema rejects slides missing imagePrompt', () => {
+        const result = remixCarouselSlidesResponseSchema.safeParse({
+            carouselSlides: [{ slide: 1, text: 'Hook' }],
+        });
+        expect(result.success).toBe(false);
     });
 });

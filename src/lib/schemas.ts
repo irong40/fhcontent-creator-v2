@@ -106,6 +106,19 @@ export const scheduleTopicSchema = z.object({
 
 export const regenerateSchema = z.object({});
 
+export const remixRequestSchema = z.object({
+    field: z.enum(['script', 'caption_long', 'caption_short', 'thumbnail_prompt', 'carousel_slides']),
+});
+
+// Per-field remix response schemas
+export const remixScriptResponseSchema = z.object({ script: z.string() });
+export const remixCaptionLongResponseSchema = z.object({ captionLong: z.string() });
+export const remixCaptionShortResponseSchema = z.object({ captionShort: z.string() });
+export const remixThumbnailPromptResponseSchema = z.object({ thumbnailPrompt: z.string() });
+export const remixCarouselSlidesResponseSchema = z.object({
+    carouselSlides: z.array(z.object({ slide: z.number(), text: z.string(), imagePrompt: z.string() })),
+});
+
 export const publishTopicSchema = z.object({
     force: z.boolean().default(false),
 });
@@ -125,3 +138,4 @@ export type MusicGenerateRequest = z.infer<typeof musicGenerateSchema>;
 export type ApproveTopicRequest = z.infer<typeof approveTopicSchema>;
 export type ScheduleTopicRequest = z.infer<typeof scheduleTopicSchema>;
 export type PublishTopicRequest = z.infer<typeof publishTopicSchema>;
+export type RemixRequest = z.infer<typeof remixRequestSchema>;

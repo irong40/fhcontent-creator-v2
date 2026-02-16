@@ -195,6 +195,9 @@ export default function ReviewPage() {
     const regenerateScript = (pieceId: string) =>
         callMediaApi(pieceId, `/api/content/${pieceId}/regenerate`, {}, 'Script regenerated. Re-generate media to use the new version.');
 
+    const remixField = (pieceId: string, field: string) =>
+        callMediaApi(pieceId, `/api/content/${pieceId}/remix`, { field }, `${field.replace('_', ' ')} remixed. Review the new version.`);
+
     async function changeVoice(voiceId: string) {
         if (!topic) return;
         const { error } = await supabase
@@ -362,14 +365,24 @@ export default function ReviewPage() {
                                                 value={currentScript}
                                                 onChange={e => updateField(piece.id, 'script', e.target.value)}
                                             />
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => regenerateScript(piece.id)}
-                                                disabled={generating === piece.id}
-                                            >
-                                                {generating === piece.id ? 'Regenerating...' : 'Regenerate Script'}
-                                            </Button>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => remixField(piece.id, 'script')}
+                                                    disabled={generating === piece.id}
+                                                >
+                                                    {generating === piece.id ? 'Remixing...' : 'Remix Script'}
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => regenerateScript(piece.id)}
+                                                    disabled={generating === piece.id}
+                                                >
+                                                    {generating === piece.id ? 'Regenerating...' : 'Regenerate All'}
+                                                </Button>
+                                            </div>
                                         </div>
 
                                         <Separator />
@@ -383,6 +396,14 @@ export default function ReviewPage() {
                                                     value={currentCaptionLong}
                                                     onChange={e => updateField(piece.id, 'caption_long', e.target.value)}
                                                 />
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => remixField(piece.id, 'caption_long')}
+                                                    disabled={generating === piece.id}
+                                                >
+                                                    {generating === piece.id ? 'Remixing...' : 'Remix'}
+                                                </Button>
                                             </div>
                                             <div className="space-y-2">
                                                 <Label>Caption (Short) <span className="text-xs text-muted-foreground">{currentCaptionShort.length}/280</span></Label>
@@ -391,6 +412,14 @@ export default function ReviewPage() {
                                                     value={currentCaptionShort}
                                                     onChange={e => updateField(piece.id, 'caption_short', e.target.value)}
                                                 />
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => remixField(piece.id, 'caption_short')}
+                                                    disabled={generating === piece.id}
+                                                >
+                                                    {generating === piece.id ? 'Remixing...' : 'Remix'}
+                                                </Button>
                                             </div>
                                         </div>
 
@@ -498,7 +527,18 @@ export default function ReviewPage() {
                                                             {generating === piece.id ? 'Generating...' : 'Generate Thumbnail'}
                                                         </Button>
                                                     )}
-                                                    <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md">{piece.thumbnail_prompt}</p>
+                                                    <div className="flex items-start gap-2">
+                                                        <p className="text-sm text-muted-foreground bg-muted p-3 rounded-md flex-1">{piece.thumbnail_prompt}</p>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="shrink-0"
+                                                            onClick={() => remixField(piece.id, 'thumbnail_prompt')}
+                                                            disabled={generating === piece.id}
+                                                        >
+                                                            {generating === piece.id ? 'Remixing...' : 'Remix Prompt'}
+                                                        </Button>
+                                                    </div>
                                                 </div>
                                             </>
                                         )}
@@ -509,7 +549,17 @@ export default function ReviewPage() {
                                                 <Separator />
                                                 <div className="space-y-2">
                                                     <div className="flex items-center justify-between">
-                                                        <Label>Carousel Slides</Label>
+                                                        <div className="flex items-center gap-2">
+                                                            <Label>Carousel Slides</Label>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                onClick={() => remixField(piece.id, 'carousel_slides')}
+                                                                disabled={generating === piece.id}
+                                                            >
+                                                                {generating === piece.id ? 'Remixing...' : 'Remix Slides'}
+                                                            </Button>
+                                                        </div>
                                                         {piece.canva_design_id ? (
                                                             <Badge variant="outline" className="bg-green-600/20 text-green-400">Design Created</Badge>
                                                         ) : (

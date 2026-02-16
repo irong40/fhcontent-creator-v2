@@ -1,4 +1,6 @@
-import type { Persona, Topic, HistoricalPoint } from '@/types/database';
+import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/database';
+
+export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
 
 export function buildTopicPrompt(
     persona: Persona,
@@ -122,4 +124,65 @@ OUTPUT FORMAT (JSON only):
 }`;
 
     return { system, user };
+}
+
+const REMIX_MAX_TOKENS: Record<RemixField, number> = {
+    script: 2048,
+    caption_long: 1024,
+    caption_short: 1024,
+    thumbnail_prompt: 512,
+    carousel_slides: 2048,
+};
+
+const REMIX_FIELD_LABELS: Record<RemixField, string> = {
+    script: 'script (spoken text)',
+    caption_long: 'long caption (up to 2200 characters, ending with 3-5 hashtags)',
+    caption_short: 'short caption (up to 280 characters for Twitter/X, with 2-3 hashtags)',
+    thumbnail_prompt: 'thumbnail image generation prompt',
+    carousel_slides: 'carousel slides (array of slide objects with slide number, text, and imagePrompt)',
+};
+
+const REMIX_OUTPUT_FORMAT: Record<RemixField, string> = {
+    script: '{ "script": "..." }',
+    caption_long: '{ "captionLong": "..." }',
+    caption_short: '{ "captionShort": "..." }',
+    thumbnail_prompt: '{ "thumbnailPrompt": "..." }',
+    carousel_slides: '{ "carouselSlides": [{"slide": 1, "text": "...", "imagePrompt": "..."}, ...] }',
+};
+
+export function buildRemixPrompt(
+    persona: Persona,
+    topic: Topic,
+    pieceType: PieceType,
+    field: RemixField,
+    currentValue: string,
+): { system: string; user: string; maxTokens: number } {
+    const points = topic.historical_points as HistoricalPoint[];
+
+    const system = `You are a content writer creating scripts for ${persona.brand}.
+Voice style: ${persona.voice_style}
+${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+
+IMPORTANT RULES:
+- NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
+- NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.
+
+You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
+
+    const user = `TOPIC: ${topic.title}
+HOOK: ${topic.hook}
+PIECE TYPE: ${pieceType}
+
+HISTORICAL POINTS:
+${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
+
+CURRENT ${REMIX_FIELD_LABELS[field].toUpperCase()}:
+${currentValue}
+
+Generate a FRESH, meaningfully DIFFERENT version of the ${REMIX_FIELD_LABELS[field]} only. Keep the same tone and quality but vary the approach, wording, or structure.
+
+OUTPUT FORMAT (JSON only):
+${REMIX_OUTPUT_FORMAT[field]}`;
+
+    return { system, user, maxTokens: REMIX_MAX_TOKENS[field] };
 }
