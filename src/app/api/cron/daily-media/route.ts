@@ -321,9 +321,7 @@ export async function GET(request: Request) {
             for (const piece of piecesNeedingMusic) {
                 try {
                     const mood = piece.music_track || 'inspirational';
-                    const duration = piece.piece_type === 'long' ? 120
-                        : piece.piece_type.startsWith('short_') ? 30
-                        : 30; // carousel
+                    const duration = piece.piece_type === 'long' ? 120 : 30;
 
                     const musicResult = await gemini.generateMusic(mood, duration);
 
