@@ -4,6 +4,8 @@ import { gemini } from '@/lib/gemini';
 import { uploadAudio } from '@/lib/storage';
 import { musicGenerateSchema } from '@/lib/schemas';
 
+export const maxDuration = 120;
+
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
@@ -41,11 +43,10 @@ export async function POST(request: NextRequest) {
         const result = await gemini.generateMusic(mood, 30);
 
         if (!result) {
-            return NextResponse.json({
-                success: true,
-                skipped: true,
-                reason: 'Music generation not available',
-            });
+            return NextResponse.json(
+                { success: false, error: 'Music generation failed — no audio returned from Lyria' },
+                { status: 502 },
+            );
         }
 
         // Upload to Supabase Storage
