@@ -58,9 +58,14 @@ export function buildContentPrompt(
 ): { system: string; user: string } {
     const points = topic.historical_points as HistoricalPoint[];
 
-    const system = `You are ${persona.name}, creating content for ${persona.brand}.
+    const system = `You are a content writer creating scripts for ${persona.brand}.
 Voice style: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+
+IMPORTANT RULES:
+- NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
+- NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.
+
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `TOPIC: ${topic.title}
@@ -95,9 +100,13 @@ Generate content for 6 pieces:
 - Include imagePrompt for each slide
 
 FOR EACH PIECE, PROVIDE:
-- script: The spoken/displayed text
-- captionLong: 2200 character caption with hashtags (#history #blackhistory #virginia)
-- captionShort: 280 character caption for Twitter/X
+- script: The spoken/displayed text (NEVER include the creator's name)
+- captionLong: 2200 character caption ending with 3-5 hashtags using this formula:
+  * 1-2 broad reach: #BlackHistory #BlackExcellence #BlackHistoryMonth #BlackCulture
+  * 1-2 niche educational: #BlackHistoryFacts #BlackHistory365 #HistoryTok #LearnOnTikTok #RealBlackHistory
+  * 1 discovery: #DidYouKnow #FYP #Viral
+  Example: "#BlackHistory #BlackHistoryFacts #DidYouKnow #BlackExcellence #HistoryTok"
+- captionShort: 280 character caption for Twitter/X (include 2-3 of the same hashtags)
 - thumbnailPrompt: Prompt for AI thumbnail generation
 
 OUTPUT FORMAT (JSON only):
