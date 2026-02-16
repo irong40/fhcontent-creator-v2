@@ -14,7 +14,13 @@ describe('buildTarget', () => {
             isYourBrand: true,
             isAiGenerated: true,
             title: undefined,
+            autoAddMusic: true,
         });
+    });
+
+    it('includes autoAddMusic: true for tiktok target', () => {
+        const target = buildTarget('tiktok');
+        expect(target).toMatchObject({ autoAddMusic: true });
     });
 
     it('passes isAiGenerated option to tiktok target', () => {

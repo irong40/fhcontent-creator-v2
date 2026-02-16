@@ -154,6 +154,23 @@ describe('buildContentPrompt', () => {
         const { system } = buildContentPrompt(mockPersona, mockTopic);
         expect(system).toContain('Authoritative yet accessible');
     });
+
+    it('includes musicTrack in video piece output format examples', () => {
+        const { user } = buildContentPrompt(mockPersona, mockTopic);
+        // All video pieces should have musicTrack in their JSON example
+        const longMatch = user.match(/"pieceType": "long".*?"musicTrack"/s);
+        const short1Match = user.match(/"pieceType": "short_1".*?"musicTrack"/s);
+        const short4Match = user.match(/"pieceType": "short_4".*?"musicTrack"/s);
+        expect(longMatch).not.toBeNull();
+        expect(short1Match).not.toBeNull();
+        expect(short4Match).not.toBeNull();
+    });
+
+    it('includes musicTrack instruction for mood selection', () => {
+        const { user } = buildContentPrompt(mockPersona, mockTopic);
+        expect(user).toContain('musicTrack');
+        expect(user).toContain('mood');
+    });
 });
 
 describe('buildRemixPrompt', () => {

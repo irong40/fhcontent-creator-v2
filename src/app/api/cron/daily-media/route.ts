@@ -81,7 +81,7 @@ export async function GET(request: Request) {
                 videoSubmitted: 0,
                 thumbnailsGenerated: 0,
                 carouselCreated: false,
-                musicGenerated: false,
+                musicGenerated: 0,
                 errors: [] as string[],
             };
 
@@ -313,26 +313,34 @@ export async function GET(request: Request) {
                 }
             }
 
-            // ── Stage 4: Music (carousel piece only) ──
-            if (carouselPiece && !carouselPiece.music_track?.startsWith('http')) {
+            // ── Stage 4: Music (all pieces with music_track mood) ──
+            const piecesNeedingMusic = (allPieces as ContentPiece[]).filter(
+                p => p.music_track && !p.music_track.startsWith('http'),
+            );
+
+            for (const piece of piecesNeedingMusic) {
                 try {
-                    const mood = carouselPiece.music_track || 'inspirational';
-                    const musicResult = await gemini.generateMusic(mood, 30);
+                    const mood = piece.music_track || 'inspirational';
+                    const duration = piece.piece_type === 'long' ? 120
+                        : piece.piece_type.startsWith('short_') ? 30
+                        : 30; // carousel
+
+                    const musicResult = await gemini.generateMusic(mood, duration);
 
                     if (musicResult) {
-                        const storagePath = `${topic.id}/carousel_music.mp3`;
+                        const storagePath = `${topic.id}/${piece.piece_type}_music.mp3`;
                         const musicUrl = await uploadAudio(storagePath, musicResult.audioData);
 
                         await supabase
                             .from('content_pieces')
                             .update({ music_track: musicUrl })
-                            .eq('id', carouselPiece.id);
+                            .eq('id', piece.id);
 
-                        topicResult.musicGenerated = true;
+                        topicResult.musicGenerated++;
                     }
                 } catch (e) {
                     topicResult.errors.push(
-                        `music: ${e instanceof Error ? e.message : 'unknown'}`,
+                        `${piece.piece_type} music: ${e instanceof Error ? e.message : 'unknown'}`,
                     );
                 }
             }

@@ -195,6 +195,7 @@ export function buildTarget(platform: Platform, options: {
                 isYourBrand: true,
                 isAiGenerated: options.isAiGenerated ?? true,
                 title: options.title,
+                autoAddMusic: true,
             };
         case 'instagram':
             return {

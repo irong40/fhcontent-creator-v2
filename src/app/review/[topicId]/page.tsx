@@ -615,8 +615,8 @@ export default function ReviewPage() {
                                             </>
                                         )}
 
-                                        {/* Music (carousel only) */}
-                                        {isCarousel && (
+                                        {/* Music (carousel + video pieces) */}
+                                        {(isCarousel || isVideoPiece) && (
                                             <>
                                                 <Separator />
                                                 <div className="space-y-2">
