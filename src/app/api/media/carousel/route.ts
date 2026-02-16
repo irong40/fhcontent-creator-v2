@@ -6,11 +6,12 @@ import { uploadImage } from '@/lib/storage';
 import { estimateDalleCost } from '@/lib/utils';
 import { carouselGenerateSchema } from '@/lib/schemas';
 import type { CarouselSlide } from '@/types/database';
+import type { AutofillData } from '@/lib/canva';
 
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { contentPieceId, templateId, brandKitId } = carouselGenerateSchema.parse(body);
+        const { contentPieceId, templateId } = carouselGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
 
@@ -35,6 +36,16 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // Idempotent: skip if design already created
+        if (piece.canva_design_id) {
+            return NextResponse.json({
+                success: true,
+                skipped: true,
+                designId: piece.canva_design_id,
+                carouselUrl: piece.carousel_url,
+            });
+        }
+
         const slides = piece.carousel_slides as CarouselSlide[] | null;
         if (!slides || slides.length === 0) {
             return NextResponse.json(
@@ -43,30 +54,33 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Generate DALL-E images for each slide with an imagePrompt
-        const autofillData: Record<string, string> = {};
+        // Generate DALL-E images for each slide, upload to both Supabase and Canva
+        const autofillData: AutofillData = {};
         let imagesGenerated = 0;
 
         for (const slide of slides) {
-            // Add slide text to autofill data
-            autofillData[`slide_${slide.slide}_text`] = slide.text;
+            autofillData[`slide_${slide.slide}_text`] = { type: 'text', text: slide.text };
 
             if (slide.imagePrompt) {
                 try {
                     const { url: dalleUrl } = await openai.generateImage(slide.imagePrompt);
 
-                    // Download and upload to storage
                     const imageResponse = await fetch(dalleUrl);
                     if (!imageResponse.ok) throw new Error('Failed to download slide image');
                     const imageBuffer = await imageResponse.arrayBuffer();
 
+                    // Upload to Supabase Storage (our permanent copy)
                     const storagePath = `${piece.topic_id}/carousel_slide_${slide.slide}.png`;
                     const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
 
-                    autofillData[`slide_${slide.slide}_image`] = slideImageUrl;
+                    // Upload to Canva as an asset for autofill
+                    const assetId = await canva.uploadAsset(
+                        `slide_${slide.slide}`,
+                        imageBuffer,
+                    );
+                    autofillData[`slide_${slide.slide}_image`] = { type: 'image', asset_id: assetId };
                     imagesGenerated++;
 
-                    // Insert visual asset for each slide image
                     await supabase.from('visual_assets').insert({
                         content_piece_id: contentPieceId,
                         asset_type: 'carousel_image',
@@ -81,20 +95,17 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Create Canva design via autofill
-        const { designId } = await canva.createDesignAutofill(templateId, autofillData);
+        // Create Canva design via autofill (polls until complete)
+        const designId = await canva.createDesignAutofill(templateId, autofillData);
 
-        // Update content piece with design ID
         await supabase
             .from('content_pieces')
             .update({ canva_design_id: designId })
             .eq('id', contentPieceId);
 
-        // Export design as PNG
-        const exportJob = await canva.exportDesign(designId, 'png');
-        const exportedUrls = await canva.pollExport(exportJob.id);
+        // Export design as PNG (polls until complete)
+        const exportedUrls = await canva.exportDesign(designId, 'png');
 
-        // Update carousel_url with primary exported image
         if (exportedUrls.length > 0) {
             await supabase
                 .from('content_pieces')

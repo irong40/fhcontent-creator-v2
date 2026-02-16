@@ -487,6 +487,8 @@ export interface PlatformAccounts {
     youtube?: string;
     threads?: string;
     twitter?: string;
+    bluesky?: string;
+    linkedin?: string;
 }
 
 export interface HistoricalPoint {
@@ -515,6 +517,8 @@ export interface PublishedPlatforms {
     youtube?: PlatformStatus;
     threads?: PlatformStatus;
     twitter?: PlatformStatus;
+    bluesky?: PlatformStatus;
+    linkedin?: PlatformStatus;
 }
 
 export type TopicStatus =

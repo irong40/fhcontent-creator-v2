@@ -1,10 +1,35 @@
 /**
- * Canva API Client
+ * Canva Connect API Client
  * Design generation and carousel creation
+ * API Reference: https://www.canva.dev/docs/connect/
  */
 
+export type AutofillField =
+    | { type: 'text'; text: string }
+    | { type: 'image'; asset_id: string };
+
+export type AutofillData = Record<string, AutofillField>;
+
+interface CanvaJob {
+    id: string;
+    status: 'in_progress' | 'success' | 'failed';
+    error?: { code: string; message: string };
+}
+
+interface AssetUploadJob extends CanvaJob {
+    asset?: { id: string };
+}
+
+interface AutofillJob extends CanvaJob {
+    result?: { design: { id: string } };
+}
+
+interface ExportJob extends CanvaJob {
+    urls?: string[];
+}
+
 class CanvaClient {
-    private readonly baseUrl = 'https://api.canva.com';
+    private readonly baseUrl = 'https://api.canva.com/rest';
     private readonly apiKey: string;
 
     constructor() {
@@ -29,6 +54,20 @@ class CanvaClient {
         return response.json();
     }
 
+    /** Poll an async job endpoint until success or failure */
+    private async pollJob<T extends CanvaJob>(endpoint: string, timeoutMs: number = 60000): Promise<T> {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            const data = await this.request<{ job: T }>(endpoint);
+            if (data.job.status === 'success') return data.job;
+            if (data.job.status === 'failed') {
+                throw new Error(`Canva job failed: ${data.job.error?.message || 'unknown error'}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+        throw new Error('Canva job polling timed out');
+    }
+
     async testConnection(): Promise<{ ok: boolean; error?: string }> {
         try {
             await this.request('/v1/users/me/profile');
@@ -38,59 +77,71 @@ class CanvaClient {
         }
     }
 
-    async getUserProfile(): Promise<unknown> {
-        return this.request('/v1/users/me/profile');
-    }
-
-    async listBrandKits(): Promise<unknown> {
-        return this.request('/v1/brand-templates');
-    }
-
-    async createDesign(templateId: string, data: Record<string, unknown>): Promise<unknown> {
-        return this.request('/v1/designs', 'POST', {
-            template_id: templateId,
-            ...data,
+    /** Upload an image to Canva as an asset and return the asset ID */
+    async uploadAsset(name: string, data: ArrayBuffer): Promise<string> {
+        const nameBase64 = btoa(name.slice(0, 50));
+        const response = await fetch(`${this.baseUrl}/v1/asset-uploads`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.apiKey}`,
+                'Content-Type': 'application/octet-stream',
+                'Asset-Upload-Metadata': JSON.stringify({ name_base64: nameBase64 }),
+            },
+            body: data,
         });
-    }
 
-    async exportDesign(designId: string, format: 'png' | 'jpg' | 'pdf' = 'png'): Promise<{ id: string }> {
-        return this.request<{ id: string }>(`/v1/designs/${designId}/exports`, 'POST', { format });
-    }
-
-    /** Create a design from a template using autofill (placeholder replacement) */
-    async createDesignAutofill(templateId: string, data: Record<string, string>): Promise<{ designId: string }> {
-        const result = await this.request<{ design: { id: string } }>('/v1/autofills', 'POST', {
-            brand_template_id: templateId,
-            data,
-        });
-        return { designId: result.design.id };
-    }
-
-    /** Check the status of an export job */
-    async getExportJob(exportId: string): Promise<{ status: string; urls?: string[] }> {
-        const result = await this.request<{ status: string; urls?: Array<{ url: string }> }>(
-            `/v1/exports/${exportId}`,
-        );
-        return {
-            status: result.status,
-            urls: result.urls?.map(u => u.url),
-        };
-    }
-
-    /** Poll an export job until complete or timeout */
-    async pollExport(exportId: string, timeoutMs: number = 60000): Promise<string[]> {
-        const start = Date.now();
-        while (Date.now() - start < timeoutMs) {
-            const job = await this.getExportJob(exportId);
-            if (job.status === 'completed' && job.urls) {
-                return job.urls;
-            }
-            if (job.status === 'failed') {
-                throw new Error('Canva export job failed');
-            }
-            await new Promise(resolve => setTimeout(resolve, 5000));
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Canva asset upload failed (${response.status}): ${errorText}`);
         }
-        throw new Error('Canva export polling timed out');
+
+        const { job } = await response.json() as { job: AssetUploadJob };
+
+        if (job.status === 'success' && job.asset?.id) {
+            return job.asset.id;
+        }
+
+        const completed = await this.pollJob<AssetUploadJob>(`/v1/asset-uploads/${job.id}`);
+        if (!completed.asset?.id) throw new Error('Canva asset upload succeeded but no asset ID returned');
+        return completed.asset.id;
+    }
+
+    /** Create a design from a brand template using autofill, returns design ID */
+    async createDesignAutofill(templateId: string, data: AutofillData): Promise<string> {
+        const result = await this.request<{ job: AutofillJob }>(
+            '/v1/autofills',
+            'POST',
+            { brand_template_id: templateId, data },
+        );
+
+        const job = result.job;
+
+        if (job.status === 'success' && job.result?.design?.id) {
+            return job.result.design.id;
+        }
+
+        const completed = await this.pollJob<AutofillJob>(`/v1/autofills/${job.id}`);
+        if (!completed.result?.design?.id) throw new Error('Canva autofill succeeded but no design ID returned');
+        return completed.result.design.id;
+    }
+
+    /** Export a design and return download URLs (polls until complete) */
+    async exportDesign(designId: string, format: 'png' | 'jpg' | 'pdf' = 'png'): Promise<string[]> {
+        const result = await this.request<{ job: ExportJob }>(
+            '/v1/exports',
+            'POST',
+            { design_id: designId, format: { type: format } },
+        );
+
+        const job = result.job;
+
+        if (job.status === 'success' && job.urls) {
+            return job.urls;
+        }
+
+        const completed = await this.pollJob<ExportJob>(`/v1/exports/${job.id}`);
+        if (!completed.urls) throw new Error('Canva export succeeded but no URLs returned');
+        return completed.urls;
     }
 }
 

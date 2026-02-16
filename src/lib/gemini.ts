@@ -3,6 +3,8 @@
  * Alternative LLM for content generation
  */
 
+import { base64ToArrayBuffer } from '@/lib/utils';
+
 class GeminiClient {
     private readonly baseUrl = 'https://generativelanguage.googleapis.com';
     private readonly apiKey: string;
@@ -113,13 +115,7 @@ class GeminiClient {
             const audioPart = parts?.find((p: Record<string, unknown>) => p.inlineData);
             if (!audioPart?.inlineData?.data) return null;
 
-            // Decode base64 audio
-            const binaryStr = atob(audioPart.inlineData.data);
-            const bytes = new Uint8Array(binaryStr.length);
-            for (let i = 0; i < binaryStr.length; i++) {
-                bytes[i] = binaryStr.charCodeAt(i);
-            }
-            return { audioData: bytes.buffer };
+            return { audioData: base64ToArrayBuffer(audioPart.inlineData.data) };
         } catch {
             return null;
         }

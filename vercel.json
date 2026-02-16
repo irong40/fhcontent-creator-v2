@@ -1,3 +1,16 @@
 {
-  "crons": []
+  "crons": [
+    {
+      "path": "/api/cron/daily-media",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-publish",
+      "schedule": "0 */1 * * *"
+    },
+    {
+      "path": "/api/cron/check-status",
+      "schedule": "*/10 * * * *"
+    }
+  ]
 }

@@ -176,6 +176,52 @@ export interface BlotatoUser {
 }
 
 // ============================================================================
+// TARGET BUILDER
+// ============================================================================
+
+export function buildTarget(platform: Platform, options: {
+    title?: string;
+    isAiGenerated?: boolean;
+} = {}): BlotatoTarget {
+    switch (platform) {
+        case 'tiktok':
+            return {
+                targetType: 'tiktok',
+                privacyLevel: 'PUBLIC_TO_EVERYONE',
+                disabledComments: false,
+                disabledDuet: false,
+                disabledStitch: false,
+                isBrandedContent: false,
+                isYourBrand: true,
+                isAiGenerated: options.isAiGenerated ?? true,
+                title: options.title,
+            };
+        case 'instagram':
+            return {
+                targetType: 'instagram',
+                mediaType: 'reel',
+            };
+        case 'youtube':
+            return {
+                targetType: 'youtube',
+                title: options.title || 'Untitled',
+                privacyStatus: 'public',
+                shouldNotifySubscribers: true,
+                isMadeForKids: false,
+                containsSyntheticMedia: true,
+            };
+        case 'twitter':
+            return { targetType: 'twitter' };
+        case 'linkedin':
+            return { targetType: 'linkedin' };
+        case 'threads':
+        case 'bluesky':
+        default:
+            return { targetType: platform } as unknown as BlotatoTarget;
+    }
+}
+
+// ============================================================================
 // CLIENT
 // ============================================================================
 

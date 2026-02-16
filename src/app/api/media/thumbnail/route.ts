@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
 import { uploadImage } from '@/lib/storage';
-import { estimateDalleCost } from '@/lib/utils';
+import { estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { thumbnailGenerateSchema } from '@/lib/schemas';
 
 export async function POST(request: NextRequest) {
@@ -62,13 +62,7 @@ export async function POST(request: NextRequest) {
                 throw new Error('Both DALL-E and Gemini image generation failed');
             }
 
-            // Decode base64 image data
-            const binaryStr = atob(geminiResult.imageData);
-            const bytes = new Uint8Array(binaryStr.length);
-            for (let i = 0; i < binaryStr.length; i++) {
-                bytes[i] = binaryStr.charCodeAt(i);
-            }
-            imageBuffer = bytes.buffer;
+            imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
             sourceService = 'gemini';
         }
 

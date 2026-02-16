@@ -1,25 +1,41 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { PersonaSwitcher } from '@/components/persona-switcher';
 import type { Persona, Topic } from '@/types/database';
 
 export default function PlanPage() {
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
+    const searchParams = useSearchParams();
+    const router = useRouter();
     const [personas, setPersonas] = useState<Persona[]>([]);
     const [topics, setTopics] = useState<Topic[]>([]);
     const [generating, setGenerating] = useState<string | null>(null);
-    const [error, setError] = useState<string | null>(null);
+
+    const selectedPersonaId = searchParams.get('persona');
+
+    const setSelectedPersona = useCallback((id: string | null) => {
+        const params = new URLSearchParams(searchParams.toString());
+        if (id) {
+            params.set('persona', id);
+        } else {
+            params.delete('persona');
+        }
+        router.push(`/plan?${params.toString()}`);
+    }, [searchParams, router]);
 
     useEffect(() => {
         async function load() {
             const [personasRes, topicsRes] = await Promise.all([
                 supabase.from('personas').select('*').eq('is_active', true),
-                supabase.from('topics').select('*').order('created_at', { ascending: false }).limit(20),
+                supabase.from('topics').select('*').order('created_at', { ascending: false }).limit(50),
             ]);
             if (personasRes.data) setPersonas(personasRes.data);
             if (topicsRes.data) setTopics(topicsRes.data);
@@ -27,9 +43,15 @@ export default function PlanPage() {
         load();
     }, [supabase]);
 
+    const filteredTopics = selectedPersonaId
+        ? topics.filter(t => t.persona_id === selectedPersonaId)
+        : topics;
+
+    const personaName = (personaId: string) =>
+        personas.find(p => p.id === personaId)?.name ?? '';
+
     async function generateTopic(personaId: string) {
         setGenerating(personaId);
-        setError(null);
         try {
             const res = await fetch('/api/topics/generate', {
                 method: 'POST',
@@ -38,18 +60,18 @@ export default function PlanPage() {
             });
             const data = await res.json();
             if (!data.success) {
-                setError(data.error || 'Topic generation failed');
+                toast.error(data.error || 'Topic generation failed');
                 return;
             }
-            // Refresh topics
+            toast.success('Topic generated');
             const { data: refreshed } = await supabase
                 .from('topics')
                 .select('*')
                 .order('created_at', { ascending: false })
-                .limit(20);
+                .limit(50);
             if (refreshed) setTopics(refreshed);
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            toast.error(e instanceof Error ? e.message : 'Unknown error');
         } finally {
             setGenerating(null);
         }
@@ -57,7 +79,6 @@ export default function PlanPage() {
 
     async function generateContent(topicId: string) {
         setGenerating(topicId);
-        setError(null);
         try {
             const res = await fetch('/api/content/generate', {
                 method: 'POST',
@@ -66,18 +87,18 @@ export default function PlanPage() {
             });
             const data = await res.json();
             if (!data.success) {
-                setError(data.error || 'Content generation failed');
+                toast.error(data.error || 'Content generation failed');
                 return;
             }
-            // Refresh topics
+            toast.success('Content generated — ready for review');
             const { data: refreshed } = await supabase
                 .from('topics')
                 .select('*')
                 .order('created_at', { ascending: false })
-                .limit(20);
+                .limit(50);
             if (refreshed) setTopics(refreshed);
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Unknown error');
+            toast.error(e instanceof Error ? e.message : 'Unknown error');
         } finally {
             setGenerating(null);
         }
@@ -89,17 +110,22 @@ export default function PlanPage() {
         content_ready: 'bg-green-600',
         approved: 'bg-emerald-600',
         scheduled: 'bg-purple-600',
+        publishing: 'bg-blue-600',
         published: 'bg-gray-600',
         failed: 'bg-red-600',
     };
 
     return (
         <div className="container max-w-screen-lg py-8">
-            <h1 className="text-3xl font-bold mb-8">Content Plan</h1>
+            <h1 className="text-3xl font-bold mb-6">Content Plan</h1>
 
-            {error && (
-                <div className="bg-destructive/20 border border-destructive text-destructive-foreground rounded-md p-3 mb-6">
-                    {error}
+            {personas.length > 1 && (
+                <div className="mb-6">
+                    <PersonaSwitcher
+                        personas={personas}
+                        selectedId={selectedPersonaId}
+                        onSelect={setSelectedPersona}
+                    />
                 </div>
             )}
 
@@ -109,7 +135,9 @@ export default function PlanPage() {
                     <CardTitle>Generate Topics</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                    {personas.map(p => (
+                    {personas
+                        .filter(p => !selectedPersonaId || p.id === selectedPersonaId)
+                        .map(p => (
                         <div key={p.id} className="flex items-center justify-between">
                             <div>
                                 <span className="font-medium">{p.name}</span>
@@ -131,9 +159,16 @@ export default function PlanPage() {
             </Card>
 
             {/* Recent topics */}
-            <h2 className="text-xl font-semibold mb-4">Recent Topics</h2>
+            <h2 className="text-xl font-semibold mb-4">
+                Recent Topics
+                {selectedPersonaId && (
+                    <span className="text-muted-foreground text-base font-normal ml-2">
+                        ({filteredTopics.length})
+                    </span>
+                )}
+            </h2>
             <div className="space-y-3">
-                {topics.map(topic => (
+                {filteredTopics.map(topic => (
                     <Card key={topic.id}>
                         <CardContent className="flex items-center justify-between py-4">
                             <div className="flex-1 min-w-0">
@@ -141,6 +176,11 @@ export default function PlanPage() {
                                     <Badge className={statusColor[topic.status] || 'bg-gray-500'}>
                                         {topic.status.replace('_', ' ')}
                                     </Badge>
+                                    {!selectedPersonaId && personas.length > 1 && (
+                                        <span className="text-xs text-amber-500 font-medium">
+                                            {personaName(topic.persona_id)}
+                                        </span>
+                                    )}
                                     <span className="text-xs text-muted-foreground">
                                         {new Date(topic.created_at).toLocaleDateString()}
                                     </span>
@@ -159,7 +199,7 @@ export default function PlanPage() {
                                         {generating === topic.id ? 'Generating...' : 'Generate Content'}
                                     </Button>
                                 )}
-                                {(topic.status === 'content_ready' || topic.status === 'approved') && (
+                                {(['content_ready', 'approved', 'scheduled', 'publishing', 'published'].includes(topic.status)) && (
                                     <Link href={`/review/${topic.id}`}>
                                         <Button size="sm" variant="outline">Review</Button>
                                     </Link>
@@ -173,8 +213,10 @@ export default function PlanPage() {
                         </CardContent>
                     </Card>
                 ))}
-                {topics.length === 0 && (
-                    <p className="text-muted-foreground">No topics yet. Generate one above.</p>
+                {filteredTopics.length === 0 && (
+                    <p className="text-muted-foreground">
+                        {selectedPersonaId ? 'No topics for this persona.' : 'No topics yet. Generate one above.'}
+                    </p>
                 )}
             </div>
         </div>

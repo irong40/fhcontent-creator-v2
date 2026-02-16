@@ -4,14 +4,22 @@ import { elevenlabs } from '@/lib/elevenlabs';
 import { heygen } from '@/lib/heygen';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
-import { canva } from '@/lib/canva';
+import { canva, type AutofillData } from '@/lib/canva';
 import { uploadAudio, uploadImage } from '@/lib/storage';
-import { estimateElevenLabsCost, estimateDalleCost } from '@/lib/utils';
+import { estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
+import { notifyError } from '@/lib/notifications';
+import { validateCronSecret } from '../middleware';
 import type { ContentPiece, TopicWithPersona, PieceType, CarouselSlide } from '@/types/database';
+
+export const maxDuration = 300;
 
 const VIDEO_PIECE_TYPES: PieceType[] = ['long', 'short_1', 'short_2', 'short_3', 'short_4'];
 
-export async function GET() {
+export async function GET(request: Request) {
+    if (!validateCronSecret(request)) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     try {
         const supabase = createAdminClient();
 
@@ -36,9 +44,24 @@ export async function GET() {
             });
         }
 
-        const results = [];
+        // Group topics by persona to stagger API calls across personas
+        const topicsByPersona = new Map<string, typeof topics>();
+        for (const topic of topics) {
+            const personaId = topic.persona_id;
+            if (!topicsByPersona.has(personaId)) topicsByPersona.set(personaId, []);
+            topicsByPersona.get(personaId)!.push(topic);
+        }
 
-        for (const topicRow of topics) {
+        const results = [];
+        let isFirstPersona = true;
+
+        for (const [, personaTopics] of topicsByPersona) {
+            if (!isFirstPersona) {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+            isFirstPersona = false;
+
+        for (const topicRow of personaTopics) {
             const topic = topicRow as unknown as TopicWithPersona;
             const persona = topic.personas;
             const avatarId = persona.heygen_avatar_id;
@@ -171,12 +194,7 @@ export async function GET() {
                         const geminiResult = await gemini.generateImage(piece.thumbnail_prompt);
                         if (!geminiResult) throw new Error('Both DALL-E and Gemini failed');
 
-                        const binaryStr = atob(geminiResult.imageData);
-                        const bytes = new Uint8Array(binaryStr.length);
-                        for (let i = 0; i < binaryStr.length; i++) {
-                            bytes[i] = binaryStr.charCodeAt(i);
-                        }
-                        imageBuffer = bytes.buffer;
+                        imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
                         sourceService = 'gemini';
                     }
 
@@ -223,11 +241,11 @@ export async function GET() {
                 const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
                 if (slides && slides.length > 0) {
                     try {
-                        const autofillData: Record<string, string> = {};
+                        const autofillData: AutofillData = {};
                         let slideImagesGenerated = 0;
 
                         for (const slide of slides) {
-                            autofillData[`slide_${slide.slide}_text`] = slide.text;
+                            autofillData[`slide_${slide.slide}_text`] = { type: 'text', text: slide.text };
 
                             if (slide.imagePrompt) {
                                 try {
@@ -239,7 +257,11 @@ export async function GET() {
                                     const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
                                     const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
 
-                                    autofillData[`slide_${slide.slide}_image`] = slideImageUrl;
+                                    const assetId = await canva.uploadAsset(
+                                        `slide_${slide.slide}`,
+                                        imageBuffer,
+                                    );
+                                    autofillData[`slide_${slide.slide}_image`] = { type: 'image', asset_id: assetId };
                                     slideImagesGenerated++;
 
                                     await supabase.from('visual_assets').insert({
@@ -250,21 +272,20 @@ export async function GET() {
                                         metadata: { slide: slide.slide, prompt: slide.imagePrompt },
                                         status: 'ready',
                                     });
-                                } catch {
-                                    // Continue with remaining slides
+                                } catch (e) {
+                                    console.warn(`Carousel slide ${slide.slide} image failed:`, e);
                                 }
                             }
                         }
 
-                        const { designId } = await canva.createDesignAutofill(carouselTemplateId, autofillData);
+                        const designId = await canva.createDesignAutofill(carouselTemplateId, autofillData);
 
                         await supabase
                             .from('content_pieces')
                             .update({ canva_design_id: designId })
                             .eq('id', carouselPiece.id);
 
-                        const exportJob = await canva.exportDesign(designId, 'png');
-                        const exportedUrls = await canva.pollExport(exportJob.id);
+                        const exportedUrls = await canva.exportDesign(designId, 'png');
 
                         if (exportedUrls.length > 0) {
                             await supabase
@@ -316,8 +337,18 @@ export async function GET() {
                 }
             }
 
+            if (topicResult.errors.length >= 3) {
+                await notifyError({
+                    source: 'daily-media',
+                    message: `${topicResult.errors.length} errors: ${topicResult.errors.slice(0, 3).join('; ')}`,
+                    topicId: topic.id,
+                    personaName: persona.name,
+                });
+            }
+
             results.push(topicResult);
         }
+        } // end persona group loop
 
         return NextResponse.json({
             success: true,
