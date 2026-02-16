@@ -22,35 +22,10 @@ export async function ensureBucket(): Promise<void> {
     }
 }
 
-export async function uploadAudio(
+async function uploadFile(
     path: string,
     data: ArrayBuffer,
-): Promise<string> {
-    await ensureBucket();
-    const supabase = createAdminClient();
-
-    const { error } = await supabase.storage
-        .from(BUCKET_NAME)
-        .upload(path, data, {
-            contentType: 'audio/mpeg',
-            upsert: true,
-        });
-
-    if (error) {
-        throw new Error(`Storage upload failed: ${error.message}`);
-    }
-
-    const { data: urlData } = supabase.storage
-        .from(BUCKET_NAME)
-        .getPublicUrl(path);
-
-    return urlData.publicUrl;
-}
-
-export async function uploadImage(
-    path: string,
-    data: ArrayBuffer,
-    contentType: 'image/png' | 'image/jpeg' = 'image/png',
+    contentType: string,
 ): Promise<string> {
     await ensureBucket();
     const supabase = createAdminClient();
@@ -71,6 +46,18 @@ export async function uploadImage(
         .getPublicUrl(path);
 
     return urlData.publicUrl;
+}
+
+export function uploadAudio(path: string, data: ArrayBuffer): Promise<string> {
+    return uploadFile(path, data, 'audio/mpeg');
+}
+
+export function uploadImage(
+    path: string,
+    data: ArrayBuffer,
+    contentType: 'image/png' | 'image/jpeg' = 'image/png',
+): Promise<string> {
+    return uploadFile(path, data, contentType);
 }
 
 export { BUCKET_NAME };

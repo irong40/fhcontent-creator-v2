@@ -10,20 +10,28 @@ import {
     thumbnailGenerateSchema,
     carouselGenerateSchema,
     musicGenerateSchema,
+    approveTopicSchema,
+    scheduleTopicSchema,
+    regenerateSchema,
+    publishTopicSchema,
+    regeneratePieceResponseSchema,
 } from './schemas';
+import type { RegeneratePieceResponse } from './schemas';
+
+const VALID_UUID = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
 
 describe('topicGenerateSchema', () => {
     it('accepts valid personaId with default count', () => {
         const result = topicGenerateSchema.parse({
-            personaId: '6ac9adfa-27f1-492b-98e1-f5623cb4eda2',
+            personaId: VALID_UUID,
         });
-        expect(result.personaId).toBe('6ac9adfa-27f1-492b-98e1-f5623cb4eda2');
+        expect(result.personaId).toBe(VALID_UUID);
         expect(result.count).toBe(1);
     });
 
     it('accepts explicit count within range', () => {
         const result = topicGenerateSchema.parse({
-            personaId: '6ac9adfa-27f1-492b-98e1-f5623cb4eda2',
+            personaId: VALID_UUID,
             count: 5,
         });
         expect(result.count).toBe(5);
@@ -36,7 +44,7 @@ describe('topicGenerateSchema', () => {
 
     it('rejects count below 1', () => {
         const result = topicGenerateSchema.safeParse({
-            personaId: '6ac9adfa-27f1-492b-98e1-f5623cb4eda2',
+            personaId: VALID_UUID,
             count: 0,
         });
         expect(result.success).toBe(false);
@@ -44,7 +52,7 @@ describe('topicGenerateSchema', () => {
 
     it('rejects count above 10', () => {
         const result = topicGenerateSchema.safeParse({
-            personaId: '6ac9adfa-27f1-492b-98e1-f5623cb4eda2',
+            personaId: VALID_UUID,
             count: 11,
         });
         expect(result.success).toBe(false);
@@ -59,9 +67,9 @@ describe('topicGenerateSchema', () => {
 describe('contentGenerateSchema', () => {
     it('accepts valid UUID topicId', () => {
         const result = contentGenerateSchema.parse({
-            topicId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            topicId: VALID_UUID,
         });
-        expect(result.topicId).toBe('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+        expect(result.topicId).toBe(VALID_UUID);
     });
 
     it('rejects non-UUID topicId', () => {
@@ -241,14 +249,14 @@ describe('contentResponseSchema', () => {
 });
 
 describe('voiceGenerateSchema', () => {
-    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
 
     it('accepts valid contentPieceId and voiceId', () => {
         const result = voiceGenerateSchema.parse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             voiceId: 'pNInz6obpgDQGcFmaJgB',
         });
-        expect(result.contentPieceId).toBe(validUuid);
+        expect(result.contentPieceId).toBe(VALID_UUID);
         expect(result.voiceId).toBe('pNInz6obpgDQGcFmaJgB');
     });
 
@@ -262,7 +270,7 @@ describe('voiceGenerateSchema', () => {
 
     it('rejects empty voiceId', () => {
         const result = voiceGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             voiceId: '',
         });
         expect(result.success).toBe(false);
@@ -270,22 +278,22 @@ describe('voiceGenerateSchema', () => {
 
     it('rejects missing voiceId', () => {
         const result = voiceGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
         });
         expect(result.success).toBe(false);
     });
 });
 
 describe('videoGenerateSchema', () => {
-    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
 
     it('accepts valid contentPieceId, avatarId, and audioUrl', () => {
         const result = videoGenerateSchema.parse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             avatarId: 'avatar_abc123',
             audioUrl: 'https://storage.supabase.co/media/audio.mp3',
         });
-        expect(result.contentPieceId).toBe(validUuid);
+        expect(result.contentPieceId).toBe(VALID_UUID);
         expect(result.avatarId).toBe('avatar_abc123');
         expect(result.audioUrl).toBe('https://storage.supabase.co/media/audio.mp3');
     });
@@ -301,7 +309,7 @@ describe('videoGenerateSchema', () => {
 
     it('rejects invalid audioUrl', () => {
         const result = videoGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             avatarId: 'avatar_abc123',
             audioUrl: 'not-a-url',
         });
@@ -310,7 +318,7 @@ describe('videoGenerateSchema', () => {
 
     it('rejects empty avatarId', () => {
         const result = videoGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             avatarId: '',
             audioUrl: 'https://example.com/audio.mp3',
         });
@@ -319,18 +327,18 @@ describe('videoGenerateSchema', () => {
 
     it('rejects missing fields', () => {
         const result = videoGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
         });
         expect(result.success).toBe(false);
     });
 });
 
 describe('thumbnailGenerateSchema', () => {
-    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
 
     it('accepts valid contentPieceId', () => {
-        const result = thumbnailGenerateSchema.parse({ contentPieceId: validUuid });
-        expect(result.contentPieceId).toBe(validUuid);
+        const result = thumbnailGenerateSchema.parse({ contentPieceId: VALID_UUID });
+        expect(result.contentPieceId).toBe(VALID_UUID);
     });
 
     it('rejects non-UUID contentPieceId', () => {
@@ -345,20 +353,20 @@ describe('thumbnailGenerateSchema', () => {
 });
 
 describe('carouselGenerateSchema', () => {
-    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
 
     it('accepts valid contentPieceId and templateId', () => {
         const result = carouselGenerateSchema.parse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             templateId: 'tmpl_abc123',
         });
-        expect(result.contentPieceId).toBe(validUuid);
+        expect(result.contentPieceId).toBe(VALID_UUID);
         expect(result.templateId).toBe('tmpl_abc123');
     });
 
     it('accepts optional brandKitId', () => {
         const result = carouselGenerateSchema.parse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             templateId: 'tmpl_abc123',
             brandKitId: 'bk_xyz',
         });
@@ -375,7 +383,7 @@ describe('carouselGenerateSchema', () => {
 
     it('rejects empty templateId', () => {
         const result = carouselGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             templateId: '',
         });
         expect(result.success).toBe(false);
@@ -383,23 +391,23 @@ describe('carouselGenerateSchema', () => {
 
     it('rejects missing templateId', () => {
         const result = carouselGenerateSchema.safeParse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
         });
         expect(result.success).toBe(false);
     });
 });
 
 describe('musicGenerateSchema', () => {
-    const validUuid = '6ac9adfa-27f1-492b-98e1-f5623cb4eda2';
+
 
     it('accepts valid contentPieceId', () => {
-        const result = musicGenerateSchema.parse({ contentPieceId: validUuid });
-        expect(result.contentPieceId).toBe(validUuid);
+        const result = musicGenerateSchema.parse({ contentPieceId: VALID_UUID });
+        expect(result.contentPieceId).toBe(VALID_UUID);
     });
 
     it('accepts optional mood', () => {
         const result = musicGenerateSchema.parse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             mood: 'inspirational',
         });
         expect(result.mood).toBe('inspirational');
@@ -417,9 +425,135 @@ describe('musicGenerateSchema', () => {
 
     it('accepts empty string mood', () => {
         const result = musicGenerateSchema.parse({
-            contentPieceId: validUuid,
+            contentPieceId: VALID_UUID,
             mood: '',
         });
         expect(result.mood).toBe('');
+    });
+});
+
+describe('approveTopicSchema', () => {
+    it('accepts empty object', () => {
+        const result = approveTopicSchema.parse({});
+        expect(result.publishDate).toBeUndefined();
+        expect(result.publishTime).toBeUndefined();
+    });
+
+    it('accepts optional publishDate and publishTime', () => {
+        const result = approveTopicSchema.parse({
+            publishDate: '2026-03-01',
+            publishTime: '09:00',
+        });
+        expect(result.publishDate).toBe('2026-03-01');
+        expect(result.publishTime).toBe('09:00');
+    });
+
+    it('accepts publishDate without publishTime', () => {
+        const result = approveTopicSchema.parse({ publishDate: '2026-03-01' });
+        expect(result.publishDate).toBe('2026-03-01');
+    });
+});
+
+describe('scheduleTopicSchema', () => {
+    it('accepts valid date with default time', () => {
+        const result = scheduleTopicSchema.parse({ publishDate: '2026-03-01' });
+        expect(result.publishDate).toBe('2026-03-01');
+        expect(result.publishTime).toBe('09:00');
+    });
+
+    it('accepts explicit publishTime', () => {
+        const result = scheduleTopicSchema.parse({
+            publishDate: '2026-03-01',
+            publishTime: '14:30',
+        });
+        expect(result.publishTime).toBe('14:30');
+    });
+
+    it('rejects empty publishDate', () => {
+        const result = scheduleTopicSchema.safeParse({ publishDate: '' });
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects missing publishDate', () => {
+        const result = scheduleTopicSchema.safeParse({});
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('regenerateSchema', () => {
+    it('accepts empty object', () => {
+        const result = regenerateSchema.parse({});
+        expect(result).toEqual({});
+    });
+});
+
+describe('publishTopicSchema', () => {
+    it('accepts empty object with default force=false', () => {
+        const result = publishTopicSchema.parse({});
+        expect(result.force).toBe(false);
+    });
+
+    it('accepts force: true', () => {
+        const result = publishTopicSchema.parse({ force: true });
+        expect(result.force).toBe(true);
+    });
+
+    it('rejects non-boolean force', () => {
+        const result = publishTopicSchema.safeParse({ force: 'yes' });
+        expect(result.success).toBe(false);
+    });
+});
+
+describe('regeneratePieceResponseSchema', () => {
+    const validPiece = {
+        pieceType: 'long',
+        script: 'Test script about history',
+        captionLong: 'A long caption with hashtags #history',
+        captionShort: 'Short caption',
+        thumbnailPrompt: 'A vivid historical scene',
+    };
+
+    it('accepts a valid piece', () => {
+        const result = regeneratePieceResponseSchema.parse(validPiece);
+        expect(result.script).toBe('Test script about history');
+        expect(result.pieceType).toBe('long');
+    });
+
+    it('rejects piece missing script', () => {
+        const { script, ...noScript } = validPiece;
+        const result = regeneratePieceResponseSchema.safeParse(noScript);
+        expect(result.success).toBe(false);
+    });
+
+    it('rejects piece missing captions', () => {
+        const { captionLong, captionShort, ...noCaptions } = validPiece;
+        const result = regeneratePieceResponseSchema.safeParse(noCaptions);
+        expect(result.success).toBe(false);
+    });
+
+    it('accepts piece without optional thumbnailPrompt', () => {
+        const { thumbnailPrompt, ...noThumb } = validPiece;
+        const result = regeneratePieceResponseSchema.parse(noThumb);
+        expect(result.thumbnailPrompt).toBeUndefined();
+    });
+
+    it('accepts carousel piece with slides', () => {
+        const carousel = {
+            ...validPiece,
+            pieceType: 'carousel',
+            carouselSlides: [
+                { slide: 1, text: 'Hook', imagePrompt: 'Scene 1' },
+                { slide: 2, text: 'Point 1', imagePrompt: 'Scene 2' },
+            ],
+            musicTrack: 'inspirational',
+        };
+        const result = regeneratePieceResponseSchema.parse(carousel);
+        expect(result.carouselSlides).toHaveLength(2);
+        expect(result.musicTrack).toBe('inspirational');
+    });
+
+    it('exports RegeneratePieceResponse type', () => {
+        const piece: RegeneratePieceResponse = validPiece as RegeneratePieceResponse;
+        expect(piece.script).toBe('Test script about history');
     });
 });

@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
 import { contentGenerateSchema, contentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
-import { estimateCost } from '@/lib/utils';
+import { estimateClaudeCost } from '@/lib/utils';
 import type { PieceType, TopicWithPersona } from '@/types/database';
 
 const PIECE_ORDER: Record<PieceType, number> = {
@@ -50,7 +50,17 @@ export async function POST(request: NextRequest) {
 
         // Parse and validate response
         const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();
-        const parsed = contentResponseSchema.safeParse(JSON.parse(jsonText));
+        let rawParsed: unknown;
+        try {
+            rawParsed = JSON.parse(jsonText);
+        } catch {
+            await supabase.from('topics').update({ status: 'draft' }).eq('id', topicId);
+            return NextResponse.json(
+                { success: false, error: 'AI returned invalid JSON' },
+                { status: 502 },
+            );
+        }
+        const parsed = contentResponseSchema.safeParse(rawParsed);
 
         if (!parsed.success) {
             // Revert topic status on parse failure
@@ -103,7 +113,7 @@ export async function POST(request: NextRequest) {
             .eq('id', topicId);
 
         // Track cost
-        const costUsd = estimateCost(inputTokens, outputTokens);
+        const costUsd = estimateClaudeCost(inputTokens, outputTokens);
         await supabase.from('cost_tracking').insert({
             service: 'claude',
             operation: 'content_generation',

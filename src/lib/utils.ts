@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /** Claude Sonnet 4.5 pricing: $3/M input, $15/M output */
-export function estimateCost(inputTokens: number, outputTokens: number): number {
+export function estimateClaudeCost(inputTokens: number, outputTokens: number): number {
   return (inputTokens * 3 + outputTokens * 15) / 1_000_000;
 }
 
@@ -29,4 +29,14 @@ export function estimateElevenLabsCost(charCount: number): number {
 export function estimateDalleCost(count: number, quality: 'standard' | 'hd' = 'standard'): number {
   const perImage = quality === 'hd' ? 0.08 : 0.04;
   return count * perImage;
+}
+
+/** Decode a base64 string to an ArrayBuffer */
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binaryStr = atob(base64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return bytes.buffer;
 }

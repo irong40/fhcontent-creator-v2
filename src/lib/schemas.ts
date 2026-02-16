@@ -61,6 +61,9 @@ export const contentResponseSchema = z.object({
     pieces: z.array(generatedPieceSchema).length(6),
 });
 
+export const regeneratePieceResponseSchema = generatedPieceSchema;
+export type RegeneratePieceResponse = z.infer<typeof regeneratePieceResponseSchema>;
+
 // --- Media request schemas ---
 
 export const voiceGenerateSchema = z.object({
@@ -89,6 +92,24 @@ export const musicGenerateSchema = z.object({
     mood: z.string().optional(),
 });
 
+// --- Approval / scheduling schemas ---
+
+export const approveTopicSchema = z.object({
+    publishDate: z.string().optional(),
+    publishTime: z.string().optional(),
+});
+
+export const scheduleTopicSchema = z.object({
+    publishDate: z.string().min(1),
+    publishTime: z.string().default('09:00'),
+});
+
+export const regenerateSchema = z.object({});
+
+export const publishTopicSchema = z.object({
+    force: z.boolean().default(false),
+});
+
 // --- Inferred types ---
 
 export type TopicGenerateRequest = z.infer<typeof topicGenerateSchema>;
@@ -101,3 +122,6 @@ export type VideoGenerateRequest = z.infer<typeof videoGenerateSchema>;
 export type ThumbnailGenerateRequest = z.infer<typeof thumbnailGenerateSchema>;
 export type CarouselGenerateRequest = z.infer<typeof carouselGenerateSchema>;
 export type MusicGenerateRequest = z.infer<typeof musicGenerateSchema>;
+export type ApproveTopicRequest = z.infer<typeof approveTopicSchema>;
+export type ScheduleTopicRequest = z.infer<typeof scheduleTopicSchema>;
+export type PublishTopicRequest = z.infer<typeof publishTopicSchema>;

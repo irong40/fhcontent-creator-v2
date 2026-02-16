@@ -1,29 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { estimateCost, wordCount, estimateDuration, estimateElevenLabsCost, estimateDalleCost } from './utils';
+import { estimateClaudeCost, wordCount, estimateDuration, estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from './utils';
 
-describe('estimateCost', () => {
+describe('estimateClaudeCost', () => {
     it('returns 0 for zero tokens', () => {
-        expect(estimateCost(0, 0)).toBe(0);
+        expect(estimateClaudeCost(0, 0)).toBe(0);
     });
 
     it('calculates input-only cost correctly', () => {
         // 1M input tokens * $3/M = $3.00
-        expect(estimateCost(1_000_000, 0)).toBe(3);
+        expect(estimateClaudeCost(1_000_000, 0)).toBe(3);
     });
 
     it('calculates output-only cost correctly', () => {
         // 1M output tokens * $15/M = $15.00
-        expect(estimateCost(0, 1_000_000)).toBe(15);
+        expect(estimateClaudeCost(0, 1_000_000)).toBe(15);
     });
 
     it('calculates mixed cost correctly', () => {
         // 7000 input * $3/M + 2000 output * $15/M = $0.021 + $0.03 = $0.051
-        expect(estimateCost(7000, 2000)).toBeCloseTo(0.051, 6);
+        expect(estimateClaudeCost(7000, 2000)).toBeCloseTo(0.051, 6);
     });
 
     it('handles typical topic generation usage', () => {
         // ~7K in, ~2K out — should be around $0.05
-        const cost = estimateCost(7000, 2000);
+        const cost = estimateClaudeCost(7000, 2000);
         expect(cost).toBeGreaterThan(0.04);
         expect(cost).toBeLessThan(0.06);
     });
@@ -147,5 +147,34 @@ describe('estimateDalleCost', () => {
     it('handles fractional count', () => {
         // 0.5 * $0.04 = $0.02
         expect(estimateDalleCost(0.5)).toBeCloseTo(0.02, 6);
+    });
+});
+
+describe('base64ToArrayBuffer', () => {
+    it('decodes a simple ASCII string', () => {
+        // "Hello" → base64 "SGVsbG8="
+        const result = base64ToArrayBuffer('SGVsbG8=');
+        const view = new Uint8Array(result);
+        expect(Array.from(view)).toEqual([72, 101, 108, 108, 111]);
+    });
+
+    it('returns empty ArrayBuffer for empty string', () => {
+        const result = base64ToArrayBuffer('');
+        expect(result.byteLength).toBe(0);
+    });
+
+    it('decodes binary data with high bytes', () => {
+        // 0xFF, 0x00, 0xAB → base64 "/wCr"
+        const result = base64ToArrayBuffer('/wCr');
+        const view = new Uint8Array(result);
+        expect(Array.from(view)).toEqual([0xFF, 0x00, 0xAB]);
+    });
+
+    it('round-trips with btoa', () => {
+        const original = 'Test payload 123!';
+        const encoded = btoa(original);
+        const decoded = base64ToArrayBuffer(encoded);
+        const text = String.fromCharCode(...new Uint8Array(decoded));
+        expect(text).toBe(original);
     });
 });

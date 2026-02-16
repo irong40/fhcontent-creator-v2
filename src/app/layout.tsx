@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { Toaster } from "sonner";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "@/components/sign-out-button";
+import { NavLinks } from "@/components/nav-links";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -41,17 +43,7 @@ export default async function RootLayout({
                   </span>
                 </Link>
               </div>
-              <nav className="flex items-center gap-6 text-sm">
-                <Link href="/plan" className="transition-colors hover:text-foreground/80 text-foreground/60">
-                  Plan
-                </Link>
-                <Link href="/personas" className="transition-colors hover:text-foreground/80 text-foreground/60">
-                  Personas
-                </Link>
-                <Link href="/api/health" className="transition-colors hover:text-foreground/80 text-foreground/60">
-                  API Status
-                </Link>
-              </nav>
+              <NavLinks />
               <div className="ml-auto flex items-center gap-4">
                 {user && <SignOutButton />}
               </div>
@@ -61,6 +53,7 @@ export default async function RootLayout({
             {children}
           </main>
         </div>
+        <Toaster theme="dark" richColors position="bottom-right" />
       </body>
     </html>
   );

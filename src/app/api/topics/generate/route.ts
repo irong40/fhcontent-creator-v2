@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
 import { topicGenerateSchema, topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt } from '@/lib/prompts';
-import { estimateCost } from '@/lib/utils';
+import { estimateClaudeCost } from '@/lib/utils';
 import type { Database } from '@/types/database';
 
 export async function POST(request: NextRequest) {
@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Track cost
-        const costUsd = estimateCost(inputTokens, outputTokens);
+        const costUsd = estimateClaudeCost(inputTokens, outputTokens);
         await supabase.from('cost_tracking').insert({
             service: 'claude',
             operation: 'topic_generation',
