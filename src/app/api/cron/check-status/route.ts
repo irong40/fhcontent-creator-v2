@@ -159,27 +159,74 @@ async function pollBlotatoStatuses(supabase: SupabaseClient): Promise<BlotatoPol
         }
     }
 
-    // Promote topics to 'published' if all their pieces are resolved
+    // Promote topics based on piece resolution status
     const topicIds = [...new Set(publishingPieces.map(p => p.topic_id))];
     for (const topicId of topicIds) {
         const { data: topicPieces } = await supabase
             .from('content_pieces')
-            .select('status')
+            .select('id, status, published_platforms')
             .eq('topic_id', topicId);
 
         if (!topicPieces) continue;
 
-        const allDone = topicPieces.every(
-            p => p.status === 'published' || p.status === 'produced' || p.status === 'ready'
+        // Check if all pieces with published_platforms have fully resolved statuses
+        const piecesWithPlatforms = topicPieces.filter(
+            p => p.published_platforms && Object.keys(p.published_platforms as Record<string, unknown>).length > 0,
         );
-        const anyPublished = topicPieces.some(p => p.status === 'published');
+        const allPlatformsResolved = piecesWithPlatforms.every(p => {
+            const platforms = p.published_platforms as Record<string, { status: string }>;
+            return Object.values(platforms).every(ps => ps.status !== 'pending');
+        });
 
-        if (allDone && anyPublished) {
+        if (!allPlatformsResolved) continue;
+
+        // Count successes and failures across all platforms
+        let totalPublished = 0;
+        let totalFailed = 0;
+        for (const p of piecesWithPlatforms) {
+            const platforms = p.published_platforms as Record<string, { status: string }>;
+            for (const ps of Object.values(platforms)) {
+                if (ps.status === 'published') totalPublished++;
+                if (ps.status === 'failed') totalFailed++;
+            }
+        }
+
+        const now = new Date().toISOString();
+        if (totalFailed === 0 && totalPublished > 0) {
             await supabase
                 .from('topics')
-                .update({ status: 'published', published_at: new Date().toISOString() })
+                .update({ status: 'published', published_at: now })
+                .eq('id', topicId)
+                .in('status', ['publishing', 'partially_published']);
+        } else if (totalPublished > 0 && totalFailed > 0) {
+            await supabase
+                .from('topics')
+                .update({
+                    status: 'partially_published',
+                    published_at: now,
+                    error_message: `${totalPublished} succeeded, ${totalFailed} failed`,
+                })
+                .eq('id', topicId)
+                .in('status', ['publishing', 'partially_published']);
+        } else if (totalPublished === 0 && totalFailed > 0) {
+            await supabase
+                .from('topics')
+                .update({ status: 'failed', error_message: 'All platform publishes failed' })
                 .eq('id', topicId)
                 .eq('status', 'publishing');
+        }
+
+        // Update individual piece statuses
+        for (const p of piecesWithPlatforms) {
+            const platforms = p.published_platforms as Record<string, { status: string }>;
+            const pieceStatuses = Object.values(platforms).map(ps => ps.status);
+            const anyPiecePublished = pieceStatuses.includes('published');
+            if (anyPiecePublished) {
+                await supabase.from('content_pieces')
+                    .update({ status: 'published', published_at: now })
+                    .eq('id', p.id)
+                    .eq('status', 'publishing');
+            }
         }
     }
 

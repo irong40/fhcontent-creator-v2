@@ -256,6 +256,11 @@ export default function ReviewPage() {
             const data = await res.json();
             if (!data.success) { toast.error(data.error); return; }
             toast.success(`Publishing started — ${data.piecesProcessed} pieces submitted`);
+            if (data.warnings && data.warnings.length > 0) {
+                for (const warning of data.warnings as string[]) {
+                    toast.warning(warning);
+                }
+            }
             await load();
         } catch (e) {
             toast.error(e instanceof Error ? e.message : 'Publishing failed');
@@ -275,7 +280,9 @@ export default function ReviewPage() {
         approved: 'bg-emerald-600',
         scheduled: 'bg-purple-600',
         publishing: 'bg-blue-600',
+        partially_published: 'bg-orange-600',
         published: 'bg-gray-600',
+        failed: 'bg-red-600',
     };
 
     return (
@@ -468,7 +475,7 @@ export default function ReviewPage() {
                                                             <Badge variant="outline" className="bg-yellow-600/20 text-yellow-400">Processing</Badge>
                                                         )}
                                                         {piece.heygen_status === 'failed' && (
-                                                            <Badge variant="outline" className="bg-red-600/20 text-red-400">Failed</Badge>
+                                                            <Badge variant="outline" className="bg-red-600/20 text-red-400" title={piece.error_message || ''}>Failed</Badge>
                                                         )}
                                                         {!piece.heygen_status && (
                                                             <Badge variant="outline" className="bg-muted">Not submitted</Badge>
@@ -754,6 +761,68 @@ export default function ReviewPage() {
                                         </div>
                                     );
                                 })}
+                            </div>
+                        )}
+
+                        {topic.status === 'partially_published' && (
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3">
+                                    <Badge className="bg-orange-600">Partially Published</Badge>
+                                    <p className="text-sm text-muted-foreground">
+                                        {topic.error_message || 'Some platforms failed.'}
+                                    </p>
+                                    <Button
+                                        size="sm"
+                                        onClick={publishNow}
+                                        disabled={publishing}
+                                    >
+                                        {publishing ? 'Retrying...' : 'Retry Failed'}
+                                    </Button>
+                                </div>
+                                {pieces.map(piece => {
+                                    const platforms = (piece.published_platforms || {}) as Record<string, { status: string; error?: string }>;
+                                    const entries = Object.entries(platforms);
+                                    if (entries.length === 0) return null;
+                                    return (
+                                        <div key={piece.id} className="space-y-1">
+                                            <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
+                                            <div className="flex flex-wrap gap-2">
+                                                {entries.map(([platform, ps]) => (
+                                                    <Badge
+                                                        key={platform}
+                                                        variant="outline"
+                                                        className={
+                                                            ps.status === 'published' ? 'bg-green-600/20 text-green-400' :
+                                                            ps.status === 'failed' ? 'bg-red-600/20 text-red-400' :
+                                                            'bg-yellow-600/20 text-yellow-400'
+                                                        }
+                                                        title={ps.error || ''}
+                                                    >
+                                                        {platform}: {ps.status}
+                                                    </Badge>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {topic.status === 'failed' && (
+                            <div className="space-y-3">
+                                <div className="flex items-center gap-3">
+                                    <Badge className="bg-red-600">Failed</Badge>
+                                    <p className="text-sm text-muted-foreground">
+                                        {topic.error_message || 'Publishing failed.'}
+                                    </p>
+                                    <Button
+                                        size="sm"
+                                        onClick={publishNow}
+                                        disabled={publishing}
+                                    >
+                                        {publishing ? 'Retrying...' : 'Retry Publish'}
+                                    </Button>
+                                </div>
                             </div>
                         )}
 

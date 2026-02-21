@@ -39,14 +39,20 @@ export async function POST(request: NextRequest) {
             });
         }
 
-        // Attempt Gemini music generation
-        const result = await gemini.generateMusic(mood, 30);
+        // Attempt Gemini music generation with one retry
+        let result = await gemini.generateMusic(mood, 30);
 
         if (!result) {
-            return NextResponse.json(
-                { success: false, error: 'Music generation failed — no audio returned from Lyria' },
-                { status: 502 },
-            );
+            console.warn('Music generation first attempt failed, retrying...');
+            result = await gemini.generateMusic(mood, 30);
+        }
+
+        if (!result) {
+            return NextResponse.json({
+                success: true,
+                skipped: true,
+                reason: `Music generation unavailable for mood "${mood}" — Lyria returned no audio after retry`,
+            });
         }
 
         // Upload to Supabase Storage

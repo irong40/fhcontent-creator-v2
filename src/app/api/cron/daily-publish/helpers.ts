@@ -24,8 +24,24 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
 }
 
 export function getMediaUrl(piece: { piece_type: string; carousel_url: string | null; video_url: string | null }): string | null {
-    if (piece.piece_type === 'carousel') return piece.carousel_url;
+    if (piece.piece_type === 'carousel') {
+        if (!piece.carousel_url) return null;
+        // If stored as JSON array, return first URL for primary media
+        if (piece.carousel_url.startsWith('[')) {
+            const urls = JSON.parse(piece.carousel_url) as string[];
+            return urls[0] || null;
+        }
+        return piece.carousel_url;
+    }
     return piece.video_url;
+}
+
+export function getCarouselUrls(piece: { carousel_url: string | null }): string[] {
+    if (!piece.carousel_url) return [];
+    if (piece.carousel_url.startsWith('[')) {
+        return JSON.parse(piece.carousel_url) as string[];
+    }
+    return [piece.carousel_url];
 }
 
 export function isTextOnlyPlatform(platform: Platform): boolean {

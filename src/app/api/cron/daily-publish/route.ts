@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase/server';
 import { blotato, buildTarget, type Platform } from '@/lib/blotato';
 import { notifyError } from '@/lib/notifications';
 import { validateCronSecret } from '../middleware';
-import { getTargetPlatforms, getMediaUrl, isTextOnlyPlatform } from './helpers';
+import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -19,6 +19,7 @@ interface PublishResult {
     title: string;
     piecesProcessed: number;
     platformResults: Record<string, PlatformResult>;
+    warnings: string[];
 }
 
 async function publishPieceToPlatform(
@@ -28,11 +29,21 @@ async function publishPieceToPlatform(
     topicTitle: string,
     mediaUrl: string,
 ): Promise<{ platformStatus: PlatformStatus; result: PlatformResult }> {
-    // Upload media to Blotato CDN
-    const uploadUrl = (isTextOnlyPlatform(platform) && piece.thumbnail_url)
-        ? piece.thumbnail_url
-        : mediaUrl;
-    const upload = await blotato.uploadMedia(uploadUrl);
+    // For carousel pieces on Instagram, upload all slides
+    const mediaUrls: string[] = [];
+    if (piece.piece_type === 'carousel') {
+        const carouselSlideUrls = getCarouselUrls(piece);
+        for (const slideUrl of carouselSlideUrls) {
+            const upload = await blotato.uploadMedia(slideUrl);
+            mediaUrls.push(upload.url);
+        }
+    } else {
+        const uploadUrl = (isTextOnlyPlatform(platform) && piece.thumbnail_url)
+            ? piece.thumbnail_url
+            : mediaUrl;
+        const upload = await blotato.uploadMedia(uploadUrl);
+        mediaUrls.push(upload.url);
+    }
 
     // Choose caption
     const caption = isTextOnlyPlatform(platform)
@@ -44,7 +55,7 @@ async function publishPieceToPlatform(
     const response = await blotato.publishPost({
         post: {
             accountId,
-            content: { text: caption, mediaUrls: [upload.url], platform },
+            content: { text: caption, mediaUrls, platform },
             target,
         },
     });
@@ -95,6 +106,7 @@ export async function publishTopic(
         title: topic.title,
         piecesProcessed: 0,
         platformResults: {},
+        warnings: [],
     };
 
     let anySuccess = false;
@@ -102,6 +114,8 @@ export async function publishTopic(
     for (const piece of pieces as ContentPiece[]) {
         const mediaUrl = getMediaUrl(piece);
         if (!mediaUrl) {
+            const warning = `${piece.piece_type}: no media URL — skipped`;
+            result.warnings.push(warning);
             console.warn(`Piece ${piece.id} (${piece.piece_type}) has no media URL, skipping`);
             continue;
         }
@@ -116,7 +130,9 @@ export async function publishTopic(
 
             const accountId = accounts[platform as keyof PlatformAccounts];
             if (!accountId) {
-                console.warn(`Persona ${persona.name} has no ${platform} account, skipping`);
+                const warning = `${piece.piece_type}: no ${platform} account configured — skipped`;
+                result.warnings.push(warning);
+                updatedPlatforms[platform] = { status: 'failed', error: 'No account configured' };
                 continue;
             }
 
@@ -169,17 +185,17 @@ export async function publishTopic(
         published_at: new Date().toISOString(),
     });
 
-    const allResolved = Object.values(result.platformResults).every(
-        r => r.status !== 'pending'
-    );
-
-    if (allResolved) {
-        await supabase
-            .from('topics')
-            .update({ status: 'published', published_at: new Date().toISOString() })
-            .eq('id', topicId);
+    // Notify if there were warnings (missing accounts, missing media)
+    if (result.warnings.length > 0) {
+        await notifyError({
+            source: 'publishTopic',
+            message: `Publishing warnings: ${result.warnings.join('; ')}`,
+            topicId,
+            personaName: persona.name,
+        });
     }
 
+    // Status promotion is handled by check-status cron after Blotato confirms delivery
     return result;
 }
 

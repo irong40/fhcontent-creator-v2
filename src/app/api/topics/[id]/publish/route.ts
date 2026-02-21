@@ -28,10 +28,10 @@ export async function POST(
             );
         }
 
-        // Verify eligible status
+        // Verify eligible status (allow retry from failed/partially_published)
         const allowedStatuses = force
-            ? ['approved', 'scheduled']
-            : ['scheduled'];
+            ? ['approved', 'scheduled', 'partially_published', 'failed']
+            : ['scheduled', 'partially_published', 'failed'];
 
         if (!allowedStatuses.includes(topic.status)) {
             return NextResponse.json(
@@ -50,6 +50,7 @@ export async function POST(
         return NextResponse.json({
             success: true,
             ...result,
+            hasWarnings: result.warnings.length > 0,
         });
     } catch (error) {
         console.error('Manual publish error:', error);

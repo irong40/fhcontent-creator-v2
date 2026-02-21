@@ -23,11 +23,11 @@ export async function GET(request: Request) {
     try {
         const supabase = createAdminClient();
 
-        // Find topics that are content_ready but haven't had media generated
+        // Find topics that need media: content_ready, or approved/scheduled with failed pieces
         const { data: topics, error: topicError } = await supabase
             .from('topics')
             .select('*, personas(*)')
-            .eq('status', 'content_ready');
+            .in('status', ['content_ready', 'approved', 'scheduled']);
 
         if (topicError) {
             return NextResponse.json(
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
         if (!topics || topics.length === 0) {
             return NextResponse.json({
                 success: true,
-                message: 'No content_ready topics to process',
+                message: 'No topics need media processing',
                 processed: 0,
             });
         }
@@ -89,8 +89,11 @@ export async function GET(request: Request) {
             const videoPieces = allPieces.filter(p => VIDEO_PIECE_TYPES.includes(p.piece_type as PieceType));
 
             for (const piece of videoPieces as ContentPiece[]) {
-                // Skip if HeyGen job already submitted
-                if (piece.heygen_job_id) continue;
+                // Skip if HeyGen job is actively processing or already done
+                if (piece.heygen_job_id && piece.heygen_status === 'processing') continue;
+                if (piece.heygen_status === 'done') continue;
+                // Skip permanently failed pieces (max retries exceeded)
+                if (piece.heygen_status === 'failed' && (piece.retry_count ?? 0) >= 3) continue;
 
                 if (!piece.script) {
                     topicResult.errors.push(`${piece.piece_type}: no script`);
@@ -288,9 +291,13 @@ export async function GET(request: Request) {
                         const exportedUrls = await canva.exportDesign(designId, 'png');
 
                         if (exportedUrls.length > 0) {
+                            // Store all slide URLs as JSON array for multi-slide carousel support
+                            const carouselUrl = exportedUrls.length === 1
+                                ? exportedUrls[0]
+                                : JSON.stringify(exportedUrls);
                             await supabase
                                 .from('content_pieces')
-                                .update({ carousel_url: exportedUrls[0] })
+                                .update({ carousel_url: carouselUrl })
                                 .eq('id', carouselPiece.id);
                         }
 
@@ -323,7 +330,11 @@ export async function GET(request: Request) {
                     const mood = piece.music_track || 'inspirational';
                     const duration = piece.piece_type === 'long' ? 120 : 30;
 
-                    const musicResult = await gemini.generateMusic(mood, duration);
+                    // Try twice — Lyria is experimental and often fails
+                    let musicResult = await gemini.generateMusic(mood, duration);
+                    if (!musicResult) {
+                        musicResult = await gemini.generateMusic(mood, duration);
+                    }
 
                     if (musicResult) {
                         const storagePath = `${topic.id}/${piece.piece_type}_music.mp3`;
@@ -335,6 +346,8 @@ export async function GET(request: Request) {
                             .eq('id', piece.id);
 
                         topicResult.musicGenerated++;
+                    } else {
+                        console.warn(`Music generation skipped for ${piece.piece_type} (mood: ${mood}) — Lyria unavailable`);
                     }
                 } catch (e) {
                     topicResult.errors.push(

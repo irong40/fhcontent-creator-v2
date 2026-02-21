@@ -529,6 +529,7 @@ export type TopicStatus =
     | 'approved'
     | 'scheduled'
     | 'publishing'
+    | 'partially_published'
     | 'published'
     | 'failed';
 
