@@ -1,98 +1,147 @@
-# Requirements: Content Command Center — Stabilization
+# Requirements: Content Command Center — n8n Orchestration
 
 **Defined:** 2026-02-22
-**Core Value:** Every automated pipeline step completes reliably without silent failures
+**Core Value:** Reliable, observable content pipeline orchestration where every step is visible, retryable, and debuggable through n8n's visual workflow editor — replacing opaque 300-second Vercel cron jobs that fail silently.
 
 ## v1 Requirements
 
-Requirements for stabilization release. Each maps to roadmap phases.
+Requirements for initial release. Each maps to roadmap phases.
 
-### Build & Deployment
+### Infrastructure
 
-- [ ] **BUILD-01**: Production build (`next build`) completes without errors — Deno types excluded from TypeScript compilation
-- [ ] **BUILD-02**: All media API routes have explicit `maxDuration` matching their expected execution time (voice, video, thumbnail, carousel, content generate, topic generate)
-- [ ] **BUILD-03**: Site URL resolves correctly on Vercel when `NEXT_PUBLIC_SITE_URL` is unset — fix operator precedence bug in `daily-media` cron
-
-### Podcast & RSS
-
-- [ ] **RSS-01**: Podcast episodes are promoted from `ready` to `published` when parent topic publishes — RSS feed serves episodes
-- [ ] **RSS-02**: RSS `<itunes:episode>` uses sequential integer instead of UUID — Apple Podcasts displays correct episode order
-- [ ] **RSS-03**: RSS `<item>` includes `<itunes:image>` per episode linked to content piece thumbnail — Apple Podcasts shows episode-specific artwork
-
-### Pipeline Reliability
-
-- [ ] **PIPE-01**: Topics stuck in `content_generating` status for >15 minutes are automatically reset to a retriable state by `check-status` cron
-- [ ] **PIPE-02**: `sendDailyDigest()` is called at end of `daily-publish` cron — operator receives daily summary of publishes, costs, and errors
-- [ ] **PIPE-03**: `voice_id` field rejects literal `'default'` — topic generation returns 400 if persona has no voices configured instead of inserting invalid voice ID
+- [ ] **INFRA-01**: n8n 2.9.0 runs via Docker Desktop + WSL2 on local Windows machine
+- [ ] **INFRA-02**: PostgreSQL 15 is the n8n internal database (not SQLite)
+- [ ] **INFRA-03**: Cloudflare Tunnel exposes n8n webhooks to public internet with stable URL
+- [ ] **INFRA-04**: n8n auto-starts on Windows boot via WinSW service wrapper
+- [ ] **INFRA-05**: All API credentials (Claude, HeyGen, Blotato, ElevenLabs, Gemini, OpenAI, Canva, Supabase) stored in n8n credential store with fixed N8N_ENCRYPTION_KEY
+- [ ] **INFRA-06**: Dual timezone env vars set (TZ + GENERIC_TIMEZONE = America/New_York)
+- [ ] **INFRA-07**: Execution history pruning enabled (7-day retention)
+- [ ] **INFRA-08**: Windows power plan set to High Performance (no sleep/hibernate)
 
 ### Security
 
-- [ ] **SEC-01**: `/api/analytics/pull` endpoint validates authentication before processing — unauthenticated requests receive 401
-- [ ] **SEC-02**: Cron middleware logs warning when `CRON_SECRET` is unset in development instead of silently bypassing auth
-- [ ] **SEC-03**: Quick post route downloads DALL-E image to Supabase Storage before passing URL to Blotato — eliminates expired URL failures
+- [ ] **SEC-01**: n8n version >= 2.5.2 (above CVE-2026-21858 patch threshold)
+- [ ] **SEC-02**: HMAC-SHA256 signing on all n8n to Supabase Edge Function calls using N8N_WEBHOOK_SECRET
+- [ ] **SEC-03**: HMAC validation tested end-to-end against all 4 existing Edge Functions before production use
+- [ ] **SEC-04**: n8n port 5678 not exposed to public internet
+- [ ] **SEC-05**: Cron API routes still validate CRON_SECRET header during transition period
 
-### Data Integrity
+### Error Handling
 
-- [ ] **DATA-01**: Historical cost tracking rows with `service: 'anthropic'` are migrated to `service: 'claude'` via new SQL migration — cost dashboard shows unified totals
+- [ ] **ERR-01**: Global Error Trigger workflow (WF-Error) catches failures from all 5 workflows
+- [ ] **ERR-02**: Error notifications sent to Slack/webhook with workflow name, node name, error message, and timestamp
+- [ ] **ERR-03**: Pipeline errors logged to Supabase `pipeline_errors` table for queryability
+- [ ] **ERR-04**: Node-level retry with exponential backoff (Loop + Wait pattern) for external API calls
+- [ ] **ERR-05**: Dead Letter Queue table (`pipeline_dlq`) stores unrecoverable failures for manual replay
+
+### Workflows
+
+- [ ] **WF-01**: Topic Pipeline (WF-1) triggers from dashboard webhook, calls `/api/topics/generate`, executes research sub-workflow synchronously, fires media pipeline asynchronously
+- [ ] **WF-02**: Media Pipeline (WF-2) runs on 6AM cron + webhook trigger, generates all 6 media assets per topic in parallel branches (HeyGen long, Blotato shorts x4, thumbnail, carousel, podcast, music)
+- [ ] **WF-03**: Research Sub-Workflow (WF-3) executes synchronously within WF-1, posts results to `n8n-research-callback` Edge Function
+- [ ] **WF-04**: Publish Pipeline (WF-4) runs on hourly cron + webhook trigger, calls existing `/api/cron/daily-publish` route, posts confirmations to `n8n-publish-callback` Edge Function
+- [ ] **WF-05**: Status Poller (WF-5) runs every 10 minutes, polls HeyGen/Blotato for async job completion, writes results via `n8n-asset-callback` Edge Function
+- [ ] **WF-06**: All workflows use correlation IDs (topic_id/content_piece_id) for cross-workflow debugging
+
+### Integration
+
+- [ ] **INT-01**: n8n calls existing Next.js API routes for all business logic (no duplicated TypeScript logic in n8n)
+- [ ] **INT-02**: n8n writes back via existing 4 Supabase Edge Functions (topic, research, asset, publish callbacks)
+- [ ] **INT-03**: Existing `workflow_locks` table used to prevent concurrent workflow execution
+- [ ] **INT-04**: Dashboard "Generate" button fires webhook to n8n WF-1 (manual trigger)
+- [ ] **INT-05**: n8n cron triggers replace all 3 Vercel cron schedules (6AM media, hourly publish, 10min status)
+
+### Monitoring
+
+- [ ] **MON-01**: Canary heartbeat workflow writes timestamp to Supabase every 1 minute; absence detected externally
+- [ ] **MON-02**: Pipeline execution results logged to Supabase `pipeline_runs` table (queryable from dashboard)
+- [ ] **MON-03**: All 3 Vercel cron entries removed from `vercel.json` after n8n workflows verified stable (48h parallel run)
+
+### Cutover
+
+- [ ] **CUT-01**: Each workflow runs in parallel with its Vercel cron counterpart for 48h before cron is disabled
+- [ ] **CUT-02**: Status Poller (WF-5) replaces `check-status` cron first (lowest risk)
+- [ ] **CUT-03**: Publish Pipeline (WF-4) replaces `daily-publish` cron second
+- [ ] **CUT-04**: Media Pipeline (WF-2) replaces `daily-media` cron third
+- [ ] **CUT-05**: All 3 Vercel cron routes removed after full cutover verified
 
 ## v2 Requirements
 
-Deferred to future milestones. Tracked but not in current roadmap.
+Deferred to future release. Tracked but not in current roadmap.
 
-### Performance
+### Observability
 
-- **PERF-01**: `check-status` polls Blotato statuses in parallel with concurrency limit instead of 252 sequential HTTP calls
-- **PERF-02**: `daily-media` processes personas in parallel with per-API rate-limit tracking instead of fixed 5s delays
-- **PERF-03**: RSS feed stores `audio_size_bytes` at upload time instead of firing HEAD requests per episode
+- **OBS-01**: Daily summary workflow (WF-6) posts pipeline health to Slack at 6PM
+- **OBS-02**: DLQ alert triggers on Supabase insert (real-time notification for unrecoverable failures)
+- **OBS-03**: Grafana/Prometheus dashboard for n8n execution metrics
 
-### Test Coverage
+### Advanced Orchestration
 
-- **TEST-01**: API route handlers have unit tests for error paths (malformed input, external API failures, DB insert failures)
-- **TEST-02**: Supabase Edge Functions have tests for HMAC validation and callback routing
-- **TEST-03**: Evergreen content logic has tests for LRU selection and republish behavior
-
-### Tech Debt
-
-- **DEBT-01**: Replace 22x `as unknown as` type casts with proper Supabase typed join helpers
-- **DEBT-02**: Evergreen republish preserves `published_at` and tracks `last_republished_at` separately
-- **DEBT-03**: `carousel_url` always stored as JSON array (migration for existing rows)
+- **ADV-01**: Circuit breaker pattern per external API (pause calls after N consecutive failures)
+- **ADV-02**: n8n queue mode with Redis for horizontal scaling
+- **ADV-03**: Automated bidirectional GitHub sync for workflow version control
+- **ADV-04**: Admin UI DLQ replay button for manual failure recovery
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| n8n orchestration migration | Separate milestone (PROJECT.md already drafted) |
-| Multi-brand scaling (6 personas) | Requires queue architecture, future milestone |
-| Native platform analytics APIs | Blotato doesn't provide engagement data, future milestone |
-| Frontend page tests | Single operator, manual QA sufficient |
-| Lyria music fallback (AceStep) | Architectural decision pending, not a bug fix |
-| `daily-media` self-HTTP call refactor | Fragile but working, defer to n8n milestone |
+| Custom n8n nodes | Use built-in HTTP Request nodes to call existing API clients |
+| Migrating service client logic into n8n | n8n calls Next.js API routes which use existing TypeScript clients |
+| n8n cloud hosting | Runs locally on Windows rig per project constraints |
+| Multi-tenant support | Single operator system |
+| Mobile app / PWA | Web dashboard only |
+| Direct external API calls from n8n | All calls route through Next.js API routes to preserve TypeScript type safety |
+| Polling loops in n8n (anti-feature) | Use webhook callbacks and scheduled sweepers instead |
+| Monolithic mega-workflow (anti-feature) | 5 separate workflows for visibility and independent deployment |
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BUILD-01 | Phase 1 | Pending |
-| BUILD-02 | Phase 2 | Pending |
-| BUILD-03 | Phase 2 | Pending |
-| RSS-01 | Phase 3 | Pending |
-| RSS-02 | Phase 3 | Pending |
-| RSS-03 | Phase 3 | Pending |
-| PIPE-01 | Phase 4 | Pending |
-| PIPE-02 | Phase 4 | Pending |
-| PIPE-03 | Phase 4 | Pending |
-| SEC-01 | Phase 5 | Pending |
-| SEC-02 | Phase 5 | Pending |
-| SEC-03 | Phase 5 | Pending |
-| DATA-01 | Phase 5 | Pending |
+| INFRA-01 | Phase 1 | Pending |
+| INFRA-02 | Phase 1 | Pending |
+| INFRA-03 | Phase 1 | Pending |
+| INFRA-04 | Phase 1 | Pending |
+| INFRA-05 | Phase 1 | Pending |
+| INFRA-06 | Phase 1 | Pending |
+| INFRA-07 | Phase 1 | Pending |
+| INFRA-08 | Phase 1 | Pending |
+| SEC-01 | Phase 1 | Pending |
+| SEC-04 | Phase 1 | Pending |
+| ERR-01 | Phase 2 | Pending |
+| ERR-02 | Phase 2 | Pending |
+| ERR-03 | Phase 2 | Pending |
+| MON-01 | Phase 2 | Pending |
+| MON-02 | Phase 2 | Pending |
+| SEC-02 | Phase 3 | Pending |
+| SEC-03 | Phase 3 | Pending |
+| INT-02 | Phase 3 | Pending |
+| WF-03 | Phase 4 | Pending |
+| WF-05 | Phase 4 | Pending |
+| WF-06 | Phase 4 | Pending |
+| INT-01 | Phase 4 | Pending |
+| INT-03 | Phase 4 | Pending |
+| SEC-05 | Phase 4 | Pending |
+| ERR-04 | Phase 4 | Pending |
+| CUT-01 | Phase 4 | Pending |
+| CUT-02 | Phase 4 | Pending |
+| WF-02 | Phase 5 | Pending |
+| WF-04 | Phase 5 | Pending |
+| ERR-05 | Phase 5 | Pending |
+| CUT-03 | Phase 5 | Pending |
+| CUT-04 | Phase 5 | Pending |
+| WF-01 | Phase 6 | Pending |
+| INT-04 | Phase 6 | Pending |
+| INT-05 | Phase 6 | Pending |
+| MON-03 | Phase 6 | Pending |
+| CUT-05 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 13 total
-- Mapped to phases: 13
+- v1 requirements: 36 total
+- Mapped to phases: 36
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 — traceability filled in after roadmap creation*
+*Last updated: 2026-02-22 — traceability table finalized after roadmap creation (6 phases)*
