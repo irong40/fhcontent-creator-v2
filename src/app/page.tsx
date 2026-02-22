@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PersonaSwitcher } from '@/components/persona-switcher';
+import { AnalyticsSummary } from '@/components/analytics-summary';
 import type { Persona } from '@/types/database';
 
 interface PersonaStat {
@@ -233,6 +234,11 @@ export default function DashboardPage() {
                         </CardContent>
                     </Card>
                 </Link>
+            </div>
+
+            {/* Analytics summary */}
+            <div className="mb-8">
+                <AnalyticsSummary />
             </div>
 
             {/* Per-persona breakdown */}

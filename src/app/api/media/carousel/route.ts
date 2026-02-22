@@ -1,24 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { openai } from '@/lib/openai';
-import { canva } from '@/lib/canva';
+import { claude } from '@/lib/claude';
+import { gemini } from '@/lib/gemini';
 import { uploadImage } from '@/lib/storage';
-import { estimateDalleCost } from '@/lib/utils';
-import { carouselGenerateSchema } from '@/lib/schemas';
-import type { CarouselSlide } from '@/types/database';
-import type { AutofillData } from '@/lib/canva';
+import { estimateClaudeCost, base64ToArrayBuffer } from '@/lib/utils';
+import { carouselGenerateSchema, carouselSlidesResponseSchema } from '@/lib/schemas';
+import { buildCarouselSlidesPrompt } from '@/lib/prompts';
+import type { CarouselSlide, HistoricalPoint, Topic } from '@/types/database';
 
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { contentPieceId, templateId } = carouselGenerateSchema.parse(body);
+        const { contentPieceId } = carouselGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
 
-        // Fetch content piece
+        // Fetch content piece with its topic
         const { data: piece, error: fetchError } = await supabase
             .from('content_pieces')
-            .select('*')
+            .select('*, topics(*)')
             .eq('id', contentPieceId)
             .single();
 
@@ -36,105 +36,161 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Idempotent: skip if design already created
-        if (piece.canva_design_id) {
+        // Idempotent: skip if carousel slides already generated and images exist
+        const existingSlides = piece.carousel_slides as CarouselSlide[] | null;
+        if (existingSlides && existingSlides.length > 0 && piece.status === 'produced') {
             return NextResponse.json({
                 success: true,
                 skipped: true,
-                designId: piece.canva_design_id,
+                slideCount: existingSlides.length,
                 carouselUrl: piece.carousel_url,
             });
         }
 
-        const slides = piece.carousel_slides as CarouselSlide[] | null;
-        if (!slides || slides.length === 0) {
+        const topic = piece.topics as unknown as Topic;
+
+        if (!topic) {
             return NextResponse.json(
-                { success: false, error: 'Content piece has no carousel slides' },
-                { status: 400 },
+                { success: false, error: 'Topic not found for content piece' },
+                { status: 404 },
             );
         }
 
-        // Generate DALL-E images for each slide, upload to both Supabase and Canva
-        const autofillData: AutofillData = {};
+        // Fetch persona for brand tone
+        const { data: persona } = await supabase
+            .from('personas')
+            .select('voice_style, brand, platform_accounts')
+            .eq('id', topic.persona_id)
+            .single();
+
+        const brandTone = persona?.voice_style || 'authoritative yet conversational';
+        const historicalPoints = topic.historical_points as HistoricalPoint[];
+
+        // Mark piece as generating
+        await supabase
+            .from('content_pieces')
+            .update({ status: 'generating' })
+            .eq('id', contentPieceId);
+
+        // Step 1: Generate carousel slides via Claude
+        const { system, user } = buildCarouselSlidesPrompt(
+            topic,
+            historicalPoints,
+            brandTone,
+        );
+
+        const claudeResult = await claude.generateContent(system, user, {
+            maxTokens: 4096,
+        });
+
+        // Parse and validate the Claude response
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(claudeResult.text);
+        } catch {
+            return NextResponse.json(
+                { success: false, error: 'AI returned invalid JSON' },
+                { status: 502 },
+            );
+        }
+        const { slides: generatedSlides } = carouselSlidesResponseSchema.parse(parsed);
+
+        // Track Claude cost
+        const claudeCost = estimateClaudeCost(claudeResult.inputTokens, claudeResult.outputTokens);
+        await supabase.from('cost_tracking').insert({
+            service: 'claude',
+            operation: 'carousel_slides_generation',
+            topic_id: topic.id,
+            content_piece_id: contentPieceId,
+            cost_usd: claudeCost,
+            tokens_input: claudeResult.inputTokens,
+            tokens_output: claudeResult.outputTokens,
+        });
+
+        // Step 2: Generate images for each slide via Gemini
+        const carouselSlides: CarouselSlide[] = [];
+        const imageUrls: string[] = [];
         let imagesGenerated = 0;
 
-        for (const slide of slides) {
-            autofillData[`slide_${slide.slide}_text`] = { type: 'text', text: slide.text };
+        for (const slide of generatedSlides) {
+            const slideEntry: CarouselSlide = {
+                slide: slide.slide_number,
+                text: slide.body,
+                imagePrompt: slide.image_prompt,
+            };
 
-            if (slide.imagePrompt) {
-                try {
-                    const { url: dalleUrl } = await openai.generateImage(slide.imagePrompt);
+            try {
+                const imageResult = await gemini.generateImage(slide.image_prompt, {
+                    aspectRatio: '1:1',
+                });
 
-                    const imageResponse = await fetch(dalleUrl);
-                    if (!imageResponse.ok) throw new Error('Failed to download slide image');
-                    const imageBuffer = await imageResponse.arrayBuffer();
-
-                    // Upload to Supabase Storage (our permanent copy)
-                    const storagePath = `${piece.topic_id}/carousel_slide_${slide.slide}.png`;
+                if (imageResult?.imageData) {
+                    // Upload base64 image to Supabase Storage
+                    const imageBuffer = base64ToArrayBuffer(imageResult.imageData);
+                    const storagePath = `${topic.id}/carousel_slide_${slide.slide_number}.png`;
                     const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
 
-                    // Upload to Canva as an asset for autofill
-                    const assetId = await canva.uploadAsset(
-                        `slide_${slide.slide}`,
-                        imageBuffer,
-                    );
-                    autofillData[`slide_${slide.slide}_image`] = { type: 'image', asset_id: assetId };
+                    imageUrls.push(slideImageUrl);
                     imagesGenerated++;
 
+                    // Track visual asset
                     await supabase.from('visual_assets').insert({
                         content_piece_id: contentPieceId,
                         asset_type: 'carousel_image',
-                        source_service: 'openai',
+                        source_service: 'gemini',
                         asset_url: slideImageUrl,
-                        metadata: { slide: slide.slide, prompt: slide.imagePrompt },
+                        metadata: {
+                            slide: slide.slide_number,
+                            title: slide.title,
+                            prompt: slide.image_prompt,
+                        },
                         status: 'ready',
                     });
-                } catch (e) {
-                    console.warn(`Failed to generate image for slide ${slide.slide}:`, e);
                 }
+            } catch (e) {
+                console.warn(`Failed to generate image for slide ${slide.slide_number}:`, e);
             }
+
+            carouselSlides.push(slideEntry);
         }
 
-        // Create Canva design via autofill (polls until complete)
-        const designId = await canva.createDesignAutofill(templateId, autofillData);
-
+        // Step 3: Store carousel slides in content_piece
         await supabase
             .from('content_pieces')
-            .update({ canva_design_id: designId })
+            .update({
+                carousel_slides: carouselSlides as unknown as CarouselSlide[],
+                status: 'produced',
+                produced_at: new Date().toISOString(),
+            })
             .eq('id', contentPieceId);
 
-        // Export design as PNG (polls until complete)
-        const exportedUrls = await canva.exportDesign(designId, 'png');
-
-        if (exportedUrls.length > 0) {
-            await supabase
-                .from('content_pieces')
-                .update({ carousel_url: exportedUrls[0] })
-                .eq('id', contentPieceId);
-        }
-
-        // Track DALL-E costs for slide images
-        if (imagesGenerated > 0) {
-            const costUsd = estimateDalleCost(imagesGenerated);
-            await supabase.from('cost_tracking').insert({
-                service: 'openai',
-                operation: 'dalle_carousel_slides',
-                topic_id: piece.topic_id,
-                content_piece_id: contentPieceId,
-                cost_usd: costUsd,
-            });
-        }
+        // Publishing is handled by the daily-publish cron job to avoid double-posting.
+        // This route only generates carousel content (slides + images).
 
         return NextResponse.json({
             success: true,
-            designId,
-            carouselUrl: exportedUrls[0] || null,
-            exportedUrls,
+            slideCount: carouselSlides.length,
             imagesGenerated,
-            costUsd: estimateDalleCost(imagesGenerated),
+            claudeCost,
         });
     } catch (error) {
         console.error('Carousel generation error:', error);
+
+        // Try to update status to failed
+        try {
+            const body = await request.clone().json();
+            if (body.contentPieceId) {
+                const supabase = createAdminClient();
+                await supabase
+                    .from('content_pieces')
+                    .update({
+                        status: 'failed',
+                        error_message: error instanceof Error ? error.message : 'Unknown error',
+                    })
+                    .eq('id', body.contentPieceId);
+            }
+        } catch { /* ignore cleanup errors */ }
+
         return NextResponse.json(
             { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
             { status: 500 },

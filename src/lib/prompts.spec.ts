@@ -15,8 +15,13 @@ const mockPersona: Persona = {
     voice_pool: ['voice1', 'voice2'],
     profile_image_url: null,
     heygen_avatar_id: null,
+    heygen_voice_id: null,
     canva_brand_kit_id: null,
     canva_carousel_template_id: null,
+    blotato_template_id: null,
+    brand_id: null,
+    newsletter_url: null,
+    newsletter_cta: null,
     is_active: true,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -46,6 +51,7 @@ const mockTopic: Topic = {
     published_at: null,
     error_message: null,
     retry_count: 0,
+    is_evergreen: false,
 };
 
 describe('buildTopicPrompt', () => {

@@ -64,6 +64,23 @@ export const contentResponseSchema = z.object({
 export const regeneratePieceResponseSchema = generatedPieceSchema;
 export type RegeneratePieceResponse = z.infer<typeof regeneratePieceResponseSchema>;
 
+// --- Carousel slide schemas (for carousel generation pipeline) ---
+
+export const carouselSlideSchema = z.object({
+    slide_number: z.number(),
+    title: z.string(),
+    subtitle: z.string().optional(),
+    body: z.string(),
+    image_prompt: z.string(),
+});
+
+export const carouselSlidesResponseSchema = z.object({
+    slides: z.array(carouselSlideSchema).min(8).max(10),
+});
+
+export type CarouselSlideGenerated = z.infer<typeof carouselSlideSchema>;
+export type CarouselSlidesResponse = z.infer<typeof carouselSlidesResponseSchema>;
+
 // --- Media request schemas ---
 
 export const voiceGenerateSchema = z.object({
@@ -73,8 +90,9 @@ export const voiceGenerateSchema = z.object({
 
 export const videoGenerateSchema = z.object({
     contentPieceId: z.string().uuid(),
-    avatarId: z.string().min(1),
-    audioUrl: z.string().url(),
+    avatarId: z.string().min(1).optional(),
+    audioUrl: z.string().url().optional(),
+    blotatoTemplateId: z.string().min(1).optional(),
 });
 
 export const thumbnailGenerateSchema = z.object({
@@ -83,13 +101,26 @@ export const thumbnailGenerateSchema = z.object({
 
 export const carouselGenerateSchema = z.object({
     contentPieceId: z.string().uuid(),
-    templateId: z.string().min(1),
+    templateId: z.string().min(1).optional(),
     brandKitId: z.string().optional(),
 });
 
 export const musicGenerateSchema = z.object({
     contentPieceId: z.string().uuid(),
     mood: z.string().optional(),
+});
+
+// --- Podcast schemas ---
+
+export const podcastGenerateSchema = z.object({
+    topicId: z.string().uuid(),
+    brandId: z.string().uuid(),
+});
+
+export const podcastScriptResponseSchema = z.object({
+    title: z.string(),
+    script: z.string(),
+    description: z.string(),
 });
 
 // --- Approval / scheduling schemas ---
@@ -139,3 +170,5 @@ export type ApproveTopicRequest = z.infer<typeof approveTopicSchema>;
 export type ScheduleTopicRequest = z.infer<typeof scheduleTopicSchema>;
 export type PublishTopicRequest = z.infer<typeof publishTopicSchema>;
 export type RemixRequest = z.infer<typeof remixRequestSchema>;
+export type PodcastGenerateRequest = z.infer<typeof podcastGenerateSchema>;
+export type PodcastScriptResponse = z.infer<typeof podcastScriptResponseSchema>;

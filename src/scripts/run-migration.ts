@@ -4,8 +4,13 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'qjpujskwqaehxnqypxzu';
+const PROJECT_REF = process.env.SUPABASE_PROJECT_REF;
 const SUPABASE_ACCESS_TOKEN = process.env.SUPABASE_ACCESS_TOKEN;
+
+if (!PROJECT_REF) {
+    console.error('Missing SUPABASE_PROJECT_REF env var');
+    process.exit(1);
+}
 
 if (!SUPABASE_ACCESS_TOKEN) {
     console.error('Missing SUPABASE_ACCESS_TOKEN env var (sbp_... personal access token)');

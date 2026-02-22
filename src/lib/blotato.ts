@@ -106,6 +106,14 @@ export interface TikTokTarget {
     isDraft?: boolean;
 }
 
+export interface ThreadsTarget {
+    targetType: 'threads';
+}
+
+export interface BlueskyTarget {
+    targetType: 'bluesky';
+}
+
 export type BlotatoTarget =
     | TwitterTarget
     | LinkedInTarget
@@ -113,7 +121,9 @@ export type BlotatoTarget =
     | InstagramTarget
     | PinterestTarget
     | YouTubeTarget
-    | TikTokTarget;
+    | TikTokTarget
+    | ThreadsTarget
+    | BlueskyTarget;
 
 export interface BlotatoPost {
     accountId: string;
@@ -216,7 +226,9 @@ export function buildTarget(platform: Platform, options: {
         case 'linkedin':
             return { targetType: 'linkedin' };
         case 'threads':
+            return { targetType: 'threads' };
         case 'bluesky':
+            return { targetType: 'bluesky' };
         default:
             return { targetType: platform } as unknown as BlotatoTarget;
     }

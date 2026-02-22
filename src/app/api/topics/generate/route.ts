@@ -44,7 +44,16 @@ export async function POST(request: NextRequest) {
 
         // Parse and validate response
         const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();
-        const parsed = topicResponseSchema.safeParse(JSON.parse(jsonText));
+        let parsedJson: unknown;
+        try {
+            parsedJson = JSON.parse(jsonText);
+        } catch {
+            return NextResponse.json(
+                { success: false, error: 'AI returned invalid JSON' },
+                { status: 502 },
+            );
+        }
+        const parsed = topicResponseSchema.safeParse(parsedJson);
 
         if (!parsed.success) {
             return NextResponse.json(

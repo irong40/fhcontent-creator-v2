@@ -22,8 +22,13 @@ export interface Database {
                     voice_pool: string[];
                     profile_image_url: string | null;
                     heygen_avatar_id: string | null;
+                    heygen_voice_id: string | null;
                     canva_brand_kit_id: string | null;
                     canva_carousel_template_id: string | null;
+                    blotato_template_id: string | null;
+                    brand_id: string | null;
+                    newsletter_url: string | null;
+                    newsletter_cta: string | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -40,8 +45,13 @@ export interface Database {
                     voice_pool: string[];
                     profile_image_url?: string | null;
                     heygen_avatar_id?: string | null;
+                    heygen_voice_id?: string | null;
                     canva_brand_kit_id?: string | null;
                     canva_carousel_template_id?: string | null;
+                    blotato_template_id?: string | null;
+                    brand_id?: string | null;
+                    newsletter_url?: string | null;
+                    newsletter_cta?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -58,13 +68,26 @@ export interface Database {
                     voice_pool?: string[];
                     profile_image_url?: string | null;
                     heygen_avatar_id?: string | null;
+                    heygen_voice_id?: string | null;
                     canva_brand_kit_id?: string | null;
                     canva_carousel_template_id?: string | null;
+                    blotato_template_id?: string | null;
+                    brand_id?: string | null;
+                    newsletter_url?: string | null;
+                    newsletter_cta?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
                 };
-                Relationships: [];
+                Relationships: [
+                    {
+                        foreignKeyName: "personas_brand_id_fkey";
+                        columns: ["brand_id"];
+                        isOneToOne: false;
+                        referencedRelation: "brands";
+                        referencedColumns: ["id"];
+                    }
+                ];
             };
             topics: {
                 Row: {
@@ -86,6 +109,7 @@ export interface Database {
                     published_at: string | null;
                     error_message: string | null;
                     retry_count: number;
+                    is_evergreen: boolean;
                 };
                 Insert: {
                     id?: string;
@@ -106,6 +130,7 @@ export interface Database {
                     published_at?: string | null;
                     error_message?: string | null;
                     retry_count?: number;
+                    is_evergreen?: boolean;
                 };
                 Update: {
                     id?: string;
@@ -126,6 +151,7 @@ export interface Database {
                     published_at?: string | null;
                     error_message?: string | null;
                     retry_count?: number;
+                    is_evergreen?: boolean;
                 };
                 Relationships: [
                     {
@@ -158,6 +184,9 @@ export interface Database {
                     video_url: string | null;
                     carousel_url: string | null;
                     published_platforms: PublishedPlatforms;
+                    content_hash: string | null;
+                    content_channel: ContentChannel;
+                    hook_performance: string | null;
                     status: PieceStatus;
                     created_at: string;
                     produced_at: string | null;
@@ -185,6 +214,9 @@ export interface Database {
                     video_url?: string | null;
                     carousel_url?: string | null;
                     published_platforms?: PublishedPlatforms;
+                    content_hash?: string | null;
+                    content_channel?: ContentChannel;
+                    hook_performance?: string | null;
                     status?: PieceStatus;
                     created_at?: string;
                     produced_at?: string | null;
@@ -212,6 +244,9 @@ export interface Database {
                     video_url?: string | null;
                     carousel_url?: string | null;
                     published_platforms?: PublishedPlatforms;
+                    content_hash?: string | null;
+                    content_channel?: ContentChannel;
+                    hook_performance?: string | null;
                     status?: PieceStatus;
                     created_at?: string;
                     produced_at?: string | null;
@@ -453,6 +488,221 @@ export interface Database {
                     }
                 ];
             };
+            brands: {
+                Row: {
+                    id: string;
+                    name: string;
+                    vertical: string | null;
+                    platform_accounts: Json;
+                    cta_template: string | null;
+                    music_style: string | null;
+                    podcast_outro_cta: string | null;
+                    is_active: boolean;
+                    created_at: string;
+                    updated_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    name: string;
+                    vertical?: string | null;
+                    platform_accounts?: Json;
+                    cta_template?: string | null;
+                    music_style?: string | null;
+                    podcast_outro_cta?: string | null;
+                    is_active?: boolean;
+                    created_at?: string;
+                    updated_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    name?: string;
+                    vertical?: string | null;
+                    platform_accounts?: Json;
+                    cta_template?: string | null;
+                    music_style?: string | null;
+                    podcast_outro_cta?: string | null;
+                    is_active?: boolean;
+                    created_at?: string;
+                    updated_at?: string;
+                };
+                Relationships: [];
+            };
+            podcast_episodes: {
+                Row: {
+                    id: string;
+                    topic_id: string | null;
+                    brand_id: string | null;
+                    persona_id: string | null;
+                    title: string;
+                    script: string | null;
+                    audio_url: string | null;
+                    duration_seconds: number | null;
+                    rss_guid: string;
+                    published_at: string | null;
+                    status: PodcastStatus;
+                    created_at: string;
+                    updated_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    topic_id?: string | null;
+                    brand_id?: string | null;
+                    persona_id?: string | null;
+                    title: string;
+                    script?: string | null;
+                    audio_url?: string | null;
+                    duration_seconds?: number | null;
+                    rss_guid?: string;
+                    published_at?: string | null;
+                    status?: PodcastStatus;
+                    created_at?: string;
+                    updated_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    topic_id?: string | null;
+                    brand_id?: string | null;
+                    persona_id?: string | null;
+                    title?: string;
+                    script?: string | null;
+                    audio_url?: string | null;
+                    duration_seconds?: number | null;
+                    rss_guid?: string;
+                    published_at?: string | null;
+                    status?: PodcastStatus;
+                    created_at?: string;
+                    updated_at?: string;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "podcast_episodes_topic_id_fkey";
+                        columns: ["topic_id"];
+                        isOneToOne: false;
+                        referencedRelation: "topics";
+                        referencedColumns: ["id"];
+                    },
+                    {
+                        foreignKeyName: "podcast_episodes_brand_id_fkey";
+                        columns: ["brand_id"];
+                        isOneToOne: false;
+                        referencedRelation: "brands";
+                        referencedColumns: ["id"];
+                    },
+                    {
+                        foreignKeyName: "podcast_episodes_persona_id_fkey";
+                        columns: ["persona_id"];
+                        isOneToOne: false;
+                        referencedRelation: "personas";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
+            workflow_locks: {
+                Row: {
+                    id: string;
+                    workflow_id: string;
+                    locked_at: string;
+                    lock_token: string;
+                    expires_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    workflow_id: string;
+                    locked_at?: string;
+                    lock_token?: string;
+                    expires_at: string;
+                };
+                Update: {
+                    id?: string;
+                    workflow_id?: string;
+                    locked_at?: string;
+                    lock_token?: string;
+                    expires_at?: string;
+                };
+                Relationships: [];
+            };
+            performance_metrics: {
+                Row: {
+                    id: string;
+                    content_piece_id: string;
+                    platform: string;
+                    views: number;
+                    likes: number;
+                    shares: number;
+                    saves: number;
+                    comments: number;
+                    captured_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    content_piece_id: string;
+                    platform: string;
+                    views?: number;
+                    likes?: number;
+                    shares?: number;
+                    saves?: number;
+                    comments?: number;
+                    captured_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    content_piece_id?: string;
+                    platform?: string;
+                    views?: number;
+                    likes?: number;
+                    shares?: number;
+                    saves?: number;
+                    comments?: number;
+                    captured_at?: string;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "performance_metrics_content_piece_id_fkey";
+                        columns: ["content_piece_id"];
+                        isOneToOne: false;
+                        referencedRelation: "content_pieces";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
+            content_ideas: {
+                Row: {
+                    id: string;
+                    brand_id: string | null;
+                    title: string;
+                    category: string | null;
+                    source_notes: string | null;
+                    is_used: boolean;
+                    created_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    brand_id?: string | null;
+                    title: string;
+                    category?: string | null;
+                    source_notes?: string | null;
+                    is_used?: boolean;
+                    created_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    brand_id?: string | null;
+                    title?: string;
+                    category?: string | null;
+                    source_notes?: string | null;
+                    is_used?: boolean;
+                    created_at?: string;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "content_ideas_brand_id_fkey";
+                        columns: ["brand_id"];
+                        isOneToOne: false;
+                        referencedRelation: "brands";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
         };
         Views: {
             cost_summary: {
@@ -489,6 +739,8 @@ export interface PlatformAccounts {
     twitter?: string;
     bluesky?: string;
     linkedin?: string;
+    facebook?: string;
+    fanbase?: string;
 }
 
 export interface HistoricalPoint {
@@ -547,6 +799,10 @@ export type PieceStatus =
 
 export type BlotatoStatus = 'pending' | 'processing' | 'done' | 'failed';
 
+export type PodcastStatus = 'draft' | 'generating' | 'ready' | 'published' | 'error';
+
+export type ContentChannel = 'social' | 'podcast' | 'newsletter';
+
 // Convenience types
 export type Persona = Database['public']['Tables']['personas']['Row'];
 export type Topic = Database['public']['Tables']['topics']['Row'];
@@ -556,6 +812,11 @@ export type AudioAsset = Database['public']['Tables']['audio_assets']['Row'];
 export type VisualAsset = Database['public']['Tables']['visual_assets']['Row'];
 export type PublishedLogEntry = Database['public']['Tables']['published_log']['Row'];
 export type CostEntry = Database['public']['Tables']['cost_tracking']['Row'];
+export type Brand = Database['public']['Tables']['brands']['Row'];
+export type PodcastEpisode = Database['public']['Tables']['podcast_episodes']['Row'];
+export type WorkflowLock = Database['public']['Tables']['workflow_locks']['Row'];
+export type PerformanceMetric = Database['public']['Tables']['performance_metrics']['Row'];
+export type ContentIdea = Database['public']['Tables']['content_ideas']['Row'];
 
 // Insert types
 export type PersonaInsert = Database['public']['Tables']['personas']['Insert'];

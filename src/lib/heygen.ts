@@ -87,7 +87,11 @@ class HeyGenClient {
         });
     }
 
-    async createVideoFromText(avatarId: string, script: string): Promise<HeyGenVideoResponse> {
+    async createVideoFromText(avatarId: string, script: string, voiceId?: string): Promise<HeyGenVideoResponse> {
+        const voice: Record<string, unknown> = voiceId
+            ? { type: 'text', voice_id: voiceId, input_text: script }
+            : { type: 'text', input_text: script };
+
         return this.request<HeyGenVideoResponse>('/v2/video/generate', 'POST', {
             video_inputs: [{
                 character: {
@@ -95,10 +99,7 @@ class HeyGenClient {
                     avatar_id: avatarId,
                     avatar_style: 'normal',
                 },
-                voice: {
-                    type: 'text',
-                    input_text: script,
-                },
+                voice,
                 background: {
                     type: 'color',
                     value: '#000000',

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { blotato, buildTarget, type Platform } from '@/lib/blotato';
 import { notifyError } from '@/lib/notifications';
+import { acquireLock, releaseLock } from '@/lib/workflow-lock';
+import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
 import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
@@ -204,6 +206,14 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const lockToken = await acquireLock('daily-publish');
+    if (!lockToken) {
+        return NextResponse.json(
+            { success: false, error: 'Workflow already running' },
+            { status: 409 },
+        );
+    }
+
     try {
         const supabase = createAdminClient();
         const today = new Date().toISOString().split('T')[0];
@@ -222,18 +232,37 @@ export async function GET(request: Request) {
             );
         }
 
-        if (!topics || topics.length === 0) {
-            return NextResponse.json({
-                success: true,
-                message: 'No scheduled topics ready to publish',
-                processed: 0,
-            });
+        // If no topics scheduled, try evergreen fallback
+        let publishableTopics = topics ?? [];
+        let evergreenFills: Awaited<ReturnType<typeof fillEvergreenGaps>> = [];
+
+        if (publishableTopics.length === 0) {
+            evergreenFills = await fillEvergreenGaps(today);
+            const scheduled = evergreenFills.filter(e => e.action === 'scheduled');
+
+            if (scheduled.length === 0) {
+                return NextResponse.json({
+                    success: true,
+                    message: 'No scheduled topics and no evergreen content available',
+                    processed: 0,
+                    evergreen: evergreenFills,
+                });
+            }
+
+            // Re-query now that evergreen topics have been scheduled
+            const { data: refetched } = await supabase
+                .from('topics')
+                .select('id, title')
+                .eq('status', 'scheduled')
+                .lte('publish_date', today);
+
+            publishableTopics = refetched ?? [];
         }
 
         const results: PublishResult[] = [];
         const errors: string[] = [];
 
-        for (const topic of topics) {
+        for (const topic of publishableTopics) {
             try {
                 const result = await publishTopic(topic.id);
                 results.push(result);
@@ -254,6 +283,7 @@ export async function GET(request: Request) {
             processed: results.length,
             results,
             errors: errors.length > 0 ? errors : undefined,
+            evergreen: evergreenFills.length > 0 ? evergreenFills : undefined,
         });
     } catch (error) {
         console.error('Daily-publish cron error:', error);
@@ -261,5 +291,7 @@ export async function GET(request: Request) {
             { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
             { status: 500 },
         );
+    } finally {
+        await releaseLock('daily-publish', lockToken);
     }
 }

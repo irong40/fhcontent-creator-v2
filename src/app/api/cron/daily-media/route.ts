@@ -2,22 +2,33 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { elevenlabs } from '@/lib/elevenlabs';
 import { heygen } from '@/lib/heygen';
+import { blotato } from '@/lib/blotato';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
 import { canva, type AutofillData } from '@/lib/canva';
 import { uploadAudio, uploadImage } from '@/lib/storage';
 import { estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
+import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
 import type { ContentPiece, TopicWithPersona, PieceType, CarouselSlide } from '@/types/database';
 
 export const maxDuration = 300;
 
-const VIDEO_PIECE_TYPES: PieceType[] = ['long', 'short_1', 'short_2', 'short_3', 'short_4'];
+const HEYGEN_PIECE_TYPES: PieceType[] = ['long'];
+const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'short_4'];
 
 export async function GET(request: Request) {
     if (!validateCronSecret(request)) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const lockToken = await acquireLock('daily-media');
+    if (!lockToken) {
+        return NextResponse.json(
+            { success: false, error: 'Workflow already running' },
+            { status: 409 },
+        );
     }
 
     try {
@@ -79,20 +90,23 @@ export async function GET(request: Request) {
                 title: topic.title,
                 audioGenerated: 0,
                 videoSubmitted: 0,
+                blotatoSubmitted: 0,
                 thumbnailsGenerated: 0,
                 carouselCreated: false,
                 musicGenerated: 0,
+                podcastGenerated: false,
                 errors: [] as string[],
             };
 
-            // ── Stage 1: Voice + Video (video pieces only) ──
-            const videoPieces = allPieces.filter(p => VIDEO_PIECE_TYPES.includes(p.piece_type as PieceType));
+            // ── Stage 1a: Long-form video (HeyGen avatar path) ──
+            const heygenPieces = (allPieces as ContentPiece[]).filter(
+                p => HEYGEN_PIECE_TYPES.includes(p.piece_type as PieceType),
+            );
 
-            for (const piece of videoPieces as ContentPiece[]) {
+            for (const piece of heygenPieces) {
                 // Skip if HeyGen job is actively processing or already done
                 if (piece.heygen_job_id && piece.heygen_status === 'processing') continue;
                 if (piece.heygen_status === 'done') continue;
-                // Skip permanently failed pieces (max retries exceeded)
                 if (piece.heygen_status === 'failed' && (piece.retry_count ?? 0) >= 3) continue;
 
                 if (!piece.script) {
@@ -100,7 +114,12 @@ export async function GET(request: Request) {
                     continue;
                 }
 
-                // Check if audio already exists for this piece
+                if (!avatarId) {
+                    topicResult.errors.push(`${piece.piece_type}: no heygen_avatar_id on persona`);
+                    continue;
+                }
+
+                // Generate ElevenLabs TTS audio
                 const { data: existingAudio } = await supabase
                     .from('audio_assets')
                     .select('id, audio_url')
@@ -146,37 +165,88 @@ export async function GET(request: Request) {
                     }
                 }
 
-                // Submit HeyGen video job (only if avatar is configured)
-                if (avatarId) {
-                    try {
-                        const videoResponse = await heygen.createVideoFromAudio(
-                            avatarId,
-                            audioUrl,
-                        );
+                // Submit HeyGen avatar video job
+                try {
+                    const videoResponse = await heygen.createVideoFromAudio(
+                        avatarId,
+                        audioUrl,
+                    );
 
-                        await supabase
-                            .from('content_pieces')
-                            .update({
-                                heygen_job_id: videoResponse.data.video_id,
-                                heygen_status: 'processing',
-                                status: 'processing',
-                            })
-                            .eq('id', piece.id);
+                    await supabase
+                        .from('content_pieces')
+                        .update({
+                            heygen_job_id: videoResponse.data.video_id,
+                            heygen_status: 'processing',
+                            status: 'processing',
+                        })
+                        .eq('id', piece.id);
 
-                        await supabase.from('cost_tracking').insert({
-                            service: 'heygen',
-                            operation: 'video_generation',
-                            topic_id: topic.id,
-                            content_piece_id: piece.id,
-                            cost_usd: 0.25,
-                        });
+                    await supabase.from('cost_tracking').insert({
+                        service: 'heygen',
+                        operation: 'video_generation',
+                        topic_id: topic.id,
+                        content_piece_id: piece.id,
+                        cost_usd: 0.25,
+                    });
 
-                        topicResult.videoSubmitted++;
-                    } catch (e) {
-                        topicResult.errors.push(
-                            `${piece.piece_type} HeyGen: ${e instanceof Error ? e.message : 'unknown'}`,
-                        );
-                    }
+                    topicResult.videoSubmitted++;
+                } catch (e) {
+                    topicResult.errors.push(
+                        `${piece.piece_type} HeyGen: ${e instanceof Error ? e.message : 'unknown'}`,
+                    );
+                }
+            }
+
+            // ── Stage 1b: Short-form video (Blotato faceless path) ──
+            const blotatoPieces = (allPieces as ContentPiece[]).filter(
+                p => BLOTATO_PIECE_TYPES.includes(p.piece_type as PieceType),
+            );
+
+            for (const piece of blotatoPieces) {
+                // Skip if Blotato job is actively processing or already done
+                if (piece.blotato_job_id && piece.blotato_status === 'processing') continue;
+                if (piece.blotato_status === 'done') continue;
+                if (piece.blotato_status === 'failed' && (piece.retry_count ?? 0) >= 3) continue;
+
+                if (!piece.script) {
+                    topicResult.errors.push(`${piece.piece_type}: no script`);
+                    continue;
+                }
+
+                const templateId = persona.blotato_template_id;
+                if (!templateId) {
+                    topicResult.errors.push(`${piece.piece_type}: no blotato_template_id on persona`);
+                    continue;
+                }
+
+                try {
+                    const videoResponse = await blotato.createVideoFromPrompt(
+                        templateId,
+                        piece.script,
+                    );
+
+                    await supabase
+                        .from('content_pieces')
+                        .update({
+                            blotato_job_id: videoResponse.item.id,
+                            blotato_status: 'processing',
+                            status: 'processing',
+                        })
+                        .eq('id', piece.id);
+
+                    await supabase.from('cost_tracking').insert({
+                        service: 'blotato',
+                        operation: 'faceless_video',
+                        topic_id: topic.id,
+                        content_piece_id: piece.id,
+                        cost_usd: 0.10,
+                    });
+
+                    topicResult.blotatoSubmitted++;
+                } catch (e) {
+                    topicResult.errors.push(
+                        `${piece.piece_type} Blotato: ${e instanceof Error ? e.message : 'unknown'}`,
+                    );
                 }
             }
 
@@ -356,6 +426,48 @@ export async function GET(request: Request) {
                 }
             }
 
+            // ── Stage 5: Podcast (if long-form script exists and no episode yet) ──
+            const longPiece = (allPieces as ContentPiece[]).find(
+                p => p.piece_type === 'long' && p.script,
+            );
+
+            if (longPiece && persona.brand_id) {
+                const { data: existingEpisode } = await supabase
+                    .from('podcast_episodes')
+                    .select('id')
+                    .eq('topic_id', topic.id)
+                    .limit(1);
+
+                if (!existingEpisode || existingEpisode.length === 0) {
+                    try {
+                        const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
+                            ? `https://${process.env.VERCEL_URL}`
+                            : 'http://localhost:3000';
+                        const podcastRes = await fetch(`${siteUrl}/api/media/podcast`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                topicId: topic.id,
+                                brandId: persona.brand_id,
+                            }),
+                        });
+
+                        if (podcastRes.ok) {
+                            topicResult.podcastGenerated = true;
+                        } else {
+                            const errBody = await podcastRes.json().catch(() => ({}));
+                            topicResult.errors.push(
+                                `podcast: ${(errBody as { error?: string }).error || podcastRes.statusText}`,
+                            );
+                        }
+                    } catch (e) {
+                        topicResult.errors.push(
+                            `podcast: ${e instanceof Error ? e.message : 'unknown'}`,
+                        );
+                    }
+                }
+            }
+
             if (topicResult.errors.length >= 3) {
                 await notifyError({
                     source: 'daily-media',
@@ -380,5 +492,7 @@ export async function GET(request: Request) {
             { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
             { status: 500 },
         );
+    } finally {
+        await releaseLock('daily-media', lockToken);
     }
 }
