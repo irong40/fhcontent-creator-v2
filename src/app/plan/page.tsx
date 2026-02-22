@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { PersonaSwitcher } from '@/components/persona-switcher';
+import { QuickPostDialog } from '@/components/quick-post-dialog';
 import type { Persona, Topic } from '@/types/database';
 
 export default function PlanPage() {
@@ -58,6 +59,10 @@ export default function PlanPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ personaId, count: 1 }),
             });
+            if (!res.ok) {
+                toast.error(`Topic generation failed (${res.status})`);
+                return;
+            }
             const data = await res.json();
             if (!data.success) {
                 toast.error(data.error || 'Topic generation failed');
@@ -85,6 +90,10 @@ export default function PlanPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ topicId }),
             });
+            if (!res.ok) {
+                toast.error(`Content generation failed (${res.status})`);
+                return;
+            }
             const data = await res.json();
             if (!data.success) {
                 toast.error(data.error || 'Content generation failed');
@@ -128,6 +137,21 @@ export default function PlanPage() {
                     />
                 </div>
             )}
+
+            {/* Quick Post */}
+            <Card className="mb-4">
+                <CardContent className="flex items-center justify-between py-4">
+                    <div>
+                        <p className="font-medium">Quick Post</p>
+                        <p className="text-sm text-muted-foreground">
+                            Post a one-off to social platforms without the full pipeline
+                        </p>
+                    </div>
+                    <QuickPostDialog
+                        trigger={<Button variant="outline" size="sm">Quick Post</Button>}
+                    />
+                </CardContent>
+            </Card>
 
             {/* Persona actions */}
             <Card className="mb-8">

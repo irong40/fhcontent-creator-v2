@@ -43,12 +43,18 @@ export default function ReviewPage() {
     const [approving, setApproving] = useState(false);
     const [scheduling, setScheduling] = useState(false);
     const [publishing, setPublishing] = useState(false);
+    const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
+    const [previewing, setPreviewing] = useState(false);
+    const [podcastEpisode, setPodcastEpisode] = useState<{ id: string; title: string; script: string; audio_url: string | null; status: string; duration_seconds: number | null } | null>(null);
+    const [generatingPodcast, setGeneratingPodcast] = useState(false);
 
     const load = useCallback(async () => {
-        const [topicRes, piecesRes] = await Promise.all([
+        const [topicRes, piecesRes, podcastRes] = await Promise.all([
             supabase.from('topics').select('*, personas(*)').eq('id', topicId).single(),
             supabase.from('content_pieces').select('*').eq('topic_id', topicId).order('piece_order'),
+            supabase.from('podcast_episodes').select('*').eq('topic_id', topicId).limit(1).maybeSingle(),
         ]);
+        if (podcastRes.data) setPodcastEpisode(podcastRes.data as typeof podcastEpisode);
         if (topicRes.data) {
             const t = topicRes.data as unknown as TopicWithPersona;
             setTopic(t);
@@ -122,6 +128,10 @@ export default function ReviewPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(updates),
             });
+            if (!res.ok) {
+                toast.error(`Save failed (${res.status})`);
+                return;
+            }
             const data = await res.json();
             if (!data.success) {
                 toast.error(data.error);
@@ -151,6 +161,10 @@ export default function ReviewPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
+            if (!res.ok) {
+                toast.error(`Request failed (${res.status})`);
+                return;
+            }
             const data = await res.json();
             if (!data.success) { toast.error(data.error); return data; }
             toast.success(successMsg);
@@ -209,10 +223,56 @@ export default function ReviewPage() {
         await load();
     }
 
+    async function previewVoice(text: string) {
+        if (!topic?.voice_id) { toast.error('No voice selected'); return; }
+        if (!text.trim()) { toast.error('No text to preview'); return; }
+        setPreviewing(true);
+        setPreviewAudioUrl(null);
+        try {
+            const res = await fetch('/api/media/voice-preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text.slice(0, 500), voiceId: topic.voice_id }),
+            });
+            if (!res.ok) { toast.error(`Preview failed (${res.status})`); return; }
+            const data = await res.json();
+            if (!data.success) { toast.error(data.error); return; }
+            setPreviewAudioUrl(data.audioUrl);
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Preview failed');
+        } finally {
+            setPreviewing(false);
+        }
+    }
+
+    async function generatePodcast() {
+        if (!topic) return;
+        const brandId = topic.personas?.brand_id;
+        if (!brandId) { toast.error('No brand configured for this persona'); return; }
+        setGeneratingPodcast(true);
+        try {
+            const res = await fetch('/api/media/podcast', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topicId, brandId }),
+            });
+            if (!res.ok) { toast.error(`Podcast generation failed (${res.status})`); return; }
+            const data = await res.json();
+            if (!data.success) { toast.error(data.error); return; }
+            toast.success('Podcast generated');
+            await load();
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : 'Podcast generation failed');
+        } finally {
+            setGeneratingPodcast(false);
+        }
+    }
+
     async function approveTopic() {
         setApproving(true);
         try {
             const res = await fetch(`/api/topics/${topicId}/approve`, { method: 'POST' });
+            if (!res.ok) { toast.error(`Approval failed (${res.status})`); return; }
             const data = await res.json();
             if (!data.success) { toast.error(data.error); return; }
             toast.success('Topic approved');
@@ -234,6 +294,7 @@ export default function ReviewPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ publishDate, publishTime }),
             });
+            if (!res.ok) { toast.error(`Scheduling failed (${res.status})`); return; }
             const data = await res.json();
             if (!data.success) { toast.error(data.error); return; }
             toast.success(`Scheduled for ${publishDate} at ${publishTime}`);
@@ -253,6 +314,7 @@ export default function ReviewPage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ force: false }),
             });
+            if (!res.ok) { toast.error(`Publishing failed (${res.status})`); return; }
             const data = await res.json();
             if (!data.success) { toast.error(data.error); return; }
             toast.success(`Publishing started — ${data.piecesProcessed} pieces submitted`);
@@ -270,7 +332,11 @@ export default function ReviewPage() {
     }
 
     if (!topic) {
-        return <div className="container py-8 text-muted-foreground">Loading...</div>;
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent" />
+            </div>
+        );
     }
 
     const points = topic.historical_points as HistoricalPoint[];
@@ -341,6 +407,10 @@ export default function ReviewPage() {
                                 {dirty[p.id] && <span className="ml-1 text-yellow-500">*</span>}
                             </TabsTrigger>
                         ))}
+                        <TabsTrigger value="podcast">
+                            Podcast
+                            {podcastEpisode?.audio_url && <span className="ml-1 text-green-500">*</span>}
+                        </TabsTrigger>
                     </TabsList>
 
                     {pieces.map(piece => {
@@ -389,7 +459,20 @@ export default function ReviewPage() {
                                                 >
                                                     {generating === piece.id ? 'Regenerating...' : 'Regenerate All'}
                                                 </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => previewVoice(currentScript)}
+                                                    disabled={previewing || !currentScript}
+                                                >
+                                                    {previewing ? 'Previewing...' : 'Preview Voice'}
+                                                </Button>
                                             </div>
+                                            {previewAudioUrl && (
+                                                <audio controls className="w-full mt-2" src={previewAudioUrl}>
+                                                    <track kind="captions" />
+                                                </audio>
+                                            )}
                                         </div>
 
                                         <Separator />
@@ -400,6 +483,7 @@ export default function ReviewPage() {
                                                 <Label>Caption (Long) <span className="text-xs text-muted-foreground">{currentCaptionLong.length}/2200</span></Label>
                                                 <Textarea
                                                     rows={5}
+                                                    maxLength={2200}
                                                     value={currentCaptionLong}
                                                     onChange={e => updateField(piece.id, 'caption_long', e.target.value)}
                                                 />
@@ -416,6 +500,7 @@ export default function ReviewPage() {
                                                 <Label>Caption (Short) <span className="text-xs text-muted-foreground">{currentCaptionShort.length}/280</span></Label>
                                                 <Textarea
                                                     rows={5}
+                                                    maxLength={280}
                                                     value={currentCaptionShort}
                                                     onChange={e => updateField(piece.id, 'caption_short', e.target.value)}
                                                 />
@@ -669,6 +754,94 @@ export default function ReviewPage() {
                             </TabsContent>
                         );
                     })}
+
+                    {/* Podcast Tab */}
+                    <TabsContent value="podcast">
+                        <Card>
+                            <CardContent className="space-y-4 pt-6">
+                                {podcastEpisode ? (
+                                    <>
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <Label>Podcast Script</Label>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {wordCount(podcastEpisode.script || '')} words
+                                                        {podcastEpisode.duration_seconds && ` / ${Math.floor(podcastEpisode.duration_seconds / 60)}:${String(podcastEpisode.duration_seconds % 60).padStart(2, '0')}`}
+                                                    </span>
+                                                    <Badge variant="outline" className={
+                                                        podcastEpisode.status === 'ready' || podcastEpisode.status === 'published'
+                                                            ? 'bg-green-600/20 text-green-400'
+                                                            : podcastEpisode.status === 'generating'
+                                                            ? 'bg-blue-600/20 text-blue-400'
+                                                            : podcastEpisode.status === 'error'
+                                                            ? 'bg-red-600/20 text-red-400'
+                                                            : 'bg-muted'
+                                                    }>
+                                                        {podcastEpisode.status}
+                                                    </Badge>
+                                                </div>
+                                            </div>
+                                            <Textarea
+                                                rows={16}
+                                                value={podcastEpisode.script || ''}
+                                                readOnly
+                                                className="font-mono text-sm"
+                                            />
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => previewVoice(podcastEpisode.script || '')}
+                                                disabled={previewing || !podcastEpisode.script}
+                                            >
+                                                {previewing ? 'Previewing...' : 'Preview Voice'}
+                                            </Button>
+                                            {!podcastEpisode.audio_url && (
+                                                <Button
+                                                    size="sm"
+                                                    onClick={generatePodcast}
+                                                    disabled={generatingPodcast}
+                                                >
+                                                    {generatingPodcast ? 'Generating...' : 'Generate Podcast Audio'}
+                                                </Button>
+                                            )}
+                                        </div>
+
+                                        {previewAudioUrl && (
+                                            <div className="space-y-1">
+                                                <Label className="text-xs text-muted-foreground">Voice Preview (first 500 chars)</Label>
+                                                <audio controls className="w-full" src={previewAudioUrl}>
+                                                    <track kind="captions" />
+                                                </audio>
+                                            </div>
+                                        )}
+
+                                        {podcastEpisode.audio_url && (
+                                            <div className="space-y-1">
+                                                <Label>Full Podcast Audio</Label>
+                                                <audio controls className="w-full" src={podcastEpisode.audio_url}>
+                                                    <track kind="captions" />
+                                                </audio>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <div className="text-center py-8">
+                                        <p className="text-muted-foreground mb-4">No podcast episode for this topic yet.</p>
+                                        <Button
+                                            onClick={generatePodcast}
+                                            disabled={generatingPodcast}
+                                        >
+                                            {generatingPodcast ? 'Generating...' : 'Generate Podcast'}
+                                        </Button>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </TabsContent>
                 </Tabs>
             )}
 

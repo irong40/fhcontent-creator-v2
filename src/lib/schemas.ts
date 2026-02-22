@@ -154,6 +154,23 @@ export const publishTopicSchema = z.object({
     force: z.boolean().default(false),
 });
 
+// --- Voice preview schema ---
+
+export const voicePreviewSchema = z.object({
+    text: z.string().min(1).max(2000),
+    voiceId: z.string().min(1),
+});
+
+// --- Quick post schema ---
+
+export const quickPostSchema = z.object({
+    personaId: z.string().uuid(),
+    text: z.string().min(1).max(5000),
+    platforms: z.array(z.string().min(1)).min(1),
+    expandWithAI: z.boolean().default(true),
+    imagePrompt: z.string().max(1000).optional(),
+});
+
 // --- Inferred types ---
 
 export type TopicGenerateRequest = z.infer<typeof topicGenerateSchema>;
@@ -172,3 +189,5 @@ export type PublishTopicRequest = z.infer<typeof publishTopicSchema>;
 export type RemixRequest = z.infer<typeof remixRequestSchema>;
 export type PodcastGenerateRequest = z.infer<typeof podcastGenerateSchema>;
 export type PodcastScriptResponse = z.infer<typeof podcastScriptResponseSchema>;
+export type VoicePreviewRequest = z.infer<typeof voicePreviewSchema>;
+export type QuickPostRequest = z.infer<typeof quickPostSchema>;

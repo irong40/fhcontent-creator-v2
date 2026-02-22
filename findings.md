@@ -65,3 +65,34 @@ Several components fail silently in production:
 - Dashboard analytics component
 
 This is a large amount of uncommitted production code.
+
+### Finding: Phase 6 Codebase Analysis (for feature planning)
+
+**Review page audio preview (existing):**
+- `review/[topicId]/page.tsx:434-462` already has `<audio>` preview for video pieces
+- Only shown when `isVideoPiece` is true — carousel tab has no audio
+- Podcast episodes are not shown in the review UI at all (separate `podcast_episodes` table, no tab)
+- Voice selector dropdown exists — reusable for TTS preview
+
+**Navigation structure:**
+- `nav-links.tsx` has 4 links: Plan, Costs, Personas, API Status
+- No Calendar or Quick Post entry points
+- Dashboard (`/`) is reached via logo click (implicit)
+
+**Scheduling flow:**
+- Schedule dates set in review page via `publishDate` + `publishTime` inputs
+- Calls `/api/topics/[id]/schedule`
+- Plan page shows flat list of topics sorted by `created_at` — no date-based grouping
+- No visual overview of what's scheduled when
+
+**Dialog component:**
+- `components/ui/dialog.tsx` exists (shadcn) — available for Quick Post modal
+
+**Existing patterns to match:**
+- All pages are `'use client'` with `createClient()` from `@/lib/supabase/client`
+- Card-based layouts with `CardHeader` + `CardContent`
+- Badge for status indicators
+- Tabs for content type switching
+- Toast via Sonner (`toast.success()`, `toast.error()`)
+- PersonaSwitcher for multi-persona filtering
+- Loading states: `generating`, `saving`, `approving` boolean flags

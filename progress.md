@@ -85,7 +85,62 @@
 
 ---
 
-## Next Actions
-1. **Decision needed:** Lyria fallback strategy (H5)
+### 13:58 — Session End
+- 3 commits pushed to `origin/master` (`f380fe0`, `7a43019`, `204582c`)
+- Phases 1, 3, 4, 5 complete. 237/237 tests passing. 0 new TS errors.
+- Total: 15 issues fixed, 3 accepted/non-issues, 3 deferred
+
+---
+
+## Session: 2026-02-22 (Phase 6 Planning)
+
+### 14:00 — Phase 6 Plan Written
+- Explored all 8 page.tsx files, nav-links, PRD-v2.0, existing review page patterns
+- Key finding: Review page already has `<audio>` for video pieces — voice preview extends this pattern
+- Key finding: No podcast tab in review UI — podcast_episodes table not surfaced
+- Key finding: Dialog component exists — ready for Quick Post modal
+- Decomposed Phase 6 into 4 sub-phases (6A → 6D) with dependency order
+- **6A: Voice audio preview** (~2h) — TTS preview API + review page integration + podcast tab
+- **6B: Quick Post modal** (~3h) — bypass full pipeline, direct Claude→Blotato publish
+- **6C: Calendar view** (~4-5h) — month grid, drag-to-reschedule with @dnd-kit
+- **6D: Email notifications** (~2h) — Resend integration alongside existing n8n webhook
+- Total estimated: ~11-12 hours
+- Plan written to `task_plan.md` Phase 6 section
+
+### 14:15 — Phase 6 Implementation (all 4 sub-phases)
+Implemented all features in a single batch, touching each file once:
+
+**6 new files created:**
+| File | Feature |
+|------|---------|
+| `src/app/api/media/voice-preview/route.ts` | TTS preview endpoint (max 500 chars) |
+| `src/app/api/content/quick-post/route.ts` | Quick post: Claude expand + DALL-E image + Blotato publish |
+| `src/app/api/topics/calendar/route.ts` | Calendar month query with piece counts |
+| `src/components/quick-post-dialog.tsx` | Dialog: persona select, text, AI expand toggle, platform chips, image toggle |
+| `src/app/calendar/page.tsx` | Month grid with drag-to-reschedule (native HTML5 DnD) |
+| `src/lib/email.ts` | Resend email: error alerts, publish success, daily digest |
+
+**7 existing files modified:**
+| File | Change |
+|------|--------|
+| `src/lib/schemas.ts` | Added `voicePreviewSchema`, `quickPostSchema` + types |
+| `src/components/nav-links.tsx` | Added Calendar link + Quick Post button |
+| `src/app/review/[topicId]/page.tsx` | Added: "Preview Voice" button on all tabs, Podcast tab with script/audio/generate |
+| `src/app/plan/page.tsx` | Added Quick Post card above Generate Topics |
+| `src/lib/notifications.ts` | Email delivery alongside n8n webhook |
+| `.env.example` | Added RESEND_API_KEY, RESEND_FROM_EMAIL, NOTIFICATION_EMAIL |
+
+**Verification:** `tsc --noEmit` 0 new errors, `vitest run` 237/237 passing
+
+**Design decisions:**
+- Used native HTML5 drag-and-drop for calendar (avoided @dnd-kit dependency)
+- Used Resend REST API directly (avoided `resend` npm package dependency)
+- Voice preview uploads to `previews/` path in media bucket (ephemeral, no DB row)
+- Quick post logs to `published_log` with MD5 hash for duplicate detection
+
+---
+
+## Next Session
+1. **Decision needed:** Lyria fallback strategy (H5) — AceStep 1.5 local vs accept graceful skip
 2. **Deferred:** README (L3), integration tests (L5), Edge Function tests (L6)
-3. **Phase 6:** Missing features from PRD v1.0 (popup story, calendar, voice preview, email)
+3. **Phase 6:** Ready to execute — start with 6A (voice preview) or 6B (quick post)
