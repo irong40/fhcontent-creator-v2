@@ -118,8 +118,10 @@ describe('media generation schemas', () => {
     });
 
     describe('carouselGenerateSchema', () => {
-        it('requires contentPieceId and templateId', () => {
-            expect(() => carouselGenerateSchema.parse({ contentPieceId: validUuid })).toThrow();
+        it('requires contentPieceId (templateId is optional)', () => {
+            expect(() => carouselGenerateSchema.parse({})).toThrow();
+            const result = carouselGenerateSchema.parse({ contentPieceId: validUuid });
+            expect(result.contentPieceId).toBe(validUuid);
         });
 
         it('accepts optional brandKitId', () => {

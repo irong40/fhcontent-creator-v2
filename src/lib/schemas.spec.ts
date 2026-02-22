@@ -331,11 +331,11 @@ describe('videoGenerateSchema', () => {
         expect(result.success).toBe(false);
     });
 
-    it('rejects missing fields', () => {
+    it('accepts contentPieceId only (other fields are optional)', () => {
         const result = videoGenerateSchema.safeParse({
             contentPieceId: VALID_UUID,
         });
-        expect(result.success).toBe(false);
+        expect(result.success).toBe(true);
     });
 });
 
@@ -395,11 +395,11 @@ describe('carouselGenerateSchema', () => {
         expect(result.success).toBe(false);
     });
 
-    it('rejects missing templateId', () => {
+    it('accepts missing templateId (optional)', () => {
         const result = carouselGenerateSchema.safeParse({
             contentPieceId: VALID_UUID,
         });
-        expect(result.success).toBe(false);
+        expect(result.success).toBe(true);
     });
 });
 

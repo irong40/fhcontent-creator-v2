@@ -139,9 +139,9 @@ export async function POST(request: NextRequest) {
             cost_usd: estimateElevenLabsCost(finalScript.length),
         });
 
-        // Estimate duration from word count (~150 wpm)
+        // Derive duration from MP3 buffer size (ElevenLabs outputs 128kbps = 16000 bytes/sec)
+        const durationSeconds = Math.round(audioBuffer.byteLength / 16000);
         const words = wordCount(finalScript);
-        const durationSeconds = Math.round((words / 150) * 60);
 
         // Create podcast_episodes row
         const { data: episode, error: insertError } = await supabase

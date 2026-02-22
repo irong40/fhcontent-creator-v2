@@ -45,8 +45,31 @@
 
 ---
 
+---
+
+## Session: 2026-02-22 (continued)
+
+### 13:40 — Commit Checkpoint
+- Committed all Phase 1 fixes + accumulated feature work as `f380fe0`
+- 41 files, +3,465 lines — clean working tree restored
+
+### 13:45 — Phase 3 Fixes Applied (5 issues)
+| Fix | File(s) | Result |
+|-----|---------|--------|
+| M2: topic_hash type | Already present in database.ts | Was fixed in earlier work |
+| M5: Podcast duration | `api/media/podcast/route.ts` | MP3 buffer size (128kbps) instead of 150 wpm guess |
+| M6: ElevenLabs cost | `lib/utils.ts` | Tier-aware pricing ($0.30 Starter / $0.18 Scale) |
+| M7: lamejs replacement | `lib/gemini.ts`, removed `lib/mp3-encoder.ts` + `types/lamejs.d.ts` | `@breezystack/lamejs` 1.2.7 (ESM, no `new Function()`) |
+| M8: vercel.json SPA | N/A | App Router handles routing — non-issue |
+| L1: Claude pricing | N/A | $3/$15 per M tokens is correct across Sonnet 3.5-4.5 |
+
+### 13:50 — Verification
+- `tsc --noEmit`: 0 new errors (same pre-existing Deno/spec errors)
+- `vitest run`: 234 pass, 3 fail (same pre-existing schema test drift)
+
+---
+
 ## Next Actions
 1. **Decision needed:** Lyria fallback strategy (H5)
 2. **Quick wins:** Fix 3 pre-existing test failures (Phase 5)
-3. **Should commit:** 33 files of uncommitted work on master is risky
-4. **Phase 3:** TypeScript type drift, podcast duration, lamejs
+3. **Phase 4:** Low-priority tech debt items

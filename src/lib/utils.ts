@@ -20,9 +20,10 @@ export function estimateDuration(words: number): string {
   return `${minutes.toFixed(1)} min`;
 }
 
-/** ElevenLabs TTS pricing: ~$0.30 per 1K characters */
-export function estimateElevenLabsCost(charCount: number): number {
-  return (charCount / 1000) * 0.30;
+/** ElevenLabs TTS pricing: $0.30/1K chars (Starter), $0.18/1K chars (Scale) */
+export function estimateElevenLabsCost(charCount: number, tier: 'starter' | 'scale' = 'starter'): number {
+  const rate = tier === 'scale' ? 0.18 : 0.30;
+  return (charCount / 1000) * rate;
 }
 
 /** DALL-E 3 pricing: $0.04/image standard, $0.08/image HD */

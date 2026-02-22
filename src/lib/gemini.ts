@@ -4,7 +4,7 @@
  */
 
 import { GoogleGenAI, type LiveMusicServerMessage } from '@google/genai';
-import { getMp3Encoder } from '@/lib/mp3-encoder';
+import { Mp3Encoder } from '@breezystack/lamejs';
 
 /**
  * Convert interleaved stereo PCM Int16 samples to MP3.
@@ -14,9 +14,8 @@ export function pcmToMp3(pcmData: Int16Array): ArrayBuffer {
     const sampleRate = 48000;
     const channels = 2;
     const kbps = 192;
-    const Mp3Encoder = getMp3Encoder();
     const encoder = new Mp3Encoder(channels, sampleRate, kbps);
-    const mp3Chunks: Int16Array[] = [];
+    const mp3Chunks: Uint8Array[] = [];
 
     // De-interleave stereo PCM into left/right channels
     const samplesPerChannel = pcmData.length / channels;
