@@ -42,17 +42,19 @@ Stabilize the Content Command Center by fixing all known issues, closing tech de
 
 ---
 
-## Phase 4: LOW Priority / Tech Debt
+## Phase 4: LOW Priority / Tech Debt (COMPLETED)
 > Nice-to-have fixes, no production impact
 
-- [x] L1 — `estimateClaudeCost` pricing is correct ($3/$15 per M tokens — same for Sonnet 3.5 through 4.5)
-- [ ] L2 — `topic_hash` uses MD5 (redundant with pg_trgm dedup)
-- [ ] L3 — README.md is default Next.js boilerplate
-- [ ] L5 — No integration/E2E tests for pipeline
-- [ ] L6 — Edge Functions have no unit tests
-- [ ] L7 — HeyGen video hardcoded black background
-- [ ] L8 — `N8N_ERROR_WEBHOOK_URL` silently no-ops when unset
-- [ ] L10 — daily-media cron confusing indentation/scoping
+- [x] L1 — Pricing is correct ($3/$15 same for Sonnet 3.5 through 4.5)
+- [x] L2 — Accepted: MD5 is defense-in-depth alongside pg_trgm (no change needed)
+- [ ] L3 — README.md is default Next.js boilerplate (deferred — no production impact)
+- [ ] L5 — No integration/E2E tests for pipeline (deferred — significant effort)
+- [ ] L6 — Edge Functions have no unit tests (deferred — requires Deno test setup)
+- [x] L7 — HeyGen background now configurable via options param (default: #1a1a2e)
+- [x] L8 — `notifyError` logs warning on first call when `N8N_ERROR_WEBHOOK_URL` unset
+- [x] L10 — daily-media cron indentation fixed (inner loop properly nested under persona loop)
+
+**Status:** Done (actionable items). L3/L5/L6 deferred as out-of-scope for stabilization.
 
 ---
 

@@ -66,7 +66,9 @@ class HeyGenClient {
         return this.request<HeyGenAvatarListResponse>('/v2/avatars');
     }
 
-    async createVideoFromAudio(avatarId: string, audioUrl: string): Promise<HeyGenVideoResponse> {
+    async createVideoFromAudio(avatarId: string, audioUrl: string, options?: {
+        background?: string;
+    }): Promise<HeyGenVideoResponse> {
         return this.request<HeyGenVideoResponse>('/v2/video/generate', 'POST', {
             video_inputs: [{
                 character: {
@@ -80,14 +82,16 @@ class HeyGenClient {
                 },
                 background: {
                     type: 'color',
-                    value: '#000000',
+                    value: options?.background || '#1a1a2e',
                 },
             }],
             dimension: { width: 1080, height: 1920 },
         });
     }
 
-    async createVideoFromText(avatarId: string, script: string, voiceId?: string): Promise<HeyGenVideoResponse> {
+    async createVideoFromText(avatarId: string, script: string, voiceId?: string, options?: {
+        background?: string;
+    }): Promise<HeyGenVideoResponse> {
         const voice: Record<string, unknown> = voiceId
             ? { type: 'text', voice_id: voiceId, input_text: script }
             : { type: 'text', input_text: script };
@@ -102,7 +106,7 @@ class HeyGenClient {
                 voice,
                 background: {
                     type: 'color',
-                    value: '#000000',
+                    value: options?.background || '#1a1a2e',
                 },
             }],
             dimension: { width: 1080, height: 1920 },

@@ -69,7 +69,23 @@
 
 ---
 
+### 13:48 — Phase 5 Complete (3 test fixes)
+- Updated 3 schema tests to match current schemas (fields intentionally made optional)
+- `videoGenerateSchema`: avatarId/audioUrl/blotatoTemplateId now optional
+- `carouselGenerateSchema`: templateId now optional
+- **237/237 tests passing**
+
+### 13:55 — Phase 4 Complete (4 fixes + 2 accepted + 3 deferred)
+| Fix | File(s) | Result |
+|-----|---------|--------|
+| L7: HeyGen background | `lib/heygen.ts` | Configurable via options param (default: #1a1a2e) |
+| L8: Notification warning | `lib/notifications.ts` | Logs once when N8N_ERROR_WEBHOOK_URL unset |
+| L10: Cron indentation | `api/cron/daily-media/route.ts` | Inner loop properly nested under persona loop |
+| L2: MD5 hash | N/A | Accepted — defense-in-depth alongside pg_trgm |
+
+---
+
 ## Next Actions
 1. **Decision needed:** Lyria fallback strategy (H5)
-2. **Quick wins:** Fix 3 pre-existing test failures (Phase 5)
-3. **Phase 4:** Low-priority tech debt items
+2. **Deferred:** README (L3), integration tests (L5), Edge Function tests (L6)
+3. **Phase 6:** Missing features from PRD v1.0 (popup story, calendar, voice preview, email)
