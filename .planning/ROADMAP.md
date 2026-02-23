@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 4 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Docker Compose + PostgreSQL 15 stack, n8n 2.9.0 pinned image, .env with N8N_ENCRYPTION_KEY/TZ/GENERIC_TIMEZONE/EXECUTIONS_DATA_PRUNE, n8n-workflows/ scaffold
+- [x] 01-01-PLAN.md — Docker Compose + PostgreSQL 15 stack, n8n 2.9.0 pinned image, .env with N8N_ENCRYPTION_KEY/TZ/GENERIC_TIMEZONE/EXECUTIONS_DATA_PRUNE, n8n-workflows/ scaffold
 - [ ] 01-02-PLAN.md — Cloudflare Tunnel setup, WEBHOOK_URL update, port 5678 loopback isolation confirmed
 - [ ] 01-03-PLAN.md — WinSW service wrapper, High Performance power plan, sleep/hibernate disabled, reboot test
 - [ ] 01-04-PLAN.md — All 9 API credentials in n8n Credential Store, canary timezone validation workflow, Eastern Time confirmed
@@ -138,7 +138,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Infrastructure Foundation | 0/4 | Planned | - |
+| 1. Infrastructure Foundation | 1/4 | In progress | - |
 | 2. Error Infrastructure | 0/3 | Not started | - |
 | 3. Webhook Security and Supabase Integration | 0/3 | Not started | - |
 | 4. Leaf Workflows | 0/4 | Not started | - |

@@ -10,24 +10,24 @@ See: .planning/PROJECT.md (updated 2026-02-22)
 ## Current Position
 
 Phase: 1 of 6 (Infrastructure Foundation)
-Plan: 0 of 4 in current phase
-Status: Ready to plan
-Last activity: 2026-02-22 — n8n Orchestration roadmap created; 36 requirements mapped across 6 phases
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-02-23 — Plan 01-01 complete: n8n 2.9.0 + PostgreSQL 15 Docker stack running
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 4%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: — min
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 4 min
+- Total execution time: 0.07 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-infrastructure-foundation | 1/4 | 4 min | 4 min |
 
 *Updated after each plan completion*
 
@@ -39,10 +39,14 @@ Progress: [░░░░░░░░░░] 0%
 - Architecture: Async media APIs (HeyGen/Blotato) use WF-5 Scheduled Sweeper pattern, not Wait node resume (Windows restarts silently drop in-progress Wait executions)
 - Infrastructure: PostgreSQL 15 required before any workflow runs — SQLite hits SQLITE_BUSY under concurrent cron load
 - Security: N8N_ENCRYPTION_KEY must be a fixed 64-char string set before first launch — auto-generated keys are lost on reinstall
+- Infrastructure: Port bound to 127.0.0.1:5678 only — Cloudflare Tunnel (Plan 01-02) is the only public ingress path (Plan 01-01)
+- Infrastructure: Named Docker volumes used for n8n — host path mounts on Windows D:\ cause permission errors (Plan 01-01)
+- Infrastructure: n8n image pinned to 2.9.0 — never latest — prevents silent breaking upgrades (Plan 01-01)
 
 ### Pending Todos
 
-None yet.
+- Save N8N_ENCRYPTION_KEY to password manager: `d1d854cbe78259ce589bb92e3148be466f3040ce86db58a6fa6fed6e7ee0c22a`
+- Update WEBHOOK_URL in D:/n8n/.env after Plan 01-02 (Cloudflare Tunnel) completes
 
 ### Blockers/Concerns
 
@@ -52,6 +56,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Roadmap and STATE.md created; no plans written yet
+Last session: 2026-02-23
+Stopped at: Plan 01-01 complete — n8n Docker stack running; ready for Plan 01-02 (Cloudflare Tunnel)
 Resume file: None

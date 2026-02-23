@@ -9,18 +9,18 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Infrastructure
 
-- [ ] **INFRA-01**: n8n 2.9.0 runs via Docker Desktop + WSL2 on local Windows machine
-- [ ] **INFRA-02**: PostgreSQL 15 is the n8n internal database (not SQLite)
+- [x] **INFRA-01**: n8n 2.9.0 runs via Docker Desktop + WSL2 on local Windows machine
+- [x] **INFRA-02**: PostgreSQL 15 is the n8n internal database (not SQLite)
 - [ ] **INFRA-03**: Cloudflare Tunnel exposes n8n webhooks to public internet with stable URL
 - [ ] **INFRA-04**: n8n auto-starts on Windows boot via WinSW service wrapper
 - [ ] **INFRA-05**: All API credentials (Claude, HeyGen, Blotato, ElevenLabs, Gemini, OpenAI, Canva, Supabase) stored in n8n credential store with fixed N8N_ENCRYPTION_KEY
-- [ ] **INFRA-06**: Dual timezone env vars set (TZ + GENERIC_TIMEZONE = America/New_York)
-- [ ] **INFRA-07**: Execution history pruning enabled (7-day retention)
+- [x] **INFRA-06**: Dual timezone env vars set (TZ + GENERIC_TIMEZONE = America/New_York)
+- [x] **INFRA-07**: Execution history pruning enabled (7-day retention)
 - [ ] **INFRA-08**: Windows power plan set to High Performance (no sleep/hibernate)
 
 ### Security
 
-- [ ] **SEC-01**: n8n version >= 2.5.2 (above CVE-2026-21858 patch threshold)
+- [x] **SEC-01**: n8n version >= 2.5.2 (above CVE-2026-21858 patch threshold)
 - [ ] **SEC-02**: HMAC-SHA256 signing on all n8n to Supabase Edge Function calls using N8N_WEBHOOK_SECRET
 - [ ] **SEC-03**: HMAC validation tested end-to-end against all 4 existing Edge Functions before production use
 - [ ] **SEC-04**: n8n port 5678 not exposed to public internet
@@ -99,15 +99,15 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| INFRA-01 | Phase 1 | Pending |
-| INFRA-02 | Phase 1 | Pending |
+| INFRA-01 | Phase 1 | Complete (01-01) |
+| INFRA-02 | Phase 1 | Complete (01-01) |
 | INFRA-03 | Phase 1 | Pending |
 | INFRA-04 | Phase 1 | Pending |
 | INFRA-05 | Phase 1 | Pending |
-| INFRA-06 | Phase 1 | Pending |
-| INFRA-07 | Phase 1 | Pending |
+| INFRA-06 | Phase 1 | Complete (01-01) |
+| INFRA-07 | Phase 1 | Complete (01-01) |
 | INFRA-08 | Phase 1 | Pending |
-| SEC-01 | Phase 1 | Pending |
+| SEC-01 | Phase 1 | Complete (01-01) |
 | SEC-04 | Phase 1 | Pending |
 | ERR-01 | Phase 2 | Pending |
 | ERR-02 | Phase 2 | Pending |
@@ -144,4 +144,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 — traceability table finalized after roadmap creation (6 phases)*
+*Last updated: 2026-02-23 — 5 requirements marked complete after Plan 01-01 execution (INFRA-01, INFRA-02, INFRA-06, INFRA-07, SEC-01)*
