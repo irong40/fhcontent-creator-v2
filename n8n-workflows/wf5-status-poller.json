@@ -1,0 +1,544 @@
+{
+  "name": "WF-5 Status Poller",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "wf5-schedule",
+      "name": "Every 10 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Set correlation context for the entire WF-5 execution\nconst runId = $execution.id;\nconst startedAt = new Date().toISOString();\nreturn [{\n  json: {\n    run_id: runId,\n    workflow_id: 'WF-5',\n    started_at: startedAt,\n    lock_key: 'wf5-status-poller'\n  }\n}];"
+      },
+      "id": "wf5-context",
+      "name": "Set Correlation Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fhcontent-creator-v2.vercel.app/api/workflow-lock/acquire",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-cron-secret",
+              "value": "={{ $credentials[\"Vercel Cron Secret\"].value }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lock_key",
+              "value": "={{ $json.lock_key }}"
+            },
+            {
+              "name": "workflow_id",
+              "value": "={{ $json.workflow_id }}"
+            },
+            {
+              "name": "run_id",
+              "value": "={{ $json.run_id }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "wf5-lock-acquire",
+      "name": "Acquire Workflow Lock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [710, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Vercel Cron Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "lock-check",
+              "leftValue": "={{ $json.body.acquired }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-lock-check",
+      "name": "Lock Acquired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lock not acquired — another instance is running. Stop gracefully.\nreturn [];"
+      },
+      "id": "wf5-noop",
+      "name": "Already Running - Skip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1170, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://qjpujskwqaehxnqypxzu.supabase.co/rest/v1/pipeline_runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $credentials[\"Supabase Service Role\"].value }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"workflow_id\": \"{{ $('Set Correlation Context').item.json.workflow_id }}\",\n  \"run_id\": \"{{ $('Set Correlation Context').item.json.run_id }}\",\n  \"status\": \"running\",\n  \"started_at\": \"{{ $('Set Correlation Context').item.json.started_at }}\"\n}",
+        "options": {}
+      },
+      "id": "wf5-log-start",
+      "name": "Log Run Start",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1170, 120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fhcontent-creator-v2.vercel.app/api/cron/check-status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials[\"Vercel Cron Secret\"].value }}"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $('Set Correlation Context').item.json.run_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 55000
+        }
+      },
+      "id": "wf5-check-status",
+      "name": "Call Check-Status Route",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Vercel Cron Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\nconst correlationId = $('Set Correlation Context').item.json.run_id;\n\n// check-status returns array of updated content pieces\nconst pieces = Array.isArray(response.updated) ? response.updated : [];\n\nif (pieces.length === 0) {\n  // No updates — return a single item to continue the flow for logging\n  return [{\n    json: {\n      _no_updates: true,\n      correlation_id: correlationId,\n      checked_at: new Date().toISOString()\n    }\n  }];\n}\n\nreturn pieces.map(piece => ({\n  json: {\n    content_piece_id: piece.id,\n    status: piece.status,\n    platform: piece.platform,\n    video_url: piece.video_url || null,\n    correlation_id: correlationId,\n    checked_at: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "wf5-parse",
+      "name": "Parse Check-Status Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1630, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-updates",
+              "leftValue": "={{ $json._no_updates }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-has-updates",
+      "name": "Has Updates?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1860, 120]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build HMAC signature for the asset callback\nconst crypto = require('crypto');\nconst secret = '={{ $credentials[\"N8N Signing Secret\"].value }}';\nconst body = JSON.stringify($input.item.json);\nconst sig = crypto\n  .createHmac('sha256', secret)\n  .update(body)\n  .digest('hex');\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    _hmac: 'sha256=' + sig,\n    _body: body\n  }\n}];"
+      },
+      "id": "wf5-hmac",
+      "name": "Build HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2090, -20]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://qjpujskwqaehxnqypxzu.supabase.co/functions/v1/n8n-asset-callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-Signature",
+              "value": "={{ $json._hmac }}"
+            },
+            {
+              "name": "X-Correlation-ID",
+              "value": "={{ $json.correlation_id }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json._body }}",
+        "options": {}
+      },
+      "id": "wf5-asset-callback",
+      "name": "POST to Asset Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2320, -20],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fhcontent-creator-v2.vercel.app/api/workflow-lock/release",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-cron-secret",
+              "value": "={{ $credentials[\"Vercel Cron Secret\"].value }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"lock_key\": \"wf5-status-poller\" }",
+        "options": {}
+      },
+      "id": "wf5-lock-release",
+      "name": "Release Workflow Lock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2550, 120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Vercel Cron Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://qjpujskwqaehxnqypxzu.supabase.co/rest/v1/pipeline_runs?run_id=eq.{{ $('Set Correlation Context').item.json.run_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $credentials[\"Supabase Service Role\"].value }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"status\": \"completed\",\n  \"completed_at\": \"{{ $now.toISO() }}\"\n}",
+        "options": {}
+      },
+      "id": "wf5-log-complete",
+      "name": "Log Run Complete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2780, 120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "__depictor": {
+            "mode": "name",
+            "value": "WF-Error-Handler"
+          }
+        },
+        "options": {}
+      },
+      "id": "wf5-error-handler",
+      "name": "Route to WF-Error",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1630, 360]
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Set Correlation Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Correlation Context": {
+      "main": [
+        [
+          {
+            "node": "Acquire Workflow Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire Workflow Lock": {
+      "main": [
+        [
+          {
+            "node": "Lock Acquired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lock Acquired?": {
+      "main": [
+        [
+          {
+            "node": "Log Run Start",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already Running - Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Run Start": {
+      "main": [
+        [
+          {
+            "node": "Call Check-Status Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Check-Status Route": {
+      "main": [
+        [
+          {
+            "node": "Parse Check-Status Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Check-Status Response": {
+      "main": [
+        [
+          {
+            "node": "Has Updates?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Updates?": {
+      "main": [
+        [
+          {
+            "node": "Build HMAC Signature",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release Workflow Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build HMAC Signature": {
+      "main": [
+        [
+          {
+            "node": "POST to Asset Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST to Asset Callback": {
+      "main": [
+        [
+          {
+            "node": "Release Workflow Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Workflow Lock": {
+      "main": [
+        [
+          {
+            "node": "Log Run Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "WF-Error-Handler"
+  },
+  "tags": [
+    {
+      "name": "production"
+    },
+    {
+      "name": "leaf-workflow"
+    }
+  ]
+}
