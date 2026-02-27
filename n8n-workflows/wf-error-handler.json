@@ -1,0 +1,119 @@
+{
+  "name": "WF-Error-Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "err-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ef-1",
+              "name": "workflow_name",
+              "value": "={{ $json.workflow.name }}",
+              "type": "string"
+            },
+            {
+              "id": "ef-2",
+              "name": "node_name",
+              "value": "={{ $json.node.name }}",
+              "type": "string"
+            },
+            {
+              "id": "ef-3",
+              "name": "error_message",
+              "value": "={{ $json.error.message }}",
+              "type": "string"
+            },
+            {
+              "id": "ef-4",
+              "name": "execution_id",
+              "value": "={{ $json.execution.id }}",
+              "type": "string"
+            },
+            {
+              "id": "ef-5",
+              "name": "correlation_id",
+              "value": "={{ $json.execution.id }}",
+              "type": "string"
+            },
+            {
+              "id": "ef-6",
+              "name": "occurred_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "err-set",
+      "name": "Extract Error Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "pipeline_errors",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldName": "workflow_name", "fieldValue": "={{ $json.workflow_name }}" },
+            { "fieldName": "node_name", "fieldValue": "={{ $json.node_name }}" },
+            { "fieldName": "error_message", "fieldValue": "={{ $json.error_message }}" },
+            { "fieldName": "execution_id", "fieldValue": "={{ $json.execution_id }}" },
+            { "fieldName": "correlation_id", "fieldValue": "={{ $json.correlation_id }}" },
+            { "fieldName": "occurred_at", "fieldValue": "={{ $json.occurred_at }}" }
+          ]
+        }
+      },
+      "id": "err-supabase",
+      "name": "Log to pipeline_errors",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [710, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Error Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Error Fields": {
+      "main": [
+        [
+          {
+            "node": "Log to pipeline_errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

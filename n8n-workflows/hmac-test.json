@@ -1,0 +1,83 @@
+{
+  "name": "HMAC-Test-All-Functions",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "hmac-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "hs-1",
+              "name": "webhookSecret",
+              "value": "be785c81913096862109238726f809db7a37abb81b2a1e0dbe893276bbced4a8",
+              "type": "string"
+            },
+            {
+              "id": "hs-2",
+              "name": "supabaseBaseUrl",
+              "value": "https://qjpujskwqaehxnqypxzu.supabase.co/functions/v1",
+              "type": "string"
+            },
+            {
+              "id": "hs-3",
+              "name": "supabaseAnonKey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqcHVqc2t3cWFlaHhucXlweHp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4NDgwMTAsImV4cCI6MjA4NDQyNDAxMH0.speDd6htEdzCj8SDk2xNgItOFa9uGssWH1C07CBuWv8",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hmac-config",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = $('Set Config').item.json.webhookSecret;\nconst baseUrl = $('Set Config').item.json.supabaseBaseUrl;\nconst anonKey = $('Set Config').item.json.supabaseAnonKey;\n\n// Test payloads for each edge function\nconst tests = [\n  {\n    name: 'n8n-topic-callback',\n    payload: { topic_id: '00000000-0000-0000-0000-000000000001', status: 'research_complete' }\n  },\n  {\n    name: 'n8n-research-callback',\n    payload: { topic_id: '00000000-0000-0000-0000-000000000001', sources: [{ url: 'https://test.com', title: 'Test', summary: 'Test source' }] }\n  },\n  {\n    name: 'n8n-asset-callback',\n    payload: { content_piece_id: '00000000-0000-0000-0000-000000000001', asset_type: 'thumbnail', asset_url: 'https://test.com/img.png' }\n  },\n  {\n    name: 'n8n-publish-callback',\n    payload: { content_piece_id: '00000000-0000-0000-0000-000000000001', platform: 'twitter', platform_post_id: 'test-123', published_at: new Date().toISOString() }\n  }\n];\n\nconst results = [];\n\nfor (const test of tests) {\n  const bodyString = JSON.stringify(test.payload);\n  \n  // Compute valid HMAC\n  const hmac = crypto.createHmac('sha256', secret);\n  hmac.update(bodyString, 'utf8');\n  const validSig = hmac.digest('hex');\n  \n  const headers = {\n    'Content-Type': 'application/json',\n    'apikey': anonKey,\n    'Authorization': 'Bearer ' + anonKey\n  };\n  \n  // Test 1: Valid signature\n  let validStatus, validBody;\n  try {\n    const resp = await fetch(baseUrl + '/' + test.name, {\n      method: 'POST',\n      headers: { ...headers, 'x-n8n-signature': validSig },\n      body: bodyString\n    });\n    validStatus = resp.status;\n    validBody = await resp.text();\n  } catch (e) {\n    validStatus = 'ERROR';\n    validBody = e.message;\n  }\n  \n  // Test 2: Tampered signature\n  let tamperedStatus, tamperedBody;\n  try {\n    const resp = await fetch(baseUrl + '/' + test.name, {\n      method: 'POST',\n      headers: { ...headers, 'x-n8n-signature': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },\n      body: bodyString\n    });\n    tamperedStatus = resp.status;\n    tamperedBody = await resp.text();\n  } catch (e) {\n    tamperedStatus = 'ERROR';\n    tamperedBody = e.message;\n  }\n  \n  const validPassed = validStatus !== 401;\n  const tamperedPassed = tamperedStatus === 401;\n  \n  results.push({\n    function_name: test.name,\n    valid_signature_status: validStatus,\n    valid_signature_passed: validPassed ? 'PASS' : 'FAIL',\n    valid_signature_detail: validBody.substring(0, 200),\n    tampered_signature_status: tamperedStatus,\n    tampered_signature_passed: tamperedPassed ? 'PASS' : 'FAIL',\n    tampered_signature_detail: tamperedBody.substring(0, 200)\n  });\n}\n\n// Summary\nconst allPassed = results.every(r => r.valid_signature_passed === 'PASS' && r.tampered_signature_passed === 'PASS');\nresults.push({\n  function_name: '--- SUMMARY ---',\n  valid_signature_status: results.filter(r => r.valid_signature_passed === 'PASS').length + '/4 passed',\n  valid_signature_passed: allPassed ? 'ALL PASS' : 'FAILURES',\n  valid_signature_detail: '',\n  tampered_signature_status: results.filter(r => r.tampered_signature_passed === 'PASS').length + '/4 passed',\n  tampered_signature_passed: allPassed ? 'ALL PASS' : 'FAILURES',\n  tampered_signature_detail: ''\n});\n\nreturn results.map(r => ({ json: r }));"
+      },
+      "id": "hmac-test-code",
+      "name": "Test All Functions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [710, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Test All Functions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

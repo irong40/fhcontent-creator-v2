@@ -1,0 +1,99 @@
+{
+  "id": "canary-tz-001",
+  "name": "Canary — Timezone Validation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "canary-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ts-1",
+              "name": "n8n_time",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "ts-2",
+              "name": "n8n_timezone",
+              "value": "={{ $now.format('z') }}",
+              "type": "string"
+            },
+            {
+              "id": "ts-3",
+              "name": "workflow_name",
+              "value": "canary-timezone-test",
+              "type": "string"
+            },
+            {
+              "id": "ts-4",
+              "name": "status",
+              "value": "heartbeat",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "canary-set",
+      "name": "Build Timestamp Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Timezone validation — logs to execution output\n// pipeline_runs table will be available in Phase 2\nconst data = $input.all();\nfor (const item of data) {\n  console.log('Timezone check:', item.json.n8n_time, item.json.n8n_timezone);\n}\nreturn data;"
+      },
+      "id": "canary-code",
+      "name": "Log Timezone Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [710, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build Timestamp Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Timestamp Payload": {
+      "main": [
+        [
+          {
+            "node": "Log Timezone Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

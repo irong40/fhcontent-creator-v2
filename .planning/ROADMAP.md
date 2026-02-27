@@ -2,7 +2,7 @@
 
 ## Overview
 
-This milestone replaces three opaque Vercel cron jobs with a self-hosted n8n instance that makes every pipeline step visible, retryable, and debuggable. The build order is strictly dependency-driven: infrastructure first, error handling second, security third, then workflows built leaf-to-orchestrator so each can be verified in parallel with the existing Vercel crons before cutover. When Phase 6 completes, the dashboard "Generate" button fires n8n, all three Vercel crons are disabled, and every failure produces an observable alert rather than a silent timeout.
+This milestone replaces three opaque Vercel cron jobs with a self-hosted n8n instance that makes every pipeline step visible, retryable, and debuggable. The build order is dependency-driven with parallelism where possible: infrastructure first, then error handling and webhook security in parallel, then workflows built leaf-to-orchestrator so each can be verified in parallel with the existing Vercel crons before cutover. When Phase 6 completes, the dashboard "Generate" button fires n8n, all three Vercel crons are disabled, and every failure produces an observable alert rather than a silent timeout.
 
 ## Phases
 
@@ -12,9 +12,31 @@ This milestone replaces three opaque Vercel cron jobs with a self-hosted n8n ins
 
 Decimal phases appear between their surrounding integers in numeric order.
 
+## Dependency Graph
+
+```
+Phase 1 (Infrastructure)
+    │
+    ├── Phase 2 (Error Infra)      ──┐
+    │                                 ├── PARALLEL after Phase 1
+    └── Phase 3 (Webhook Security) ──┘
+                │
+                ▼
+        Phase 4 (Leaf Workflows)     ← merge point: needs both 2 + 3
+                │
+                ▼
+        Phase 5 (Worker Workflows)
+                │
+                ▼
+        Phase 6 (Orchestrator + Cutover)
+```
+
+**Critical path:** 1 → 3 → 4 → 5 → 6 (Phase 2 runs alongside Phase 3, off critical path)
+**Calendar bottlenecks:** 48h validation windows in Phases 4 and 5
+
 - [ ] **Phase 1: Infrastructure Foundation** - n8n 2.9.0 running on Docker/WSL2 with PostgreSQL, Cloudflare Tunnel, WinSW autostart, all credentials stored, execution pruning configured
-- [ ] **Phase 2: Error Infrastructure** - WF-Error global handler active, canary heartbeat monitoring, pipeline_errors and pipeline_runs tables wired up
-- [ ] **Phase 3: Webhook Security and Supabase Integration** - HMAC-SHA256 signing proven end-to-end against all 4 existing Edge Functions
+- [ ] **Phase 2: Error Infrastructure + DB Tables** ⚡PARALLEL with Phase 3 - All Supabase tables (pipeline_errors, pipeline_runs, pipeline_dlq), WF-Error global handler, canary heartbeat
+- [ ] **Phase 3: Webhook Security** ⚡PARALLEL with Phase 2 - HMAC-SHA256 signing proven end-to-end against all 4 existing Edge Functions
 - [ ] **Phase 4: Leaf Workflows** - WF-5 (Status Poller) and WF-3 (Research Sub-Workflow) built, verified, and WF-5 replacing check-status Vercel cron
 - [ ] **Phase 5: Worker Workflows** - WF-4 (Publish Pipeline) and WF-2 (Media Pipeline) built, verified, and both Vercel crons replaced
 - [ ] **Phase 6: Orchestrator and Cutover** - WF-1 (Topic Pipeline) complete, dashboard button wired to n8n, all three Vercel crons removed
@@ -36,30 +58,33 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01-PLAN.md — Docker Compose + PostgreSQL 15 stack, n8n 2.9.0 pinned image, .env with N8N_ENCRYPTION_KEY/TZ/GENERIC_TIMEZONE/EXECUTIONS_DATA_PRUNE, n8n-workflows/ scaffold
-- [ ] 01-02-PLAN.md — Cloudflare Tunnel setup, WEBHOOK_URL update, port 5678 loopback isolation confirmed
-- [ ] 01-03-PLAN.md — WinSW service wrapper, High Performance power plan, sleep/hibernate disabled, reboot test
-- [ ] 01-04-PLAN.md — All 9 API credentials in n8n Credential Store, canary timezone validation workflow, Eastern Time confirmed
+- [x] 01-02-PLAN.md — Cloudflare Tunnel setup, WEBHOOK_URL update, port 5678 loopback isolation confirmed
+- [x] 01-03-PLAN.md — WinSW service wrapper, High Performance power plan, sleep/hibernate disabled, reboot test
+- [x] 01-04-PLAN.md — 8/9 API credentials in n8n Credential Store (Canva deferred), canary timezone validation confirmed Eastern Time
 
-### Phase 2: Error Infrastructure
-**Goal**: Every workflow failure produces an observable, queryable alert before any production workflow is activated — the Error Handler workflow is the global catch-all, canary heartbeat proves triggers are firing after reboots, and both Supabase tables exist for logging.
+### Phase 2: Error Infrastructure + DB Tables
+**Goal**: Every workflow failure produces an observable, queryable alert before any production workflow is activated — the Error Handler workflow is the global catch-all, canary heartbeat proves triggers are firing after reboots, and all Supabase pipeline tables exist for logging. All 3 pipeline tables (errors, runs, DLQ) are created in a single migration to avoid multiple deploy cycles.
 **Depends on**: Phase 1
-**Requirements**: ERR-01, ERR-02, ERR-03, MON-01, MON-02
+**Parallel with**: Phase 3 (no dependency between them)
+**Requirements**: ERR-01, ERR-02, ERR-03, MON-01, MON-02, ERR-05 (partial — DLQ table only)
 **Research flag**: No — Error Trigger workflow is a well-documented n8n primitive; Slack webhook integration is straightforward.
 **Success Criteria** (what must be TRUE):
   1. WF-Error is designated as the global error workflow in n8n settings; a deliberately broken test workflow triggers WF-Error and produces a Slack message containing workflow name, node name, error message, and timestamp
   2. A failing test workflow's error is inserted into the `pipeline_errors` Supabase table with correct fields (workflow_name, node_name, error_message, occurred_at) and is queryable from the dashboard
   3. Canary heartbeat workflow writes a timestamp to Supabase `pipeline_runs` every 1 minute; absence of a fresh row within 2 minutes is detectable by querying that table from outside n8n
   4. `pipeline_runs` table exists in Supabase and accepts inserts from n8n with correct schema (execution_id, workflow_name, status, started_at, completed_at, correlation_id)
+  5. `pipeline_dlq` table exists in Supabase with fields for workflow_name, correlation_id, payload, error, failed_at, retry_count — ready for Phase 5 workflows
 **Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: Supabase table creation — `pipeline_errors` and `pipeline_runs` DDL, confirm RLS policies allow n8n service key inserts
+- [ ] 02-01: Supabase table creation — `pipeline_errors`, `pipeline_runs`, AND `pipeline_dlq` DDL in a single migration, confirm RLS policies allow n8n service key inserts
 - [ ] 02-02: WF-Error global handler — Error Trigger node, Slack webhook alert node, Supabase insert to `pipeline_errors`, set as global error workflow in n8n settings, end-to-end test with broken workflow
 - [ ] 02-03: Canary heartbeat workflow — 1-minute Schedule Trigger, Supabase insert to `pipeline_runs`, confirm row freshness is monitorable externally
 
-### Phase 3: Webhook Security and Supabase Integration
+### Phase 3: Webhook Security
 **Goal**: n8n can sign outbound requests with HMAC-SHA256 and the existing Supabase Edge Functions accept those requests — the full n8n-to-Edge-Function round-trip is proven before any real data flows through it.
-**Depends on**: Phase 2
+**Depends on**: Phase 1 (n8n running)
+**Parallel with**: Phase 2 (no dependency between them)
 **Requirements**: SEC-02, SEC-03, INT-02
 **Research flag**: Yes — the raw body vs. parsed body issue (RP-3 in SUMMARY.md) makes `$request.body` buffer access in n8n 2.9.0 Code nodes a validation risk. Confirm the exact API before building all 4 HMAC validation nodes on it.
 **Success Criteria** (what must be TRUE):
@@ -75,7 +100,7 @@ Plans:
 
 ### Phase 4: Leaf Workflows
 **Goal**: WF-5 (Status Poller) and WF-3 (Research Sub-Workflow) are built, verified against live data, and WF-5 is replacing the `check-status` Vercel cron — the first production cutover confirms the full n8n-to-Next.js-to-Edge-Function integration chain works under real conditions.
-**Depends on**: Phase 3
+**Depends on**: Phase 2 AND Phase 3 (merge point — needs error tables + HMAC signing)
 **Requirements**: WF-03, WF-05, WF-06, INT-01, INT-03, SEC-05, ERR-04, CUT-01, CUT-02
 **Research flag**: No — WF-5 mirrors existing `check-status` cron logic exactly; business logic already exists in Next.js routes.
 **Success Criteria** (what must be TRUE):
@@ -104,14 +129,13 @@ Plans:
   3. `pipeline_dlq` Supabase table exists and receives inserts for any WF-2 or WF-4 failure that exhausts all retries — each DLQ row contains enough information to manually replay the failed operation
   4. After 48 hours of WF-4 results matching the Vercel `daily-publish` cron output, that cron is removed from `vercel.json`
   5. After 48 hours of WF-2 results matching the Vercel `daily-media` cron output, that cron is removed from `vercel.json`
-**Plans**: 5 plans
+**Plans**: 4 plans (DLQ table moved to Phase 2 migration)
 
 Plans:
-- [ ] 05-01: `pipeline_dlq` table DDL — Supabase migration for Dead Letter Queue table with fields for workflow_name, correlation_id, payload, error, failed_at, retry_count
-- [ ] 05-02: WF-4 Publish Pipeline — hourly cron + webhook trigger, `workflow_locks` acquisition, `/api/cron/daily-publish` call, `n8n-publish-callback` write-back per platform, DLQ insert on unrecoverable failure
-- [ ] 05-03: WF-2 concurrency spike — test workflow with 6 parallel branches to confirm `N8N_CONCURRENCY_PRODUCTION_LIMIT` behavior; document whether batching is required and adjust implementation plan
-- [ ] 05-04: WF-2 Media Pipeline — 6AM cron + webhook trigger, `workflow_locks` acquisition, 6-branch parallel fan-out per topic, `n8n-asset-callback` write-back per branch, DLQ insert on branch failure
-- [ ] 05-05: Worker cron cutover — 48h parallel runs for both WF-4 and WF-2, validate results match Vercel crons, remove `daily-publish` and `daily-media` from `vercel.json`
+- [ ] 05-01: WF-4 Publish Pipeline — hourly cron + webhook trigger, `workflow_locks` acquisition, `/api/cron/daily-publish` call, `n8n-publish-callback` write-back per platform, DLQ insert on unrecoverable failure
+- [ ] 05-02: WF-2 concurrency spike — test workflow with 6 parallel branches to confirm `N8N_CONCURRENCY_PRODUCTION_LIMIT` behavior; document whether batching is required and adjust implementation plan
+- [ ] 05-03: WF-2 Media Pipeline — 6AM cron + webhook trigger, `workflow_locks` acquisition, 6-branch parallel fan-out per topic, `n8n-asset-callback` write-back per branch, DLQ insert on branch failure
+- [ ] 05-04: Worker cron cutover — 48h parallel runs for both WF-4 and WF-2, validate results match Vercel crons, remove `daily-publish` and `daily-media` from `vercel.json`
 
 ### Phase 6: Orchestrator and Cutover
 **Goal**: WF-1 (Topic Pipeline) completes the dependency graph — the dashboard "Generate" button fires n8n, WF-1 calls WF-3 synchronously and WF-2 asynchronously, and all three Vercel crons are permanently disabled after verified stable operation.
@@ -134,13 +158,16 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+```
+1 → [2 + 3 parallel] → 4 → 5 → 6
+```
+5 sequential steps, 21 plans total (was 22 — DLQ table absorbed into Phase 2)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Infrastructure Foundation | 1/4 | In progress | - |
-| 2. Error Infrastructure | 0/3 | Not started | - |
-| 3. Webhook Security and Supabase Integration | 0/3 | Not started | - |
-| 4. Leaf Workflows | 0/4 | Not started | - |
-| 5. Worker Workflows | 0/5 | Not started | - |
+| 1. Infrastructure Foundation | 4/4 | COMPLETE | 2026-02-26 |
+| 2. Error Infrastructure + DB Tables | 0/3 | Not started (parallel with 3) | - |
+| 3. Webhook Security | 0/3 | Not started (parallel with 2) | - |
+| 4. Leaf Workflows | 0/4 | Not started (blocked by 2+3) | - |
+| 5. Worker Workflows | 0/4 | Not started | - |
 | 6. Orchestrator and Cutover | 0/3 | Not started | - |
