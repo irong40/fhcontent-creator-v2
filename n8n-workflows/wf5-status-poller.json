@@ -121,6 +121,17 @@
       "typeVersion": 2,
       "position": [1170, 480]
     },
+
+    {
+      "parameters": {
+        "jsCode": "// Initialize retry context for Log Run Start\nreturn [{ json: { ...$('Set Correlation Context').item.json, _attempt: 0, _target: 'log-start' } }];"
+      },
+      "id": "wf5-retry-init-log-start",
+      "name": "Init Retry - Log Start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1170, 120]
+    },
     {
       "parameters": {
         "method": "POST",
@@ -155,7 +166,7 @@
       "name": "Log Run Start",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1170, 120],
+      "position": [1400, 120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "",
@@ -163,6 +174,76 @@
         }
       },
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify error from Log Run Start\nconst statusCode = $input.item.json.statusCode || $input.item.json.code || 0;\nconst retryable = statusCode === 429 || statusCode >= 500;\nconst attempt = $input.item.json._attempt || 0;\nreturn [{ json: { ...$input.item.json, _retryable: retryable, _attempt: attempt } }];"
+      },
+      "id": "wf5-classify-log-start",
+      "name": "Classify Error - Log Start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 320]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "retry-log-start", "leftValue": "={{ $json._retryable }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-retryable-log-start",
+      "name": "Retryable? - Log Start",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1630, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Increment attempt for Log Run Start retry\nconst attempt = ($input.item.json._attempt || 0) + 1;\nconst waitSeconds = Math.pow(2, attempt);\nreturn [{ json: { ...$input.item.json, _attempt: attempt, _wait_seconds: waitSeconds, _exhausted: attempt > 3 } }];"
+      },
+      "id": "wf5-increment-log-start",
+      "name": "Increment Attempt - Log Start",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1860, 240]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "exhausted-log-start", "leftValue": "={{ $json._exhausted }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-exhausted-log-start",
+      "name": "Exhausted? - Log Start",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2090, 240]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json._wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "wf5-backoff-log-start",
+      "name": "Backoff - Log Start",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2320, 180]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// Initialize retry context for Check-Status call\nreturn [{ json: { ...$input.item.json, _attempt: 0, _target: 'check-status' } }];"
+      },
+      "id": "wf5-retry-init-check-status",
+      "name": "Init Retry - Check Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1630, 120]
     },
     {
       "parameters": {
@@ -196,7 +277,7 @@
       "name": "Call Check-Status Route",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1400, 120],
+      "position": [1860, 120],
       "credentials": {
         "httpHeaderAuth": {
           "id": "",
@@ -207,33 +288,79 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.item.json;\nconst correlationId = $('Set Correlation Context').item.json.run_id;\n\n// check-status returns array of updated content pieces\nconst pieces = Array.isArray(response.updated) ? response.updated : [];\n\nif (pieces.length === 0) {\n  // No updates — return a single item to continue the flow for logging\n  return [{\n    json: {\n      _no_updates: true,\n      correlation_id: correlationId,\n      checked_at: new Date().toISOString()\n    }\n  }];\n}\n\nreturn pieces.map(piece => ({\n  json: {\n    content_piece_id: piece.id,\n    status: piece.status,\n    platform: piece.platform,\n    video_url: piece.video_url || null,\n    correlation_id: correlationId,\n    checked_at: new Date().toISOString()\n  }\n}));"
+        "jsCode": "// Classify error from Call Check-Status Route\nconst statusCode = $input.item.json.statusCode || $input.item.json.code || 0;\nconst retryable = statusCode === 429 || statusCode >= 500;\nconst attempt = $input.item.json._attempt || 0;\nreturn [{ json: { ...$input.item.json, _retryable: retryable, _attempt: attempt } }];"
+      },
+      "id": "wf5-classify-check-status",
+      "name": "Classify Error - Check Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1860, 540]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "retry-check-status", "leftValue": "={{ $json._retryable }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-retryable-check-status",
+      "name": "Retryable? - Check Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2090, 540]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Increment attempt for Check-Status retry\nconst attempt = ($input.item.json._attempt || 0) + 1;\nconst waitSeconds = Math.pow(2, attempt);\nreturn [{ json: { ...$input.item.json, _attempt: attempt, _wait_seconds: waitSeconds, _exhausted: attempt > 3 } }];"
+      },
+      "id": "wf5-increment-check-status",
+      "name": "Increment Attempt - Check Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2320, 460]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "exhausted-check-status", "leftValue": "={{ $json._exhausted }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-exhausted-check-status",
+      "name": "Exhausted? - Check Status",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2550, 460]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json._wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "wf5-backoff-check-status",
+      "name": "Backoff - Check Status",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2780, 400]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\nconst correlationId = $('Set Correlation Context').item.json.run_id;\n\n// check-status returns array of updated content pieces\nconst pieces = Array.isArray(response.updated) ? response.updated : [];\n\nif (pieces.length === 0) {\n  return [{\n    json: {\n      _no_updates: true,\n      correlation_id: correlationId,\n      checked_at: new Date().toISOString()\n    }\n  }];\n}\n\nreturn pieces.map(piece => ({\n  json: {\n    content_piece_id: piece.id,\n    status: piece.status,\n    platform: piece.platform,\n    video_url: piece.video_url || null,\n    correlation_id: correlationId,\n    checked_at: new Date().toISOString()\n  }\n}));"
       },
       "id": "wf5-parse",
       "name": "Parse Check-Status Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1630, 120]
+      "position": [2090, 120]
     },
     {
       "parameters": {
         "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "has-updates",
-              "leftValue": "={{ $json._no_updates }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "notTrue"
-              }
-            }
-          ],
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "has-updates", "leftValue": "={{ $json._no_updates }}", "rightValue": true, "operator": { "type": "boolean", "operation": "notTrue" } }],
           "combinator": "and"
         }
       },
@@ -241,17 +368,17 @@
       "name": "Has Updates?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1860, 120]
+      "position": [2320, 120]
     },
     {
       "parameters": {
-        "jsCode": "// Build HMAC signature for the asset callback\nconst crypto = require('crypto');\nconst secret = '={{ $credentials[\"N8N Signing Secret\"].value }}';\nconst body = JSON.stringify($input.item.json);\nconst sig = crypto\n  .createHmac('sha256', secret)\n  .update(body)\n  .digest('hex');\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    _hmac: 'sha256=' + sig,\n    _body: body\n  }\n}];"
+        "jsCode": "// Build HMAC signature for the asset callback\nconst crypto = require('crypto');\nconst secret = '={{ $credentials[\"N8N Signing Secret\"].value }}';\nconst body = JSON.stringify($input.item.json);\nconst sig = crypto\n  .createHmac('sha256', secret)\n  .update(body)\n  .digest('hex');\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    _hmac: 'sha256=' + sig,\n    _body: body,\n    _attempt: 0\n  }\n}];"
       },
       "id": "wf5-hmac",
       "name": "Build HMAC Signature",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [2090, -20]
+      "position": [2550, -20]
     },
     {
       "parameters": {
@@ -260,22 +387,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "X-N8N-Signature",
-              "value": "={{ $json._hmac }}"
-            },
-            {
-              "name": "X-Correlation-ID",
-              "value": "={{ $json.correlation_id }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}"
-            }
+            { "name": "X-N8N-Signature", "value": "={{ $json._hmac }}" },
+            { "name": "X-Correlation-ID", "value": "={{ $json.correlation_id }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}" }
           ]
         },
         "sendBody": true,
@@ -287,14 +402,119 @@
       "name": "POST to Asset Callback",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2320, -20],
+      "position": [2780, -20],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "",
-          "name": "Supabase Service Role"
-        }
+        "httpHeaderAuth": { "id": "", "name": "Supabase Service Role" }
       },
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify error from POST to Asset Callback\nconst statusCode = $input.item.json.statusCode || $input.item.json.code || 0;\nconst retryable = statusCode === 429 || statusCode >= 500;\nconst attempt = $input.item.json._attempt || 0;\nreturn [{ json: { ...$input.item.json, _retryable: retryable, _attempt: attempt } }];"
+      },
+      "id": "wf5-classify-asset-callback",
+      "name": "Classify Error - Asset Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2780, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "retry-asset", "leftValue": "={{ $json._retryable }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-retryable-asset-callback",
+      "name": "Retryable? - Asset Callback",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3010, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Increment attempt for Asset Callback retry\nconst attempt = ($input.item.json._attempt || 0) + 1;\nconst waitSeconds = Math.pow(2, attempt);\nreturn [{ json: { ...$input.item.json, _attempt: attempt, _wait_seconds: waitSeconds, _exhausted: attempt > 3 } }];"
+      },
+      "id": "wf5-increment-asset-callback",
+      "name": "Increment Attempt - Asset Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3240, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "exhausted-asset", "leftValue": "={{ $json._exhausted }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-exhausted-asset-callback",
+      "name": "Exhausted? - Asset Callback",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3470, 100]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json._wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "wf5-backoff-asset-callback",
+      "name": "Backoff - Asset Callback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3700, 40]
+    },
+    {
+      "parameters": {
+        "jsCode": "// DLQ insert for undeliverable callback after retry exhaustion\nreturn [{\n  json: {\n    workflow_name: 'WF-5',\n    correlation_id: $input.item.json.correlation_id || '',\n    payload: JSON.stringify($input.item.json),\n    error: $input.item.json.error?.message || 'Asset callback failed after 3 retries',\n    failed_at: new Date().toISOString(),\n    retry_count: 3\n  }\n}];"
+      },
+      "id": "wf5-dlq-asset-callback",
+      "name": "Build DLQ Entry - Asset Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3700, 160]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://qjpujskwqaehxnqypxzu.supabase.co/rest/v1/pipeline_dlq",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $credentials[\"Supabase Service Role\"].value }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "wf5-dlq-insert",
+      "name": "Insert DLQ - Asset Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3930, 160],
+      "credentials": {
+        "httpHeaderAuth": { "id": "", "name": "Supabase Service Role" }
+      },
+      "onError": "continueRegularOutput"
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// Initialize retry context for Release Lock (5 attempts for critical lock release)\nreturn [{ json: { ...$input.item.json, _attempt: 0, _target: 'lock-release' } }];"
+      },
+      "id": "wf5-retry-init-lock-release",
+      "name": "Init Retry - Lock Release",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3240, -200]
     },
     {
       "parameters": {
@@ -303,14 +523,8 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "x-cron-secret",
-              "value": "={{ $credentials[\"Vercel Cron Secret\"].value }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
+            { "name": "x-cron-secret", "value": "={{ $credentials[\"Vercel Cron Secret\"].value }}" },
+            { "name": "Content-Type", "value": "application/json" }
           ]
         },
         "sendBody": true,
@@ -322,14 +536,81 @@
       "name": "Release Workflow Lock",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2550, 120],
+      "position": [3470, -200],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "",
-          "name": "Vercel Cron Secret"
-        }
+        "httpHeaderAuth": { "id": "", "name": "Vercel Cron Secret" }
       },
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Classify error from Release Workflow Lock\nconst statusCode = $input.item.json.statusCode || $input.item.json.code || 0;\nconst retryable = statusCode === 429 || statusCode >= 500;\nconst attempt = $input.item.json._attempt || 0;\nreturn [{ json: { ...$input.item.json, _retryable: retryable, _attempt: attempt } }];"
+      },
+      "id": "wf5-classify-lock-release",
+      "name": "Classify Error - Lock Release",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3470, -40]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "retry-lock", "leftValue": "={{ $json._retryable }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-retryable-lock-release",
+      "name": "Retryable? - Lock Release",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3700, -40]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Increment attempt for Lock Release retry — 5 max attempts (critical path)\nconst attempt = ($input.item.json._attempt || 0) + 1;\nconst waitSeconds = Math.pow(2, attempt);\nreturn [{ json: { ...$input.item.json, _attempt: attempt, _wait_seconds: waitSeconds, _exhausted: attempt > 5 } }];"
+      },
+      "id": "wf5-increment-lock-release",
+      "name": "Increment Attempt - Lock Release",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3930, -120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "exhausted-lock", "leftValue": "={{ $json._exhausted }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-exhausted-lock-release",
+      "name": "Exhausted? - Lock Release",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [4160, -120]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json._wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "wf5-backoff-lock-release",
+      "name": "Backoff - Lock Release",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [4390, -200]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// Initialize retry context for Log Run Complete\nreturn [{ json: { ...$input.item.json, _attempt: 0, _target: 'log-complete' } }];"
+      },
+      "id": "wf5-retry-init-log-complete",
+      "name": "Init Retry - Log Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3700, -280]
     },
     {
       "parameters": {
@@ -338,22 +619,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "apikey",
-              "value": "={{ $credentials[\"Supabase Service Role\"].value }}"
-            },
-            {
-              "name": "Authorization",
-              "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            },
-            {
-              "name": "Prefer",
-              "value": "return=minimal"
-            }
+            { "name": "apikey", "value": "={{ $credentials[\"Supabase Service Role\"].value }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $credentials[\"Supabase Service Role\"].value }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
           ]
         },
         "sendBody": true,
@@ -365,23 +634,77 @@
       "name": "Log Run Complete",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2780, 120],
+      "position": [3930, -280],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "",
-          "name": "Supabase Service Role"
-        }
+        "httpHeaderAuth": { "id": "", "name": "Supabase Service Role" }
       },
       "onError": "continueRegularOutput"
     },
     {
       "parameters": {
+        "jsCode": "// Classify error from Log Run Complete\nconst statusCode = $input.item.json.statusCode || $input.item.json.code || 0;\nconst retryable = statusCode === 429 || statusCode >= 500;\nconst attempt = $input.item.json._attempt || 0;\nreturn [{ json: { ...$input.item.json, _retryable: retryable, _attempt: attempt } }];"
+      },
+      "id": "wf5-classify-log-complete",
+      "name": "Classify Error - Log Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3930, -440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "retry-log-complete", "leftValue": "={{ $json._retryable }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-retryable-log-complete",
+      "name": "Retryable? - Log Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [4160, -440]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Increment attempt for Log Run Complete retry\nconst attempt = ($input.item.json._attempt || 0) + 1;\nconst waitSeconds = Math.pow(2, attempt);\nreturn [{ json: { ...$input.item.json, _attempt: attempt, _wait_seconds: waitSeconds, _exhausted: attempt > 3 } }];"
+      },
+      "id": "wf5-increment-log-complete",
+      "name": "Increment Attempt - Log Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4390, -520]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "exhausted-log-complete", "leftValue": "={{ $json._exhausted }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "wf5-exhausted-log-complete",
+      "name": "Exhausted? - Log Complete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [4620, -520]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json._wait_seconds }}",
+        "unit": "seconds"
+      },
+      "id": "wf5-backoff-log-complete",
+      "name": "Backoff - Log Complete",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [4850, -600]
+    },
+
+    {
+      "parameters": {
         "workflowId": {
           "__rl": true,
-          "__depictor": {
-            "mode": "name",
-            "value": "WF-Error-Handler"
-          }
+          "__depictor": { "mode": "name", "value": "WF-Error-Handler" }
         },
         "options": {}
       },
@@ -389,144 +712,192 @@
       "name": "Route to WF-Error",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.2,
-      "position": [1630, 360]
+      "position": [4160, 400]
     }
   ],
   "connections": {
     "Every 10 Minutes": {
-      "main": [
-        [
-          {
-            "node": "Set Correlation Context",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Set Correlation Context", "type": "main", "index": 0 }]]
     },
     "Set Correlation Context": {
-      "main": [
-        [
-          {
-            "node": "Acquire Workflow Lock",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Acquire Workflow Lock", "type": "main", "index": 0 }]]
     },
     "Acquire Workflow Lock": {
-      "main": [
-        [
-          {
-            "node": "Lock Acquired?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Lock Acquired?", "type": "main", "index": 0 }]]
     },
     "Lock Acquired?": {
       "main": [
-        [
-          {
-            "node": "Log Run Start",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Already Running - Skip",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Init Retry - Log Start", "type": "main", "index": 0 }],
+        [{ "node": "Already Running - Skip", "type": "main", "index": 0 }]
       ]
+    },
+
+    "Init Retry - Log Start": {
+      "main": [[{ "node": "Log Run Start", "type": "main", "index": 0 }]]
     },
     "Log Run Start": {
       "main": [
-        [
-          {
-            "node": "Call Check-Status Route",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Init Retry - Check Status", "type": "main", "index": 0 }],
+        [{ "node": "Classify Error - Log Start", "type": "main", "index": 0 }]
       ]
+    },
+    "Classify Error - Log Start": {
+      "main": [[{ "node": "Retryable? - Log Start", "type": "main", "index": 0 }]]
+    },
+    "Retryable? - Log Start": {
+      "main": [
+        [{ "node": "Increment Attempt - Log Start", "type": "main", "index": 0 }],
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Increment Attempt - Log Start": {
+      "main": [[{ "node": "Exhausted? - Log Start", "type": "main", "index": 0 }]]
+    },
+    "Exhausted? - Log Start": {
+      "main": [
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }],
+        [{ "node": "Backoff - Log Start", "type": "main", "index": 0 }]
+      ]
+    },
+    "Backoff - Log Start": {
+      "main": [[{ "node": "Log Run Start", "type": "main", "index": 0 }]]
+    },
+
+    "Init Retry - Check Status": {
+      "main": [[{ "node": "Call Check-Status Route", "type": "main", "index": 0 }]]
     },
     "Call Check-Status Route": {
       "main": [
-        [
-          {
-            "node": "Parse Check-Status Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Parse Check-Status Response", "type": "main", "index": 0 }],
+        [{ "node": "Classify Error - Check Status", "type": "main", "index": 0 }]
       ]
     },
-    "Parse Check-Status Response": {
+    "Classify Error - Check Status": {
+      "main": [[{ "node": "Retryable? - Check Status", "type": "main", "index": 0 }]]
+    },
+    "Retryable? - Check Status": {
       "main": [
-        [
-          {
-            "node": "Has Updates?",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Increment Attempt - Check Status", "type": "main", "index": 0 }],
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }]
       ]
+    },
+    "Increment Attempt - Check Status": {
+      "main": [[{ "node": "Exhausted? - Check Status", "type": "main", "index": 0 }]]
+    },
+    "Exhausted? - Check Status": {
+      "main": [
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }],
+        [{ "node": "Backoff - Check Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Backoff - Check Status": {
+      "main": [[{ "node": "Call Check-Status Route", "type": "main", "index": 0 }]]
+    },
+
+    "Parse Check-Status Response": {
+      "main": [[{ "node": "Has Updates?", "type": "main", "index": 0 }]]
     },
     "Has Updates?": {
       "main": [
-        [
-          {
-            "node": "Build HMAC Signature",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Release Workflow Lock",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Build HMAC Signature", "type": "main", "index": 0 }],
+        [{ "node": "Init Retry - Lock Release", "type": "main", "index": 0 }]
       ]
     },
+
     "Build HMAC Signature": {
-      "main": [
-        [
-          {
-            "node": "POST to Asset Callback",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "POST to Asset Callback", "type": "main", "index": 0 }]]
     },
     "POST to Asset Callback": {
       "main": [
-        [
-          {
-            "node": "Release Workflow Lock",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Init Retry - Lock Release", "type": "main", "index": 0 }],
+        [{ "node": "Classify Error - Asset Callback", "type": "main", "index": 0 }]
       ]
+    },
+    "Classify Error - Asset Callback": {
+      "main": [[{ "node": "Retryable? - Asset Callback", "type": "main", "index": 0 }]]
+    },
+    "Retryable? - Asset Callback": {
+      "main": [
+        [{ "node": "Increment Attempt - Asset Callback", "type": "main", "index": 0 }],
+        [{ "node": "Build DLQ Entry - Asset Callback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Increment Attempt - Asset Callback": {
+      "main": [[{ "node": "Exhausted? - Asset Callback", "type": "main", "index": 0 }]]
+    },
+    "Exhausted? - Asset Callback": {
+      "main": [
+        [{ "node": "Build DLQ Entry - Asset Callback", "type": "main", "index": 0 }],
+        [{ "node": "Backoff - Asset Callback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Backoff - Asset Callback": {
+      "main": [[{ "node": "POST to Asset Callback", "type": "main", "index": 0 }]]
+    },
+    "Build DLQ Entry - Asset Callback": {
+      "main": [[{ "node": "Insert DLQ - Asset Callback", "type": "main", "index": 0 }]]
+    },
+
+    "Init Retry - Lock Release": {
+      "main": [[{ "node": "Release Workflow Lock", "type": "main", "index": 0 }]]
     },
     "Release Workflow Lock": {
       "main": [
-        [
-          {
-            "node": "Log Run Complete",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Init Retry - Log Complete", "type": "main", "index": 0 }],
+        [{ "node": "Classify Error - Lock Release", "type": "main", "index": 0 }]
       ]
+    },
+    "Classify Error - Lock Release": {
+      "main": [[{ "node": "Retryable? - Lock Release", "type": "main", "index": 0 }]]
+    },
+    "Retryable? - Lock Release": {
+      "main": [
+        [{ "node": "Increment Attempt - Lock Release", "type": "main", "index": 0 }],
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Increment Attempt - Lock Release": {
+      "main": [[{ "node": "Exhausted? - Lock Release", "type": "main", "index": 0 }]]
+    },
+    "Exhausted? - Lock Release": {
+      "main": [
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }],
+        [{ "node": "Backoff - Lock Release", "type": "main", "index": 0 }]
+      ]
+    },
+    "Backoff - Lock Release": {
+      "main": [[{ "node": "Release Workflow Lock", "type": "main", "index": 0 }]]
+    },
+
+    "Init Retry - Log Complete": {
+      "main": [[{ "node": "Log Run Complete", "type": "main", "index": 0 }]]
+    },
+    "Log Run Complete": {
+      "main": [
+        [],
+        [{ "node": "Classify Error - Log Complete", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classify Error - Log Complete": {
+      "main": [[{ "node": "Retryable? - Log Complete", "type": "main", "index": 0 }]]
+    },
+    "Retryable? - Log Complete": {
+      "main": [
+        [{ "node": "Increment Attempt - Log Complete", "type": "main", "index": 0 }],
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Increment Attempt - Log Complete": {
+      "main": [[{ "node": "Exhausted? - Log Complete", "type": "main", "index": 0 }]]
+    },
+    "Exhausted? - Log Complete": {
+      "main": [
+        [{ "node": "Route to WF-Error", "type": "main", "index": 0 }],
+        [{ "node": "Backoff - Log Complete", "type": "main", "index": 0 }]
+      ]
+    },
+    "Backoff - Log Complete": {
+      "main": [[{ "node": "Log Run Complete", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
@@ -534,11 +905,7 @@
     "errorWorkflow": "WF-Error-Handler"
   },
   "tags": [
-    {
-      "name": "production"
-    },
-    {
-      "name": "leaf-workflow"
-    }
+    { "name": "production" },
+    { "name": "leaf-workflow" }
   ]
 }
