@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Reliable, observable content pipeline orchestration where every step is visible, retryable, and debuggable through n8n's visual workflow editor — replacing opaque 300-second Vercel cron jobs that fail silently.
-**Current focus:** Phase 1 — Infrastructure Foundation
+**Current focus:** Phase 4 — Leaf Workflows
 
 ## Current Position
 
-Phase: 2+3 of 6 (Error Infra + Webhook Security — PARALLEL)
-Plan: 0 of 6 in current phases
+Phase: 4 of 6 (Leaf Workflows)
+Plan: 0 of 4 in current phase
 Status: Ready to start
-Last activity: 2026-02-26 — Phase 1 COMPLETE: 4/4 plans done, 8 credentials, timezone validated
+Last activity: 2026-02-27 — Phases 2+3 COMPLETE: migration applied, WF-Error + canary + HMAC validated
 
-Progress: [████░░░░░░] 19%
+Progress: [██████░░░░] 52%
 
 ## Performance Metrics
 
@@ -28,6 +28,8 @@ Progress: [████░░░░░░] 19%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-infrastructure-foundation | 4/4 DONE | 41 min | 10.3 min |
+| 02-error-infrastructure | 3/3 DONE | — | — |
+| 03-webhook-security | 3/3 DONE | — | — |
 
 *Updated after each plan completion*
 
@@ -60,7 +62,7 @@ Progress: [████░░░░░░] 19%
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: Phase 1 COMPLETE. Phases 2+3 ready to start in parallel (error infra + webhook security)
+Last session: 2026-02-27
+Stopped at: Phases 2+3 COMPLETE. Phase 4 (Leaf Workflows) ready to start.
 Resume file: None
-Next action: /gsd:plan-phase for Phase 2 and Phase 3 (can be planned in parallel)
+Next action: /gsd:plan-phase for Phase 4

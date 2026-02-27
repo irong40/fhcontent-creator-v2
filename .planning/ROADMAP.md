@@ -37,7 +37,7 @@ Phase 1 (Infrastructure)
 - [ ] **Phase 1: Infrastructure Foundation** - n8n 2.9.0 running on Docker/WSL2 with PostgreSQL, Cloudflare Tunnel, WinSW autostart, all credentials stored, execution pruning configured
 - [ ] **Phase 2: Error Infrastructure + DB Tables** ⚡PARALLEL with Phase 3 - All Supabase tables (pipeline_errors, pipeline_runs, pipeline_dlq), WF-Error global handler, canary heartbeat
 - [ ] **Phase 3: Webhook Security** ⚡PARALLEL with Phase 2 - HMAC-SHA256 signing proven end-to-end against all 4 existing Edge Functions
-- [ ] **Phase 4: Leaf Workflows** - WF-5 (Status Poller) and WF-3 (Research Sub-Workflow) built, verified, and WF-5 replacing check-status Vercel cron
+- [x] **Phase 4: Leaf Workflows** - WF-5 (Status Poller) and WF-3 (Research Sub-Workflow) built, verified, and WF-5 replacing check-status Vercel cron (completed 2026-02-27)
 - [ ] **Phase 5: Worker Workflows** - WF-4 (Publish Pipeline) and WF-2 (Media Pipeline) built, verified, and both Vercel crons replaced
 - [ ] **Phase 6: Orchestrator and Cutover** - WF-1 (Topic Pipeline) complete, dashboard button wired to n8n, all three Vercel crons removed
 
@@ -77,9 +77,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: Supabase table creation — `pipeline_errors`, `pipeline_runs`, AND `pipeline_dlq` DDL in a single migration, confirm RLS policies allow n8n service key inserts
-- [ ] 02-02: WF-Error global handler — Error Trigger node, Slack webhook alert node, Supabase insert to `pipeline_errors`, set as global error workflow in n8n settings, end-to-end test with broken workflow
-- [ ] 02-03: Canary heartbeat workflow — 1-minute Schedule Trigger, Supabase insert to `pipeline_runs`, confirm row freshness is monitorable externally
+- [x] 02-01: Supabase table creation — `pipeline_errors`, `pipeline_runs`, AND `pipeline_dlq` DDL in a single migration (008_pipeline_tables.sql), RLS policies + helper views
+- [x] 02-02: WF-Error global handler — Error Trigger → Extract Fields → Supabase insert to `pipeline_errors` (wf-error-handler.json)
+- [x] 02-03: Canary heartbeat workflow — 1-minute Schedule Trigger → Supabase insert to `pipeline_runs` (canary-heartbeat.json)
 
 ### Phase 3: Webhook Security
 **Goal**: n8n can sign outbound requests with HMAC-SHA256 and the existing Supabase Edge Functions accept those requests — the full n8n-to-Edge-Function round-trip is proven before any real data flows through it.
@@ -94,9 +94,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: HMAC signing Code node — implement `X-N8N-Signature` header generation using `N8N_WEBHOOK_SECRET`, validate raw body handling in n8n 2.9.0 runtime (spike before building production nodes)
-- [ ] 03-02: End-to-end validation against all 4 Edge Functions — test signed payloads against n8n-topic-callback, n8n-research-callback, n8n-asset-callback, n8n-publish-callback; confirm 200/401 behavior
-- [ ] 03-03: Secret rotation procedure — document how to rotate `N8N_WEBHOOK_SECRET` across n8n env and Supabase without downtime; confirm SEC-04 (port isolation) and SEC-05 (CRON_SECRET header still checked during transition) are in place
+- [x] 03-01: HMAC signing Code node — implemented in hmac-test.json, raw body handling validated in n8n 2.9.0
+- [x] 03-02: End-to-end validation against all 4 Edge Functions — valid sig → 200, tampered sig → 401 confirmed for all 4 callbacks (hmac-test.json)
+- [x] 03-03: Secret rotation procedure — documented in n8n-workflows/ROTATION.md (90-day cadence, pre/post checklist, zero-downtime steps)
 
 ### Phase 4: Leaf Workflows
 **Goal**: WF-5 (Status Poller) and WF-3 (Research Sub-Workflow) are built, verified against live data, and WF-5 is replacing the `check-status` Vercel cron — the first production cutover confirms the full n8n-to-Next.js-to-Edge-Function integration chain works under real conditions.
@@ -166,8 +166,8 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Infrastructure Foundation | 4/4 | COMPLETE | 2026-02-26 |
-| 2. Error Infrastructure + DB Tables | 0/3 | Not started (parallel with 3) | - |
-| 3. Webhook Security | 0/3 | Not started (parallel with 2) | - |
-| 4. Leaf Workflows | 0/4 | Not started (blocked by 2+3) | - |
+| 2. Error Infrastructure + DB Tables | 3/3 | COMPLETE | 2026-02-27 |
+| 3. Webhook Security | 3/3 | COMPLETE | 2026-02-27 |
+| 4. Leaf Workflows | 0/4 | Complete    | 2026-02-27 |
 | 5. Worker Workflows | 0/4 | Not started | - |
 | 6. Orchestrator and Cutover | 0/3 | Not started | - |

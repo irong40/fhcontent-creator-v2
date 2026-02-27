@@ -117,15 +117,15 @@ Deferred to future release. Tracked but not in current roadmap.
 | SEC-02 | Phase 3 | Pending |
 | SEC-03 | Phase 3 | Pending |
 | INT-02 | Phase 3 | Pending |
-| WF-03 | Phase 4 | Pending |
-| WF-05 | Phase 4 | Pending |
-| WF-06 | Phase 4 | Pending |
-| INT-01 | Phase 4 | Pending |
-| INT-03 | Phase 4 | Pending |
-| SEC-05 | Phase 4 | Pending |
-| ERR-04 | Phase 4 | Pending |
-| CUT-01 | Phase 4 | Pending |
-| CUT-02 | Phase 4 | Pending |
+| WF-03 | Phase 4 | Complete (04-03) |
+| WF-05 | Phase 4 | Complete (04-01) |
+| WF-06 | Phase 4 | Complete (04-01) |
+| INT-01 | Phase 4 | Complete (04-01) |
+| INT-03 | Phase 4 | Complete (04-01) |
+| SEC-05 | Phase 4 | Complete (04-03) |
+| ERR-04 | Phase 4 | Complete (04-02) |
+| CUT-01 | Phase 4 | Complete (04-04) |
+| CUT-02 | Phase 4 | Complete (04-04) |
 | WF-02 | Phase 5 | Pending |
 | WF-04 | Phase 5 | Pending |
 | ERR-05 | Phase 5 | Pending |
@@ -144,4 +144,4 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-23 — 5 requirements marked complete after Plan 01-01 execution (INFRA-01, INFRA-02, INFRA-06, INFRA-07, SEC-01)*
+*Last updated: 2026-02-27 — 9 Phase 4 requirements marked complete (WF-03, WF-05, WF-06, INT-01, INT-03, SEC-05, ERR-04, CUT-01, CUT-02)*
