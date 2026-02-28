@@ -497,6 +497,12 @@ export interface Database {
                     cta_template: string | null;
                     music_style: string | null;
                     podcast_outro_cta: string | null;
+                    intro_text_template: string | null;
+                    outro_text_template: string | null;
+                    background_image_url: string | null;
+                    intro_style: string | null;
+                    outro_style: string | null;
+                    brand_color: string | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -509,6 +515,12 @@ export interface Database {
                     cta_template?: string | null;
                     music_style?: string | null;
                     podcast_outro_cta?: string | null;
+                    intro_text_template?: string | null;
+                    outro_text_template?: string | null;
+                    background_image_url?: string | null;
+                    intro_style?: string | null;
+                    outro_style?: string | null;
+                    brand_color?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -521,6 +533,12 @@ export interface Database {
                     cta_template?: string | null;
                     music_style?: string | null;
                     podcast_outro_cta?: string | null;
+                    intro_text_template?: string | null;
+                    outro_text_template?: string | null;
+                    background_image_url?: string | null;
+                    intro_style?: string | null;
+                    outro_style?: string | null;
+                    brand_color?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -832,4 +850,8 @@ export type ContentPieceUpdate = Database['public']['Tables']['content_pieces'][
 // Join types (Supabase select with nested relations)
 export interface TopicWithPersona extends Topic {
     personas: Persona;
+}
+
+export interface TopicWithBrand extends Topic {
+    personas: Persona & { brands: Brand | null };
 }

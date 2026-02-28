@@ -32,6 +32,16 @@ export function estimateDalleCost(count: number, quality: 'standard' | 'hd' = 's
   return count * perImage;
 }
 
+/** Replace {token} placeholders in a template string. Unknown tokens are left as-is. */
+export function interpolateTemplate(
+  template: string,
+  vars: Record<string, string>,
+): string {
+  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
+    key in vars ? vars[key] : match,
+  );
+}
+
 /** Decode a base64 string to an ArrayBuffer */
 export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryStr = atob(base64);

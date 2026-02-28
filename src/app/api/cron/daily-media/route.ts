@@ -11,12 +11,88 @@ import { estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from '
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
-import type { ContentPiece, TopicWithPersona, PieceType, CarouselSlide } from '@/types/database';
+import { interpolateTemplate } from '@/lib/utils';
+import type { HeyGenScene } from '@/lib/heygen';
+import type { ContentPiece, TopicWithBrand, Brand, Persona, Topic, PieceType, CarouselSlide } from '@/types/database';
 
 export const maxDuration = 300;
 
 const HEYGEN_PIECE_TYPES: PieceType[] = ['long'];
 const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'short_4'];
+
+/** Build HeyGen scene array: intro (optional) + main + outro (optional) */
+function buildHeyGenScenes(
+    avatarId: string,
+    audioUrl: string,
+    brand: Brand | null,
+    persona: Persona,
+    topic: Topic,
+): HeyGenScene[] {
+    const scenes: HeyGenScene[] = [];
+
+    const templateVars: Record<string, string> = {
+        brand_name: brand?.name || persona.brand,
+        topic_title: topic.title,
+        cta: persona.newsletter_cta || brand?.cta_template || '',
+        persona_name: persona.name,
+    };
+
+    const makeBackground = (b: Brand | null): HeyGenScene['background'] => {
+        if (b?.background_image_url) return { type: 'image', url: b.background_image_url };
+        return { type: 'color', value: b?.brand_color || '#1a1a2e' };
+    };
+
+    const character: HeyGenScene['character'] = {
+        type: 'avatar',
+        avatar_id: avatarId,
+        avatar_style: 'normal',
+    };
+
+    // Intro scene
+    if (brand?.intro_text_template && persona.heygen_voice_id) {
+        const introText = interpolateTemplate(brand.intro_text_template, templateVars);
+        const introScene: HeyGenScene = {
+            voice: { type: 'text', voice_id: persona.heygen_voice_id, input_text: introText },
+            background: makeBackground(brand),
+        };
+        if (brand.intro_style !== 'background_only') {
+            introScene.character = character;
+        }
+        introScene.elements = [{
+            type: 'text',
+            value: introText,
+            style: { font_size: 40, font_color: '#ffffff' },
+        }];
+        scenes.push(introScene);
+    }
+
+    // Main scene (always present — lip-sync to ElevenLabs audio)
+    scenes.push({
+        character,
+        voice: { type: 'audio', audio_url: audioUrl },
+        background: makeBackground(brand),
+    });
+
+    // Outro scene
+    if (brand?.outro_text_template && persona.heygen_voice_id) {
+        const outroText = interpolateTemplate(brand.outro_text_template, templateVars);
+        const outroScene: HeyGenScene = {
+            voice: { type: 'text', voice_id: persona.heygen_voice_id, input_text: outroText },
+            background: makeBackground(brand),
+        };
+        if (brand.outro_style !== 'background_only') {
+            outroScene.character = character;
+        }
+        outroScene.elements = [{
+            type: 'text',
+            value: outroText,
+            style: { font_size: 40, font_color: '#ffffff' },
+        }];
+        scenes.push(outroScene);
+    }
+
+    return scenes;
+}
 
 export async function GET(request: Request) {
     if (!validateCronSecret(request)) {
@@ -37,7 +113,7 @@ export async function GET(request: Request) {
         // Find topics that need media: content_ready, or approved/scheduled with failed pieces
         const { data: topics, error: topicError } = await supabase
             .from('topics')
-            .select('*, personas(*)')
+            .select('*, personas(*, brands(*))')
             .in('status', ['content_ready', 'approved', 'scheduled']);
 
         if (topicError) {
@@ -73,8 +149,9 @@ export async function GET(request: Request) {
             isFirstPersona = false;
 
             for (const topicRow of personaTopics) {
-                const topic = topicRow as unknown as TopicWithPersona;
+                const topic = topicRow as unknown as TopicWithBrand;
                 const persona = topic.personas;
+                const brand: Brand | null = persona.brands ?? null;
                 const avatarId = persona.heygen_avatar_id;
 
                 // Fetch ALL pieces for this topic
@@ -165,12 +242,21 @@ export async function GET(request: Request) {
                         }
                     }
 
-                    // Submit HeyGen avatar video job
+                    // Build scenes and submit HeyGen video job
                     try {
-                        const videoResponse = await heygen.createVideoFromAudio(
-                            avatarId,
-                            audioUrl,
-                        );
+                        const scenes = buildHeyGenScenes(avatarId, audioUrl, brand, persona, topic);
+                        const isMultiScene = scenes.length > 1;
+
+                        // Guard: log if brand has intro/outro but persona lacks heygen_voice_id
+                        if (!persona.heygen_voice_id && (brand?.intro_text_template || brand?.outro_text_template)) {
+                            console.warn(
+                                `[daily-media] Persona "${persona.name}" has intro/outro templates but no heygen_voice_id — falling back to single scene`,
+                            );
+                        }
+
+                        const videoResponse = isMultiScene
+                            ? await heygen.createMultiSceneVideo({ scenes })
+                            : await heygen.createVideoFromAudio(avatarId, audioUrl);
 
                         await supabase
                             .from('content_pieces')
@@ -183,10 +269,10 @@ export async function GET(request: Request) {
 
                         await supabase.from('cost_tracking').insert({
                             service: 'heygen',
-                            operation: 'video_generation',
+                            operation: isMultiScene ? 'video_generation_multi' : 'video_generation',
                             topic_id: topic.id,
                             content_piece_id: piece.id,
-                            cost_usd: 0.25,
+                            cost_usd: isMultiScene ? 0.35 : 0.25,
                         });
 
                         topicResult.videoSubmitted++;

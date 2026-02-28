@@ -27,6 +27,69 @@ export interface HeyGenAvatarListResponse {
     };
 }
 
+// ── Multi-scene types ──
+
+export interface HeyGenCharacter {
+    type: 'avatar';
+    avatar_id: string;
+    avatar_style?: string;
+}
+
+export interface HeyGenVoiceAudio {
+    type: 'audio';
+    audio_url: string;
+}
+
+export interface HeyGenVoiceText {
+    type: 'text';
+    voice_id: string;
+    input_text: string;
+}
+
+export interface HeyGenVoiceSilence {
+    type: 'silence';
+    duration: number;
+}
+
+export type HeyGenVoice = HeyGenVoiceAudio | HeyGenVoiceText | HeyGenVoiceSilence;
+
+export interface HeyGenBackgroundColor {
+    type: 'color';
+    value: string;
+}
+
+export interface HeyGenBackgroundImage {
+    type: 'image';
+    url: string;
+}
+
+export type HeyGenBackground = HeyGenBackgroundColor | HeyGenBackgroundImage;
+
+export interface HeyGenTextElement {
+    type: 'text';
+    value: string;
+    style?: {
+        font_size?: number;
+        font_color?: string;
+        background_color?: string;
+        position?: { x: number; y: number };
+        size?: { width: number; height: number };
+    };
+}
+
+export interface HeyGenScene {
+    character?: HeyGenCharacter;
+    voice: HeyGenVoice;
+    background: HeyGenBackground;
+    elements?: HeyGenTextElement[];
+}
+
+export interface HeyGenMultiSceneOptions {
+    scenes: HeyGenScene[];
+    dimension?: { width: number; height: number };
+    callback_url?: string;
+}
+
 class HeyGenClient {
     private readonly baseUrl = 'https://api.heygen.com';
     private readonly apiKey: string;
@@ -111,6 +174,17 @@ class HeyGenClient {
             }],
             dimension: { width: 1080, height: 1920 },
         });
+    }
+
+    async createMultiSceneVideo(options: HeyGenMultiSceneOptions): Promise<HeyGenVideoResponse> {
+        const body: Record<string, unknown> = {
+            video_inputs: options.scenes,
+            dimension: options.dimension || { width: 1080, height: 1920 },
+        };
+        if (options.callback_url) {
+            body.callback_url = options.callback_url;
+        }
+        return this.request<HeyGenVideoResponse>('/v2/video/generate', 'POST', body);
     }
 
     async getVideoStatus(videoId: string): Promise<HeyGenStatusResponse> {
