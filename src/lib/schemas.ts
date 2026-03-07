@@ -154,6 +154,34 @@ export const publishTopicSchema = z.object({
     force: z.boolean().default(false),
 });
 
+// --- Lecture schemas ---
+
+export const lectureGenerateSchema = z.object({
+    chapterId: z.string().uuid(),
+});
+
+const lectureSceneSchema = z.object({
+    scene_number: z.number(),
+    scene_type: z.enum([
+        'avatar_intro', 'avatar_explain', 'avatar_wrapup',
+        'faceless_terminal', 'faceless_diagram', 'faceless_concepts',
+    ]),
+    narration: z.string(),
+    visual_description: z.string(),
+    text_overlay: z.string().optional(),
+    duration_estimate_seconds: z.number(),
+});
+
+export const lectureScriptResponseSchema = z.object({
+    title: z.string(),
+    summary: z.string(),
+    scenes: z.array(lectureSceneSchema).min(6).max(16),
+    total_duration_estimate_seconds: z.number(),
+});
+
+export type LectureGenerateRequest = z.infer<typeof lectureGenerateSchema>;
+export type LectureScriptResponse = z.infer<typeof lectureScriptResponseSchema>;
+
 // --- Voice preview schema ---
 
 export const voicePreviewSchema = z.object({

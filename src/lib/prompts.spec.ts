@@ -52,6 +52,8 @@ const mockTopic: Topic = {
     error_message: null,
     retry_count: 0,
     is_evergreen: false,
+    content_channel: 'social' as const,
+    lecture_data: null,
 };
 
 describe('buildTopicPrompt', () => {

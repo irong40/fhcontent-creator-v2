@@ -17,7 +17,7 @@ import type { ContentPiece, TopicWithBrand, Brand, Persona, Topic, PieceType, Ca
 
 export const maxDuration = 300;
 
-const HEYGEN_PIECE_TYPES: PieceType[] = ['long'];
+const HEYGEN_PIECE_TYPES: PieceType[] = ['long', 'lecture'];
 const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'short_4'];
 
 /** Build HeyGen scene array: intro (optional) + main + outro (optional) */
