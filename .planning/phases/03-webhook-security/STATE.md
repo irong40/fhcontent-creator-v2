@@ -1,6 +1,6 @@
 # Phase 3: Webhook Security — STATE
 
-## Status: NEAR-COMPLETE (pending HMAC test run)
+## Status: COMPLETE
 
 ### 03-01: HMAC Signing Spike — DONE
 - N8N_WEBHOOK_SECRET generated: 64-char hex in `D:/n8n/.env`
@@ -13,11 +13,11 @@
 - **KEY FINDING**: n8n Code nodes block `require('crypto')` — must use Web Crypto API (`crypto.subtle`)
 - **KEY FINDING**: `N8N_BLOCK_ENV_ACCESS_IN_NODE=true` is default — use Set node to pass secret to Code nodes
 
-### 03-02: HMAC Test All Functions — PENDING TEST RUN
+### 03-02: HMAC Test All Functions — DONE
 - Workflow ID: `9ySj9GyA67n973G5`
 - Tests all 4 edge functions with valid + tampered signatures
 - Uses Web Crypto API (not Node.js crypto module)
-- User needs to run "Test workflow" and confirm 4/4 PASS
+- Verified 2026-02-27: 4/4 PASS — all valid sigs accepted, all tampered sigs rejected with 401
 
 ### 03-03: ROTATION.md — DONE
 - File: `n8n-workflows/ROTATION.md`

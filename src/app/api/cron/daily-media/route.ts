@@ -113,7 +113,7 @@ export async function GET(request: Request) {
         // Find topics that need media: content_ready, or approved/scheduled with failed pieces
         const { data: topics, error: topicError } = await supabase
             .from('topics')
-            .select('*, personas(*, brands(*))')
+            .select('*, personas(*)')
             .in('status', ['content_ready', 'approved', 'scheduled']);
 
         if (topicError) {

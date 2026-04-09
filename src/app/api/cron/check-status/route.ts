@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { heygen } from '@/lib/heygen';
+import { remotionRenderer } from '@/lib/remotion-renderer';
 import { blotato } from '@/lib/blotato';
 import { claude } from '@/lib/claude';
 import { buildNewsletterDraftPrompt } from '@/lib/prompts';
@@ -15,14 +15,15 @@ export const maxDuration = 300;
 
 const MAX_RETRIES = 3;
 
-interface HeyGenPollResult {
+interface RenderPollResult {
     checked: number;
     completed: number;
     failed: number;
     stillProcessing: number;
 }
 
-async function pollHeyGenStatuses(supabase: SupabaseClient): Promise<HeyGenPollResult | null> {
+async function pollRenderStatuses(supabase: SupabaseClient): Promise<RenderPollResult | null> {
+    // heygen_job_id and heygen_status columns are reused for Remotion job tracking
     const { data: pendingPieces, error } = await supabase
         .from('content_pieces')
         .select('id, topic_id, piece_type, heygen_job_id, retry_count')
@@ -38,20 +39,20 @@ async function pollHeyGenStatuses(supabase: SupabaseClient): Promise<HeyGenPollR
 
     for (const piece of pendingPieces) {
         try {
-            const status = await heygen.getVideoStatus(piece.heygen_job_id!);
+            const status = await remotionRenderer.getJobStatus(piece.heygen_job_id!);
 
-            if (status.data.status === 'completed') {
+            if (status.status === 'completed') {
                 await supabase
                     .from('content_pieces')
                     .update({
-                        video_url: status.data.video_url,
+                        video_url: status.videoUrl || status.videoPath,
                         heygen_status: 'done',
                         status: 'produced',
                         produced_at: new Date().toISOString(),
                     })
                     .eq('id', piece.id);
                 completed++;
-            } else if (status.data.status === 'failed') {
+            } else if (status.status === 'failed') {
                 const retryCount = piece.retry_count ?? 0;
                 if (retryCount < MAX_RETRIES) {
                     await supabase
@@ -60,7 +61,7 @@ async function pollHeyGenStatuses(supabase: SupabaseClient): Promise<HeyGenPollR
                             heygen_status: null,
                             heygen_job_id: null,
                             retry_count: retryCount + 1,
-                            error_message: status.data.error || 'HeyGen rendering failed',
+                            error_message: status.error || 'Remotion rendering failed',
                         })
                         .eq('id', piece.id);
                 } else {
@@ -69,12 +70,12 @@ async function pollHeyGenStatuses(supabase: SupabaseClient): Promise<HeyGenPollR
                         .update({
                             heygen_status: 'failed',
                             status: 'failed',
-                            error_message: `HeyGen failed after ${MAX_RETRIES} retries: ${status.data.error || 'unknown'}`,
+                            error_message: `Render failed after ${MAX_RETRIES} retries: ${status.error || 'unknown'}`,
                         })
                         .eq('id', piece.id);
                     await notifyError({
                         source: 'check-status',
-                        message: `HeyGen failed after ${MAX_RETRIES} retries: ${status.data.error || 'unknown'}`,
+                        message: `Remotion render failed after ${MAX_RETRIES} retries: ${status.error || 'unknown'}`,
                         topicId: piece.topic_id,
                     });
                 }
@@ -83,7 +84,7 @@ async function pollHeyGenStatuses(supabase: SupabaseClient): Promise<HeyGenPollR
                 stillProcessing++;
             }
         } catch (e) {
-            console.error(`Error checking HeyGen status for piece ${piece.id}:`, e);
+            console.error(`Error checking render status for piece ${piece.id}:`, e);
             failed++;
         }
     }
@@ -414,7 +415,7 @@ export async function GET(request: Request) {
         // Clean up expired workflow locks
         const staleLocksRemoved = await cleanStaleLocks();
 
-        const heygenResult = await pollHeyGenStatuses(supabase);
+        const renderResult = await pollRenderStatuses(supabase);
         const blotatoVideoResult = await pollBlotatoVideoStatuses(supabase);
         const blotatoResult = await pollBlotatoStatuses(supabase);
 
@@ -427,14 +428,14 @@ export async function GET(request: Request) {
             );
         }
 
-        const emptyHeyGen = { checked: 0, completed: 0, failed: 0, stillProcessing: 0 };
+        const emptyRender = { checked: 0, completed: 0, failed: 0, stillProcessing: 0 };
         const emptyBlotatoVideo = { checked: 0, completed: 0, failed: 0, stillProcessing: 0 };
 
-        if (!heygenResult && !blotatoVideoResult && blotatoResult.checked === 0) {
+        if (!renderResult && !blotatoVideoResult && blotatoResult.checked === 0) {
             return NextResponse.json({
                 success: true,
                 message: 'No pending jobs',
-                heygen: emptyHeyGen,
+                remotion: emptyRender,
                 blotatoVideo: emptyBlotatoVideo,
                 blotato: blotatoResult,
                 staleLocksRemoved,
@@ -444,7 +445,7 @@ export async function GET(request: Request) {
 
         return NextResponse.json({
             success: true,
-            heygen: heygenResult ?? emptyHeyGen,
+            remotion: renderResult ?? emptyRender,
             blotatoVideo: blotatoVideoResult ?? emptyBlotatoVideo,
             blotato: blotatoResult,
             staleLocksRemoved,
