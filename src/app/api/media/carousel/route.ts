@@ -154,11 +154,14 @@ export async function POST(request: NextRequest) {
             carouselSlides.push(slideEntry);
         }
 
-        // Step 3: Store carousel slides in content_piece
+        // Step 3: Store carousel slides and all image URLs in content_piece
+        // carousel_url stores a JSON array of all slide image URLs so the
+        // daily-publish cron can pass them all to Blotato (not just the first).
         await supabase
             .from('content_pieces')
             .update({
                 carousel_slides: carouselSlides as unknown as CarouselSlide[],
+                carousel_url: imageUrls.length > 0 ? JSON.stringify(imageUrls) : null,
                 status: 'produced',
                 produced_at: new Date().toISOString(),
             })
