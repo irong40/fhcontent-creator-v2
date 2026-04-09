@@ -506,32 +506,42 @@ export async function GET(request: Request) {
                 }
 
                 // ── Stage 3b: Carousel fallback (Gemini images, no Canva) ──
+                console.log('[daily-media] Carousel check:', {
+                    hasCarouselPiece: !!carouselPiece,
+                    carouselTemplateId,
+                    carouselUrl: carouselPiece?.carousel_url,
+                    slidesCount: (carouselPiece?.carousel_slides as CarouselSlide[] | null)?.length ?? 0,
+                });
                 if (carouselPiece && !carouselTemplateId && !carouselPiece.carousel_url) {
                     const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
                     if (slides && slides.length > 0) {
                         try {
                             const imageUrls: string[] = [];
+                            console.log(`[daily-media] Generating ${slides.length} carousel slides via DALL-E...`);
                             for (const slide of slides) {
                                 if (slide.imagePrompt) {
                                     try {
-                                        const imageResult = await gemini.generateImage(slide.imagePrompt);
-                                        if (imageResult) {
-                                            const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
-                                            const buffer = base64ToArrayBuffer(imageResult.imageData);
-                                            const slideUrl = await uploadImage(storagePath, buffer, 'image/png');
-                                            imageUrls.push(slideUrl);
+                                        const { url: dalleUrl } = await openai.generateImage(slide.imagePrompt);
+                                        const imageResponse = await fetch(dalleUrl);
+                                        if (!imageResponse.ok) continue;
+                                        const imageBuffer = await imageResponse.arrayBuffer();
 
-                                            await supabase.from('visual_assets').insert({
-                                                content_piece_id: carouselPiece.id,
-                                                asset_type: 'carousel_image',
-                                                source_service: 'gemini',
-                                                asset_url: slideUrl,
-                                                metadata: { slide: slide.slide, prompt: slide.imagePrompt },
-                                                status: 'ready',
-                                            });
-                                        }
+                                        const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
+                                        const slideUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
+                                        imageUrls.push(slideUrl);
+
+                                        await supabase.from('visual_assets').insert({
+                                            content_piece_id: carouselPiece.id,
+                                            asset_type: 'carousel_image',
+                                            source_service: 'openai',
+                                            asset_url: slideUrl,
+                                            metadata: { slide: slide.slide, prompt: slide.imagePrompt },
+                                            status: 'ready',
+                                        });
+
+                                        console.log(`[daily-media] Slide ${slide.slide}: done`);
                                     } catch (e) {
-                                        console.warn(`Carousel slide ${slide.slide} Gemini image failed:`, e);
+                                        console.error(`[daily-media] Carousel slide ${slide.slide} DALL-E failed:`, e);
                                     }
                                 }
                             }
@@ -546,11 +556,11 @@ export async function GET(request: Request) {
                                     .eq('id', carouselPiece.id);
 
                                 await supabase.from('cost_tracking').insert({
-                                    service: 'gemini',
-                                    operation: 'carousel_slides',
+                                    service: 'openai',
+                                    operation: 'dalle_carousel_slides',
                                     topic_id: topic.id,
                                     content_piece_id: carouselPiece.id,
-                                    cost_usd: imageUrls.length * 0.02,
+                                    cost_usd: estimateDalleCost(imageUrls.length),
                                 });
 
                                 topicResult.carouselCreated = true;
