@@ -505,6 +505,64 @@ export async function GET(request: Request) {
                     }
                 }
 
+                // ── Stage 3b: Carousel fallback (Gemini images, no Canva) ──
+                if (carouselPiece && !carouselTemplateId && !carouselPiece.carousel_url) {
+                    const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
+                    if (slides && slides.length > 0) {
+                        try {
+                            const imageUrls: string[] = [];
+                            for (const slide of slides) {
+                                if (slide.imagePrompt) {
+                                    try {
+                                        const imageResult = await gemini.generateImage(slide.imagePrompt);
+                                        if (imageResult) {
+                                            const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
+                                            const buffer = base64ToArrayBuffer(imageResult.imageData);
+                                            const slideUrl = await uploadImage(storagePath, buffer, 'image/png');
+                                            imageUrls.push(slideUrl);
+
+                                            await supabase.from('visual_assets').insert({
+                                                content_piece_id: carouselPiece.id,
+                                                asset_type: 'carousel_image',
+                                                source_service: 'gemini',
+                                                asset_url: slideUrl,
+                                                metadata: { slide: slide.slide, prompt: slide.imagePrompt },
+                                                status: 'ready',
+                                            });
+                                        }
+                                    } catch (e) {
+                                        console.warn(`Carousel slide ${slide.slide} Gemini image failed:`, e);
+                                    }
+                                }
+                            }
+
+                            if (imageUrls.length > 0) {
+                                const carouselUrl = imageUrls.length === 1
+                                    ? imageUrls[0]
+                                    : JSON.stringify(imageUrls);
+                                await supabase
+                                    .from('content_pieces')
+                                    .update({ carousel_url: carouselUrl })
+                                    .eq('id', carouselPiece.id);
+
+                                await supabase.from('cost_tracking').insert({
+                                    service: 'gemini',
+                                    operation: 'carousel_slides',
+                                    topic_id: topic.id,
+                                    content_piece_id: carouselPiece.id,
+                                    cost_usd: imageUrls.length * 0.02,
+                                });
+
+                                topicResult.carouselCreated = true;
+                            }
+                        } catch (e) {
+                            topicResult.errors.push(
+                                `carousel fallback: ${e instanceof Error ? e.message : 'unknown'}`,
+                            );
+                        }
+                    }
+                }
+
                 // ── Stage 4: Music (all pieces with music_track mood) ──
                 const piecesNeedingMusic = (allPieces as ContentPiece[]).filter(
                     p => p.music_track && !p.music_track.startsWith('http'),
