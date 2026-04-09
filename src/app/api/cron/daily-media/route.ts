@@ -192,7 +192,36 @@ export async function GET(request: Request) {
                     }
 
                     if (!avatarId) {
-                        topicResult.errors.push(`${piece.piece_type}: no heygen_avatar_id on persona`);
+                        // Fallback: use Blotato AI Story Video for long-form when no HeyGen avatar
+                        const templateId = persona.blotato_template_id;
+                        if (templateId && !piece.blotato_job_id) {
+                            try {
+                                const videoResponse = await blotato.createVideoFromPrompt(
+                                    templateId,
+                                    piece.script,
+                                );
+                                await supabase
+                                    .from('content_pieces')
+                                    .update({
+                                        blotato_job_id: videoResponse.item.id,
+                                        blotato_status: 'processing',
+                                        status: 'processing',
+                                    })
+                                    .eq('id', piece.id);
+                                await supabase.from('cost_tracking').insert({
+                                    service: 'blotato',
+                                    operation: 'long_video_fallback',
+                                    topic_id: topic.id,
+                                    content_piece_id: piece.id,
+                                    cost_usd: 0.15,
+                                });
+                                topicResult.blotatoSubmitted++;
+                            } catch (e) {
+                                topicResult.errors.push(
+                                    `${piece.piece_type} Blotato fallback: ${e instanceof Error ? e.message : 'unknown'}`,
+                                );
+                            }
+                        }
                         continue;
                     }
 
