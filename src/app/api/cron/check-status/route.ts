@@ -117,7 +117,7 @@ async function pollBlotatoVideoStatuses(supabase: SupabaseClient): Promise<Blota
         try {
             const status = await blotato.getVideoStatus(piece.blotato_job_id!);
 
-            if (status.item.status === 'Done') {
+            if (status.item.status.toLowerCase() === 'done') {
                 await supabase
                     .from('content_pieces')
                     .update({
@@ -128,7 +128,7 @@ async function pollBlotatoVideoStatuses(supabase: SupabaseClient): Promise<Blota
                     })
                     .eq('id', piece.id);
                 completed++;
-            } else if (status.item.status === 'Failed') {
+            } else if (status.item.status.toLowerCase() === 'failed') {
                 const retryCount = piece.retry_count ?? 0;
                 if (retryCount < MAX_RETRIES) {
                     await supabase

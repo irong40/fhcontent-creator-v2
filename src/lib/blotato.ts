@@ -13,7 +13,10 @@
 
 export type Platform = 'twitter' | 'linkedin' | 'facebook' | 'instagram' | 'pinterest' | 'tiktok' | 'threads' | 'bluesky' | 'youtube';
 
-export type VideoStatus = 'Queued' | 'Processing' | 'Done' | 'Failed';
+export type VideoStatus = 'Queued' | 'Processing' | 'Done' | 'Failed'
+    | 'queued' | 'processing' | 'done' | 'failed'
+    | 'queueing' | 'generating-script' | 'script-ready' | 'generating-media' | 'media-ready' | 'exporting'
+    | 'creation-from-template-failed';
 
 export interface BlotatoVideoCreateRequest {
     templateId: string;
@@ -354,8 +357,8 @@ class BlotatoClient {
         while (Date.now() - startTime < timeout) {
             const status = await this.getVideoStatus(videoId);
             options?.onProgress?.(status.item.status);
-            if (status.item.status === 'Done') return status;
-            if (status.item.status === 'Failed') throw new Error(`Video creation failed for ID: ${videoId}`);
+            if (status.item.status.toLowerCase() === 'done') return status;
+            if (status.item.status.toLowerCase() === 'failed') throw new Error(`Video creation failed for ID: ${videoId}`);
             await new Promise(resolve => setTimeout(resolve, pollInterval));
         }
 
