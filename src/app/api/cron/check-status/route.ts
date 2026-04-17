@@ -7,6 +7,7 @@ import { buildNewsletterDraftPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { cleanStaleLocks } from '@/lib/workflow-lock';
+import { logPublishReport } from '@/lib/coo-report';
 import { validateCronSecret } from '../middleware';
 import type { PublishedPlatforms, PlatformStatus, TopicWithPersona } from '@/types/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -421,8 +422,15 @@ export async function GET(request: Request) {
 
         // Auto-generate newsletter drafts for newly published topics
         let newsletterDraftsGenerated = 0;
+        let cooReportsLogged = 0;
         if (blotatoResult.newlyPublishedTopicIds.length > 0) {
             newsletterDraftsGenerated = await generateNewsletterDrafts(
+                supabase,
+                blotatoResult.newlyPublishedTopicIds,
+            );
+
+            // Log publish report for COO daily standup
+            cooReportsLogged = await logPublishReport(
                 supabase,
                 blotatoResult.newlyPublishedTopicIds,
             );
@@ -440,6 +448,7 @@ export async function GET(request: Request) {
                 blotato: blotatoResult,
                 staleLocksRemoved,
                 newsletterDraftsGenerated,
+                cooReportsLogged,
             });
         }
 
@@ -450,6 +459,7 @@ export async function GET(request: Request) {
             blotato: blotatoResult,
             staleLocksRemoved,
             newsletterDraftsGenerated,
+            cooReportsLogged,
         });
     } catch (error) {
         console.error('Check-status cron error:', error);
