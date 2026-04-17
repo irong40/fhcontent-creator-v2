@@ -18,12 +18,12 @@ ${persona.expertise_areas.join('\n')}
 TOPICS TO AVOID (already published):
 ${recentTopics.length > 0 ? recentTopics.join('\n') : 'None yet'}
 
-Generate exactly ${count} unique historical topic(s) about African American history in Virginia.
+Generate exactly ${count} unique topic(s) within the expertise areas listed above for the ${persona.brand} brand.
 
 For each topic, provide:
 1. title: Compelling, specific title (include year if applicable)
 2. hook: Opening line that grabs attention (question or surprising fact)
-3. historicalPoints: Exactly 4 verifiable historical facts
+3. historicalPoints: Exactly 4 verifiable facts or key points
    - Each must have: point (1-4), claim, source, year
 4. thumbnailPrompt: A vivid prompt for AI image generation
 
@@ -47,8 +47,7 @@ OUTPUT FORMAT (JSON only):
 REQUIREMENTS:
 - Each topic must be historically accurate and verifiable
 - Include specific names, dates, and places
-- Vary time periods (colonial, antebellum, reconstruction, civil rights, modern)
-- Vary geographic regions within Virginia
+- Vary across the expertise areas listed above
 - Avoid topics similar to the "TOPICS TO AVOID" list`;
 
     return { system, user };
@@ -92,7 +91,7 @@ Generate content for 6 pieces:
 - Short 4: Deep dive on Point 4
 - 60-100 words each
 - Each starts with attention-grabbing opening
-- Each ends with "Follow for more untold history"
+- Each ends with a follow CTA relevant to the ${persona.brand} brand
 
 ## 6. CAROUSEL (8-10 slides)
 - Slide 1: Hook/Title
@@ -103,11 +102,7 @@ Generate content for 6 pieces:
 
 FOR EACH PIECE, PROVIDE:
 - script: The spoken/displayed text (NEVER include the creator's name)
-- captionLong: 2200 character caption ending with 3-5 hashtags using this formula:
-  * 1-2 broad reach: #BlackHistory #BlackExcellence #BlackHistoryMonth #BlackCulture
-  * 1-2 niche educational: #BlackHistoryFacts #BlackHistory365 #HistoryTok #LearnOnTikTok #RealBlackHistory
-  * 1 discovery: #DidYouKnow #FYP #Viral
-  Example: "#BlackHistory #BlackHistoryFacts #DidYouKnow #BlackExcellence #HistoryTok"
+- captionLong: 2200 character caption ending with 3-5 hashtags relevant to the ${persona.brand} brand and expertise areas. Mix broad-reach, niche, and discovery hashtags.
 - captionShort: 280 character caption for Twitter/X (include 2-3 of the same hashtags)
 - thumbnailPrompt: Prompt for AI thumbnail generation
 
