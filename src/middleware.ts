@@ -27,10 +27,19 @@ export async function middleware(request: NextRequest) {
 
     const { data: { user } } = await supabase.auth.getUser();
 
-    // Allow unauthenticated access to login and cron endpoints
+    // Allow unauthenticated access to login, cron, and health endpoints
     const { pathname } = request.nextUrl;
     if (pathname === '/login' || pathname.startsWith('/api/cron') || pathname === '/api/health') {
         return supabaseResponse;
+    }
+
+    // Allow /api/topics with valid CRON_SECRET (pipeline programmatic access)
+    if (pathname.startsWith('/api/topics')) {
+        const cronSecret = process.env.CRON_SECRET;
+        const auth = request.headers.get('authorization');
+        if (cronSecret && auth === `Bearer ${cronSecret}`) {
+            return supabaseResponse;
+        }
     }
 
     // Redirect unauthenticated users to login
