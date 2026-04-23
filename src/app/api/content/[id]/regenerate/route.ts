@@ -56,6 +56,7 @@ export async function POST(
             short_3: 'SHORT VIDEO 3 (30 seconds, 60-100 words, deep dive on Point 3)',
             short_4: 'SHORT VIDEO 4 (30 seconds, 60-100 words, deep dive on Point 4)',
             carousel: 'CAROUSEL (8-10 slides with imagePrompt per slide)',
+            lecture: 'LECTURE VIDEO (20-30 minutes, multi-scene educational content)',
         };
 
         const isCarousel = pieceType === 'carousel';

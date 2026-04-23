@@ -124,6 +124,8 @@ export interface Database {
                     review_reason: string | null;
                     reviewed_by: string | null;
                     reviewed_at: string | null;
+                    content_channel: ContentChannel;
+                    lecture_data: Json | null;
                 };
                 Insert: {
                     id?: string;
@@ -150,6 +152,8 @@ export interface Database {
                     review_reason?: string | null;
                     reviewed_by?: string | null;
                     reviewed_at?: string | null;
+                    content_channel?: ContentChannel;
+                    lecture_data?: Json | null;
                 };
                 Update: {
                     id?: string;
@@ -176,6 +180,8 @@ export interface Database {
                     review_reason?: string | null;
                     reviewed_by?: string | null;
                     reviewed_at?: string | null;
+                    content_channel?: ContentChannel;
+                    lecture_data?: Json | null;
                 };
                 Relationships: [
                     {
@@ -639,6 +645,82 @@ export interface Database {
                     }
                 ];
             };
+            lecture_chapters: {
+                Row: {
+                    id: string;
+                    brand_id: string | null;
+                    persona_id: string | null;
+                    chapter_number: number;
+                    title: string;
+                    week_number: number;
+                    slide_content: Json;
+                    key_concepts: string[] | null;
+                    learning_objectives: string[] | null;
+                    field_connections: string[] | null;
+                    estimated_duration_min: number;
+                    topic_id: string | null;
+                    status: string;
+                    created_at: string;
+                    updated_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    brand_id?: string | null;
+                    persona_id?: string | null;
+                    chapter_number: number;
+                    title: string;
+                    week_number: number;
+                    slide_content: Json;
+                    key_concepts?: string[] | null;
+                    learning_objectives?: string[] | null;
+                    field_connections?: string[] | null;
+                    estimated_duration_min?: number;
+                    topic_id?: string | null;
+                    status?: string;
+                    created_at?: string;
+                    updated_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    brand_id?: string | null;
+                    persona_id?: string | null;
+                    chapter_number?: number;
+                    title?: string;
+                    week_number?: number;
+                    slide_content?: Json;
+                    key_concepts?: string[] | null;
+                    learning_objectives?: string[] | null;
+                    field_connections?: string[] | null;
+                    estimated_duration_min?: number;
+                    topic_id?: string | null;
+                    status?: string;
+                    created_at?: string;
+                    updated_at?: string;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "lecture_chapters_brand_id_fkey";
+                        columns: ["brand_id"];
+                        isOneToOne: false;
+                        referencedRelation: "brands";
+                        referencedColumns: ["id"];
+                    },
+                    {
+                        foreignKeyName: "lecture_chapters_persona_id_fkey";
+                        columns: ["persona_id"];
+                        isOneToOne: false;
+                        referencedRelation: "personas";
+                        referencedColumns: ["id"];
+                    },
+                    {
+                        foreignKeyName: "lecture_chapters_topic_id_fkey";
+                        columns: ["topic_id"];
+                        isOneToOne: false;
+                        referencedRelation: "topics";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
             workflow_locks: {
                 Row: {
                     id: string;
@@ -827,7 +909,7 @@ export type TopicStatus =
     | 'published'
     | 'failed';
 
-export type PieceType = 'long' | 'short_1' | 'short_2' | 'short_3' | 'short_4' | 'carousel';
+export type PieceType = 'long' | 'short_1' | 'short_2' | 'short_3' | 'short_4' | 'carousel' | 'lecture';
 
 export type PieceStatus =
     | 'pending'
@@ -843,7 +925,7 @@ export type BlotatoStatus = 'pending' | 'processing' | 'done' | 'failed';
 
 export type PodcastStatus = 'draft' | 'generating' | 'ready' | 'published' | 'error';
 
-export type ContentChannel = 'social' | 'podcast' | 'newsletter';
+export type ContentChannel = 'social' | 'podcast' | 'newsletter' | 'lecture';
 
 // Convenience types
 export type Persona = Database['public']['Tables']['personas']['Row'];
@@ -878,4 +960,44 @@ export interface TopicWithPersona extends Topic {
 
 export interface TopicWithBrand extends Topic {
     personas: Persona & { brands: Brand | null };
+}
+
+// Lecture types
+
+export type LectureSceneType = 'avatar_intro' | 'avatar_explain' | 'avatar_wrapup' | 'faceless_terminal' | 'faceless_diagram' | 'faceless_concepts';
+
+export interface LectureScene {
+    scene_number: number;
+    scene_type: LectureSceneType;
+    narration: string;
+    visual_description: string;
+    text_overlay?: string;
+    duration_estimate_seconds: number;
+}
+
+export interface LectureData {
+    chapter_number: number;
+    week_number: number;
+    learning_objectives: string[];
+    key_concepts: string[];
+    field_connections: string[];
+    scenes: LectureScene[];
+}
+
+export interface LectureChapter {
+    id: string;
+    brand_id: string | null;
+    persona_id: string | null;
+    chapter_number: number;
+    title: string;
+    week_number: number;
+    slide_content: { slide_number: number; texts: string[] }[];
+    key_concepts: string[] | null;
+    learning_objectives: string[] | null;
+    field_connections: string[] | null;
+    estimated_duration_min: number;
+    topic_id: string | null;
+    status: 'pending' | 'scripted' | 'producing' | 'ready' | 'published';
+    created_at: string;
+    updated_at: string;
 }

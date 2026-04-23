@@ -13,6 +13,7 @@ const PIECE_ORDER: Record<PieceType, number> = {
     short_3: 4,
     short_4: 5,
     carousel: 6,
+    lecture: 1,
 };
 
 export async function POST(request: NextRequest) {
