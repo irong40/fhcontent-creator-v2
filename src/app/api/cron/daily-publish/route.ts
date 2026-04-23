@@ -95,7 +95,14 @@ export async function publishTopic(
         .order('piece_order');
 
     if (!pieces || pieces.length === 0) {
-        throw new Error(`No content pieces for topic: ${topicId}`);
+        // Topic exists but media generation never ran — mark failed to stop hourly retries.
+        // Not a transient error, so don't send an alert email.
+        await supabase
+            .from('topics')
+            .update({ status: 'failed', error_message: 'No content pieces — media generation may not have run' })
+            .eq('id', topicId);
+        console.warn(`[daily-publish] Topic ${topicId} ("${topic.title}") has no content pieces — marked failed, skipping`);
+        return { topicId, title: topic.title, piecesProcessed: 0, platformResults: {}, warnings: ['No content pieces — marked failed'] };
     }
 
     await supabase
