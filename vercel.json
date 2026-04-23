@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/check-status",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/coo-report",
+      "schedule": "0 10 * * *"
     }
   ]
 }
