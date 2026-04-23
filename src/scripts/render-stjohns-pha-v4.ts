@@ -1,3 +1,4 @@
+export {};
 /**
  * Render the St. John's lecture (v4 script) with CogVideoX-animated backgrounds.
  *

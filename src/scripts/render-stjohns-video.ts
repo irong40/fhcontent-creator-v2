@@ -1,3 +1,4 @@
+export {};
 /**
  * Submit St. John's Day lecture to Remotion render server.
  * Run with: npx tsx src/scripts/render-stjohns-video.ts

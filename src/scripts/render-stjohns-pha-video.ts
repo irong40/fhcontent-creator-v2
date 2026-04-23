@@ -1,3 +1,4 @@
+export {};
 /**
  * Render the PHA-focused St. John's Day lecture video.
  * Uses Remotion's staticFile for all images (both user photos and DALL-E generated).
