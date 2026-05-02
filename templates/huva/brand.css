@@ -9,7 +9,7 @@
 :root {
     /* Primary palette */
     --huva-heritage-navy: #1F2F46;
-    --huva-tobacco-brown: #6A4B3A;
+    --huva-tobacco-brown: #6A4B3D;
     --huva-old-gold:      #C89B3C;
     --huva-parchment:     #F2E9D8;
     --huva-ink-black:     #1A1816;
@@ -184,6 +184,21 @@ html, body {
     width: 64px;
     height: 2px;
     background: var(--huva-old-gold);
+}
+
+.huva-anchor__logo {
+    height: 96px;
+    width: auto;
+    max-width: 360px;
+    object-fit: contain;
+    object-position: left center;
+}
+
+.huva-anchor__logo--seal {
+    height: 120px;
+    width: 120px;
+    border-radius: 50%;
+    object-fit: cover;
 }
 
 .huva-anchor__mark {
