@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{headline}} — History Unveiled VA</title>
+    <link rel="stylesheet" href="brand.css">
+</head>
+<body>
+<div class="huva-card huva-card--parchment" data-template="story-explainer">
+    <div class="huva-paper-grain"></div>
+
+    <header style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div class="huva-eyebrow" style="color:var(--huva-tobacco-brown);">{{eyebrow}}</div>
+        <div class="huva-location-tag">{{location}}</div>
+    </header>
+
+    <main style="margin:auto 0;">
+        <div style="display:flex;align-items:baseline;gap:24px;margin-bottom:32px;">
+            <div class="huva-date">{{year}}</div>
+            <div class="huva-date-context" style="color:var(--huva-tobacco-brown);">{{period}}</div>
+        </div>
+
+        <h2 style="font-family:var(--huva-serif);font-weight:600;font-size:88px;line-height:1.08;color:var(--huva-ink-black);margin-bottom:32px;">
+            {{headline}}
+        </h2>
+
+        <p style="font-family:var(--huva-sans);font-size:36px;line-height:1.45;color:var(--huva-ink-black);max-width:880px;">
+            {{body}}
+        </p>
+    </main>
+
+    <footer class="huva-anchor" style="color:var(--huva-tobacco-brown);">
+        <img src="{{logo_url}}" alt="History Unveiled VA" class="huva-anchor__logo {{logo_class}}">
+        <div>
+            <div class="huva-anchor__mark">{{source}}</div>
+            <div class="huva-anchor__sub" style="color:var(--huva-old-gold);">PRIMARY SOURCE</div>
+        </div>
+    </footer>
+</div>
+</body>
+</html>

@@ -24,7 +24,12 @@ const TEMPLATES_DIR = resolve(__dirname, '..', 'templates', 'huva');
 const ASSETS_DIR = resolve(TEMPLATES_DIR, 'assets');
 
 export type LogoVariant = 1 | 2 | 3;
-export type HuvaTemplate = 'hook-card' | 'quote-slide' | 'end-card';
+export type HuvaTemplate = 'hook-card' | 'quote-slide' | 'end-card' | 'story-explainer' | 'carousel-slide';
+
+// Templates that override the default 1080x1920 portrait viewport.
+const TEMPLATE_VIEWPORTS: Partial<Record<HuvaTemplate, { width: number; height: number }>> = {
+    'carousel-slide': { width: 1080, height: 1080 },
+};
 
 function interpolate(html: string, vars: Record<string, string>): string {
     return html.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? '');
@@ -60,10 +65,12 @@ export async function renderHuvaTemplate(
     const tmpPath = resolve(TEMPLATES_DIR, tmpName);
     await writeFile(tmpPath, filled);
 
+    const viewport = TEMPLATE_VIEWPORTS[template] ?? { width: 1080, height: 1920 };
+
     const browser = await chromium.launch();
     try {
         const context = await browser.newContext({
-            viewport: { width: 1080, height: 1920 },
+            viewport,
             deviceScaleFactor: 2,
         });
         const page = await context.newPage();
