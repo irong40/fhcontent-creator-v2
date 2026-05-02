@@ -5,7 +5,6 @@ import { heygen } from '@/lib/heygen';
 import { blotato } from '@/lib/blotato';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
-import { canva, type AutofillData } from '@/lib/canva';
 import { uploadAudio, uploadImage } from '@/lib/storage';
 import { estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
@@ -421,98 +420,11 @@ export async function GET(request: Request) {
                     }
                 }
 
-                // ── Stage 3: Carousel (carousel piece only) ──
+                // ── Stage 3: Carousel slides (DALL-E imagery, no external design tool) ──
+                // Canva path removed 2026-05-02 — Adam canceled Canva subscription.
+                // HUVA brand templates live in templates/huva/ (Playwright-rendered, $0).
                 const carouselPiece = (allPieces as ContentPiece[]).find(p => p.piece_type === 'carousel');
-                const carouselTemplateId = persona.canva_carousel_template_id;
-
-                if (carouselPiece && carouselTemplateId && !carouselPiece.canva_design_id) {
-                    const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
-                    if (slides && slides.length > 0) {
-                        try {
-                            const autofillData: AutofillData = {};
-                            let slideImagesGenerated = 0;
-
-                            for (const slide of slides) {
-                                autofillData[`slide_${slide.slide}_text`] = { type: 'text', text: slide.text };
-
-                                if (slide.imagePrompt) {
-                                    try {
-                                        const { url: dalleUrl } = await openai.generateImage(slide.imagePrompt);
-                                        const imageResponse = await fetch(dalleUrl);
-                                        if (!imageResponse.ok) continue;
-                                        const imageBuffer = await imageResponse.arrayBuffer();
-
-                                        const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
-                                        const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
-
-                                        const assetId = await canva.uploadAsset(
-                                            `slide_${slide.slide}`,
-                                            imageBuffer,
-                                        );
-                                        autofillData[`slide_${slide.slide}_image`] = { type: 'image', asset_id: assetId };
-                                        slideImagesGenerated++;
-
-                                        await supabase.from('visual_assets').insert({
-                                            content_piece_id: carouselPiece.id,
-                                            asset_type: 'carousel_image',
-                                            source_service: 'openai',
-                                            asset_url: slideImageUrl,
-                                            metadata: { slide: slide.slide, prompt: slide.imagePrompt },
-                                            status: 'ready',
-                                        });
-                                    } catch (e) {
-                                        console.warn(`Carousel slide ${slide.slide} image failed:`, e);
-                                    }
-                                }
-                            }
-
-                            const designId = await canva.createDesignAutofill(carouselTemplateId, autofillData);
-
-                            await supabase
-                                .from('content_pieces')
-                                .update({ canva_design_id: designId })
-                                .eq('id', carouselPiece.id);
-
-                            const exportedUrls = await canva.exportDesign(designId, 'png');
-
-                            if (exportedUrls.length > 0) {
-                                // Store all slide URLs as JSON array for multi-slide carousel support
-                                const carouselUrl = exportedUrls.length === 1
-                                    ? exportedUrls[0]
-                                    : JSON.stringify(exportedUrls);
-                                await supabase
-                                    .from('content_pieces')
-                                    .update({ carousel_url: carouselUrl })
-                                    .eq('id', carouselPiece.id);
-                            }
-
-                            if (slideImagesGenerated > 0) {
-                                await supabase.from('cost_tracking').insert({
-                                    service: 'openai',
-                                    operation: 'dalle_carousel_slides',
-                                    topic_id: topic.id,
-                                    content_piece_id: carouselPiece.id,
-                                    cost_usd: estimateDalleCost(slideImagesGenerated),
-                                });
-                            }
-
-                            topicResult.carouselCreated = true;
-                        } catch (e) {
-                            topicResult.errors.push(
-                                `carousel: ${e instanceof Error ? e.message : 'unknown'}`,
-                            );
-                        }
-                    }
-                }
-
-                // ── Stage 3b: Carousel fallback (Gemini images, no Canva) ──
-                console.log('[daily-media] Carousel check:', {
-                    hasCarouselPiece: !!carouselPiece,
-                    carouselTemplateId,
-                    carouselUrl: carouselPiece?.carousel_url,
-                    slidesCount: (carouselPiece?.carousel_slides as CarouselSlide[] | null)?.length ?? 0,
-                });
-                if (carouselPiece && !carouselTemplateId && !carouselPiece.carousel_url) {
+                if (carouselPiece && !carouselPiece.carousel_url) {
                     const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
                     if (slides && slides.length > 0) {
                         try {

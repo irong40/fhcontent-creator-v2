@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Quote — History Unveiled VA</title>
+    <link rel="stylesheet" href="brand.css">
+</head>
+<body>
+<div class="huva-card huva-card--parchment" data-template="quote-slide">
+    <div class="huva-paper-grain"></div>
+
+    <header style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div class="huva-eyebrow" style="color:var(--huva-tobacco-brown);">Primary Source</div>
+    </header>
+
+    <main style="margin:auto 0;">
+        <div style="font-family:var(--huva-serif);font-size:160px;line-height:1;color:var(--huva-old-gold);">&ldquo;</div>
+        <blockquote class="huva-quote" style="margin-top:-32px;">
+            {{quote}}
+        </blockquote>
+        <div style="margin-top:48px;display:flex;align-items:center;gap:16px;">
+            <div style="width:80px;height:2px;background:var(--huva-tobacco-brown);"></div>
+            <div class="huva-source">{{attribution}}</div>
+        </div>
+    </main>
+
+    <footer class="huva-anchor" style="color:var(--huva-tobacco-brown);">
+        <div class="huva-anchor__rule" style="background:var(--huva-old-gold);"></div>
+        <div>
+            <div class="huva-anchor__mark">History Unveiled VA</div>
+            <div class="huva-anchor__sub" style="color:var(--huva-old-gold);">{{source}}</div>
+        </div>
+    </footer>
+</div>
+</body>
+</html>

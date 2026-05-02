@@ -225,11 +225,14 @@ export async function GET(request: Request) {
         const supabase = createAdminClient();
         const today = new Date().toISOString().split('T')[0];
 
-        // Find scheduled topics where publish_date <= today
+        // Find scheduled OR approved-with-publish-date topics ready to ship.
+        // Picking up `approved` too means the manual /schedule step is no longer
+        // a hard gate — any approved topic with a publish_date <= today flows.
         const { data: topics, error } = await supabase
             .from('topics')
             .select('id, title')
-            .eq('status', 'scheduled')
+            .in('status', ['scheduled', 'approved'])
+            .not('publish_date', 'is', null)
             .lte('publish_date', today);
 
         if (error) {
