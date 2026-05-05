@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/daily-topic",
-      "schedule": "0 2 * * *"
+      "schedule": "0 2 * * 0"
     },
     {
       "path": "/api/cron/daily-media",
@@ -21,8 +21,8 @@
       "schedule": "0 10 * * *"
     },
     {
-      "path": "/api/cron/coo-morning-digest",
-      "schedule": "0 11 * * *"
+      "path": "/api/cron/coo-weekly-preview",
+      "schedule": "0 12 * * 0"
     }
   ]
 }

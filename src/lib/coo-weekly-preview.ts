@@ -1,63 +1,55 @@
 /**
- * COO Morning Digest
+ * COO Weekly Preview
  *
- * Sent at 7 AM ET each day, AFTER daily-topic (02:00 UTC) and daily-media (06:00 UTC)
- * have run for the day, but BEFORE daily-publish ships those topics (they're scheduled
- * for tomorrow, not today). Gives Adam a 24-hour window to read this digest and pull
- * the cord on anything weird before it actually ships.
+ * Sent Sunday 12:00 UTC (8 AM ET), AFTER daily-topic fires its weekly batch
+ * at 02:00 UTC. Shows Adam the full week's content plan in one email so he
+ * has a single decision point: let it run, or pull the cord on something.
  *
  * Sections:
- *   1. Auto-approved by COO (will publish tomorrow) — title, persona, hook
- *   2. Held for review (guardrail flagged) — title, persona, reason
- *   3. Errors from last 24h cron runs
- *   4. Today's publish queue (already-scheduled, going out today)
+ *   1. Week ahead — every topic auto-approved this Sunday, grouped by persona,
+ *      with publish_date Mon→Sun
+ *   2. Held for review — guardrail-flagged topics that won't ship without
+ *      manual approval
+ *   3. Last week's recap — topics that actually published in the prior 7 days
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export async function sendCooMorningDigest(supabase: SupabaseClient): Promise<boolean> {
+export async function sendCooWeeklyPreview(supabase: SupabaseClient): Promise<boolean> {
     const apiKey = process.env.RESEND_API_KEY;
     const to = process.env.NOTIFICATION_EMAIL;
     if (!apiKey || !to) {
-        console.warn('[Morning Digest] RESEND_API_KEY or NOTIFICATION_EMAIL not set — skipped');
+        console.warn('[Weekly Preview] RESEND_API_KEY or NOTIFICATION_EMAIL not set — skipped');
         return false;
     }
 
-    const today = new Date().toISOString().split('T')[0];
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const nowMs = Date.now();
+    const today = new Date(nowMs).toISOString().split('T')[0];
+    const eightHoursAgo = new Date(nowMs - 8 * 60 * 60 * 1000).toISOString();
+    const sevenDaysAgo = new Date(nowMs - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // 1. Auto-approved by COO in the last 24h, scheduled for tomorrow
-    const { data: autoApproved } = await supabase
+    // 1. Week ahead — auto-approved in the last 8 hours (post-Sunday-batch)
+    const { data: weekAhead } = await supabase
         .from('topics')
-        .select('id, title, hook, persona_id, scheduled:publish_date, personas(name, brand)')
-        .gte('coo_auto_approved_at', yesterday)
-        .order('coo_auto_approved_at', { ascending: false });
+        .select('id, title, hook, publish_date, persona_id, personas(name, brand)')
+        .gte('coo_auto_approved_at', eightHoursAgo)
+        .order('publish_date', { ascending: true });
 
-    // 2. Held for review
+    // 2. Held for review (created in last 8 hours)
     const { data: heldForReview } = await supabase
         .from('topics')
         .select('id, title, review_reason, persona_id, personas(name, brand)')
         .eq('requires_review', true)
-        .gte('created_at', yesterday)
-        .order('created_at', { ascending: false });
-
-    // 3. Today's publish queue (scheduled for today, going out)
-    const { data: shippingToday } = await supabase
-        .from('topics')
-        .select('id, title, persona_id, personas(name, brand)')
-        .in('status', ['scheduled', 'approved'])
-        .eq('publish_date', today)
+        .gte('created_at', eightHoursAgo)
         .order('persona_id');
 
-    // 4. Errors from cost_tracking? No, errors aren't in that table. Pull from any
-    //    topic that errored in last 24h (status = draft after a failed flow).
-    //    Conservative — just count.
-    const { data: erroredTopics } = await supabase
+    // 3. Last week's published recap
+    const { data: lastWeekPublished } = await supabase
         .from('topics')
-        .select('id, title, personas(name)')
-        .eq('status', 'draft')
-        .gte('updated_at', yesterday);
+        .select('id, title, persona_id, published_at, personas(name)')
+        .eq('status', 'published')
+        .gte('published_at', sevenDaysAgo)
+        .order('published_at', { ascending: false });
 
     const dateLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
@@ -66,12 +58,30 @@ export async function sendCooMorningDigest(supabase: SupabaseClient): Promise<bo
         return p?.name ?? 'Unknown';
     };
 
-    const autoApprovedRows = (autoApproved || []).map(t => `
-      <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #e8ddd0;font-weight:600;">${personaName(t)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e8ddd0;">${t.title}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e8ddd0;font-size:9.5pt;color:#64607a;font-style:italic;">${(t.hook || '').slice(0, 120)}${(t.hook || '').length > 120 ? '...' : ''}</td>
-      </tr>`).join('');
+    type WeekTopic = NonNullable<typeof weekAhead>[number];
+    const grouped = new Map<string, WeekTopic[]>();
+    for (const t of (weekAhead || [])) {
+        const k = personaName(t);
+        if (!grouped.has(k)) grouped.set(k, []);
+        grouped.get(k)!.push(t);
+    }
+
+    const dayName = (dateStr: string | null) => {
+        if (!dateStr) return '—';
+        const d = new Date(dateStr + 'T00:00:00Z');
+        return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+    };
+
+    const weekAheadSections = Array.from(grouped.entries()).map(([persona, topics]) => {
+        const rows = topics.map(t => `
+        <tr>
+          <td style="padding:6px 10px;border-bottom:1px solid #e8ddd0;font-weight:600;width:100px;color:#753679;">${dayName(t.publish_date)}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e8ddd0;">${t.title}</td>
+        </tr>`).join('');
+        return `
+      <h3 style="font-size:11pt;color:#2b0a3d;margin:20px 0 6px 0;">${persona} &mdash; ${topics.length} topics</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:10pt;">${rows}</table>`;
+    }).join('');
 
     const reviewRows = (heldForReview || []).map(t => `
       <tr>
@@ -80,13 +90,14 @@ export async function sendCooMorningDigest(supabase: SupabaseClient): Promise<bo
         <td style="padding:8px 12px;border-bottom:1px solid #e8ddd0;font-size:9.5pt;color:#c44a1a;">${t.review_reason || 'Guardrail flagged'}</td>
       </tr>`).join('');
 
-    const shippingRows = (shippingToday || []).map(t => `
+    const recapRows = (lastWeekPublished || []).map(t => `
       <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #e8ddd0;font-weight:600;">${personaName(t)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e8ddd0;">${t.title}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #e8ddd0;font-weight:600;width:120px;color:#64607a;font-size:9.5pt;">${dayName(t.published_at?.split('T')[0] ?? null)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #e8ddd0;">${t.title}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #e8ddd0;font-size:9.5pt;color:#64607a;">${personaName(t)}</td>
       </tr>`).join('');
 
-    const noActivity = (autoApproved?.length ?? 0) === 0 && (heldForReview?.length ?? 0) === 0 && (shippingToday?.length ?? 0) === 0;
+    const noActivity = (weekAhead?.length ?? 0) === 0 && (heldForReview?.length ?? 0) === 0;
 
     const html = `
 <!DOCTYPE html>
@@ -105,53 +116,41 @@ export async function sendCooMorningDigest(supabase: SupabaseClient): Promise<bo
     </div>
   </div>
 
-  <div style="font-size:14pt;font-weight:700;color:#2b0a3d;text-transform:uppercase;letter-spacing:1px;margin-bottom:20px;">COO Morning Digest &mdash; ${dateLabel}</div>
+  <div style="font-size:14pt;font-weight:700;color:#2b0a3d;text-transform:uppercase;letter-spacing:1px;margin-bottom:16px;">COO Weekly Preview &mdash; ${dateLabel}</div>
 
   <p style="color:#64607a;font-size:10pt;font-style:italic;margin-top:0;">
-    Auto-approved topics ship tomorrow (${tomorrow}). You have until then to pull the cord on any of the items below.
-    Reply to this email or visit /admin to override.
+    The week ahead. Auto-approved topics will publish on the dates shown.
+    Reply to this email or visit /admin to override anything before Monday morning.
   </p>
 
   <div style="display:flex;gap:16px;margin:20px 0;">
     <div style="flex:1;background:#f0faf4;border-radius:6px;padding:12px 16px;text-align:center;">
-      <div style="font-size:22pt;font-weight:700;color:#2d7a3a;">${autoApproved?.length ?? 0}</div>
-      <div style="font-size:9pt;color:#2d7a3a;">Auto-Approved</div>
+      <div style="font-size:22pt;font-weight:700;color:#2d7a3a;">${weekAhead?.length ?? 0}</div>
+      <div style="font-size:9pt;color:#2d7a3a;">Scheduled This Week</div>
     </div>
     <div style="flex:1;background:#fff8e8;border-radius:6px;padding:12px 16px;text-align:center;">
       <div style="font-size:22pt;font-weight:700;color:#dfae62;">${heldForReview?.length ?? 0}</div>
       <div style="font-size:9pt;color:#b5850a;">Held for Review</div>
     </div>
     <div style="flex:1;background:#f5f0fa;border-radius:6px;padding:12px 16px;text-align:center;">
-      <div style="font-size:22pt;font-weight:700;color:#2b0a3d;">${shippingToday?.length ?? 0}</div>
-      <div style="font-size:9pt;color:#753679;">Shipping Today</div>
-    </div>
-    <div style="flex:1;background:#fff0ef;border-radius:6px;padding:12px 16px;text-align:center;">
-      <div style="font-size:22pt;font-weight:700;color:#c44a1a;">${erroredTopics?.length ?? 0}</div>
-      <div style="font-size:9pt;color:#c44a1a;">Errored</div>
+      <div style="font-size:22pt;font-weight:700;color:#2b0a3d;">${lastWeekPublished?.length ?? 0}</div>
+      <div style="font-size:9pt;color:#753679;">Published Last 7d</div>
     </div>
   </div>
 
   ${noActivity ? `
   <div style="background:#fff0ef;border-left:4px solid #c44a1a;padding:12px 16px;margin:16px 0;">
-    <strong style="color:#c44a1a;">No activity in the last 24 hours.</strong>
-    The daily-topic cron may have skipped (check AUTO_TOPIC_PERSONA_IDS env on Vercel) or all configured personas hit duplicate guards. If this persists 2 days, investigate.
+    <strong style="color:#c44a1a;">No topics generated this Sunday.</strong>
+    Check the Vercel logs for daily-topic; AUTO_TOPIC_PERSONA_IDS may be empty or all configured personas failed.
   </div>` : ''}
 
-  ${(autoApproved?.length ?? 0) > 0 ? `
-  <h2 style="font-size:12pt;color:#2b0a3d;border-bottom:1px solid #dfae62;padding-bottom:4px;margin:24px 0 8px 0;">Auto-Approved by COO &mdash; Shipping ${tomorrow}</h2>
-  <p style="font-size:9.5pt;color:#64607a;margin:0 0 8px 0;">These passed guardrail and were promoted to the publish queue automatically.</p>
-  <table style="width:100%;border-collapse:collapse;font-size:10pt;">
-    <thead><tr>
-      <th style="background:#2b0a3d;color:#fff;padding:8px 12px;text-align:left;font-size:9.5pt;">Persona</th>
-      <th style="background:#2b0a3d;color:#fff;padding:8px 12px;text-align:left;font-size:9.5pt;">Topic</th>
-      <th style="background:#2b0a3d;color:#fff;padding:8px 12px;text-align:left;font-size:9.5pt;">Hook</th>
-    </tr></thead>
-    <tbody>${autoApprovedRows}</tbody>
-  </table>` : ''}
+  ${(weekAhead?.length ?? 0) > 0 ? `
+  <h2 style="font-size:12pt;color:#2b0a3d;border-bottom:1px solid #dfae62;padding-bottom:4px;margin:24px 0 8px 0;">Week Ahead &mdash; Auto-Approved by COO</h2>
+  ${weekAheadSections}` : ''}
 
   ${(heldForReview?.length ?? 0) > 0 ? `
   <h2 style="font-size:12pt;color:#b5850a;border-bottom:1px solid #dfae62;padding-bottom:4px;margin:24px 0 8px 0;">Held for Your Review</h2>
-  <p style="font-size:9.5pt;color:#64607a;margin:0 0 8px 0;">Guardrail (NotebookLM) flagged these. They will NOT publish until you approve them at /admin/topics.</p>
+  <p style="font-size:9.5pt;color:#64607a;margin:0 0 8px 0;">Guardrail (NotebookLM) flagged these. They will NOT publish until approved at /admin/topics.</p>
   <table style="width:100%;border-collapse:collapse;font-size:10pt;">
     <thead><tr>
       <th style="background:#dfae62;color:#2b0a3d;padding:8px 12px;text-align:left;font-size:9.5pt;">Persona</th>
@@ -161,31 +160,19 @@ export async function sendCooMorningDigest(supabase: SupabaseClient): Promise<bo
     <tbody>${reviewRows}</tbody>
   </table>` : ''}
 
-  ${(shippingToday?.length ?? 0) > 0 ? `
-  <h2 style="font-size:12pt;color:#2b0a3d;border-bottom:1px solid #dfae62;padding-bottom:4px;margin:24px 0 8px 0;">Shipping Today</h2>
-  <table style="width:100%;border-collapse:collapse;font-size:10pt;">
-    <thead><tr>
-      <th style="background:#2b0a3d;color:#fff;padding:8px 12px;text-align:left;font-size:9.5pt;">Persona</th>
-      <th style="background:#2b0a3d;color:#fff;padding:8px 12px;text-align:left;font-size:9.5pt;">Topic</th>
-    </tr></thead>
-    <tbody>${shippingRows}</tbody>
-  </table>` : ''}
+  ${(lastWeekPublished?.length ?? 0) > 0 ? `
+  <h2 style="font-size:12pt;color:#2b0a3d;border-bottom:1px solid #dfae62;padding-bottom:4px;margin:24px 0 8px 0;">Last Week's Recap</h2>
+  <table style="width:100%;border-collapse:collapse;font-size:10pt;">${recapRows}</table>` : ''}
 
   <div style="border-top:2px solid #dfae62;padding-top:10px;margin-top:40px;font-size:8pt;color:#64607a;">
     Faith &amp; Harmony LLC &mdash; faithandharmonyllc.com
-    <div style="font-size:7.5pt;color:#b5a99a;margin-top:4px;">Automated by Content Command Center. Sent at 7 AM ET daily.</div>
+    <div style="font-size:7.5pt;color:#b5a99a;margin-top:4px;">Automated by Content Command Center. Sent every Sunday at 8 AM ET.</div>
   </div>
 
 </body>
 </html>`;
 
-    const counts = {
-        approved: autoApproved?.length ?? 0,
-        review: heldForReview?.length ?? 0,
-        shipping: shippingToday?.length ?? 0,
-    };
-
-    const subject = `[Morning Digest] ${today} — ${counts.approved} approved · ${counts.review} review · ${counts.shipping} ship today`;
+    const subject = `[Weekly Preview] ${today} — ${weekAhead?.length ?? 0} scheduled · ${heldForReview?.length ?? 0} review · ${lastWeekPublished?.length ?? 0} shipped last week`;
 
     try {
         const response = await fetch('https://api.resend.com/emails', {
@@ -203,14 +190,14 @@ export async function sendCooMorningDigest(supabase: SupabaseClient): Promise<bo
         });
 
         if (!response.ok) {
-            console.error(`[Morning Digest] Resend error ${response.status}: ${await response.text()}`);
+            console.error(`[Weekly Preview] Resend error ${response.status}: ${await response.text()}`);
             return false;
         }
 
-        console.log(`[Morning Digest] Sent: ${counts.approved} approved, ${counts.review} review, ${counts.shipping} shipping today`);
+        console.log(`[Weekly Preview] Sent: ${weekAhead?.length ?? 0} scheduled, ${heldForReview?.length ?? 0} review, ${lastWeekPublished?.length ?? 0} recap`);
         return true;
     } catch (e) {
-        console.error('[Morning Digest] Failed to send email:', e);
+        console.error('[Weekly Preview] Failed to send email:', e);
         return false;
     }
 }

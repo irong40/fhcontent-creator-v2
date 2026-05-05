@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { sendCooMorningDigest } from '@/lib/coo-morning-digest';
+import { sendCooWeeklyPreview } from '@/lib/coo-weekly-preview';
 import { validateCronSecret } from '../middleware';
 
 export const maxDuration = 60;
@@ -12,7 +12,7 @@ export async function GET(request: Request) {
 
     try {
         const supabase = createAdminClient();
-        const sent = await sendCooMorningDigest(supabase);
+        const sent = await sendCooWeeklyPreview(supabase);
 
         return NextResponse.json({
             success: true,
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
             timestamp: new Date().toISOString(),
         });
     } catch (error) {
-        console.error('Morning digest cron error:', error);
+        console.error('Weekly preview cron error:', error);
         return NextResponse.json(
             { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
             { status: 500 },

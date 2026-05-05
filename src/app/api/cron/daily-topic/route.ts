@@ -70,39 +70,49 @@ export async function GET(request: Request) {
 
         const results = [];
 
+        // Weekly batch: Sundays generate 7 topics per persona, staggered Mon→Sun.
+        // Each topic gets its own publish_date so daily-publish ships them on schedule.
+        const TOPICS_PER_WEEK = 7;
+        const nowMs = Date.now();
+        const monday = new Date(nowMs);
+        // Move to next Monday (Sunday's UTC weekday is 0)
+        const utcDay = monday.getUTCDay();
+        const daysToMonday = utcDay === 0 ? 1 : (8 - utcDay);
+        monday.setUTCDate(monday.getUTCDate() + daysToMonday);
+        monday.setUTCHours(0, 0, 0, 0);
+
         for (const persona of personas) {
             const personaResult = {
                 personaId: persona.id,
                 personaName: persona.name,
-                topicCreated: null as string | null,
-                contentGenerated: false,
-                cooAutoApproved: false,
-                scheduledFor: null as string | null,
+                topicsCreated: [] as Array<{ id: string; title: string; publishDate: string; cooApproved: boolean; heldForReview: boolean }>,
                 skipped: false,
                 skipReason: null as string | null,
                 errors: [] as string[],
             };
 
-            // Skip if a draft or in-progress topic already exists for this persona today
-            const today = new Date().toISOString().split('T')[0];
-            const { data: existingToday } = await supabase
+            // Skip if a topic was created for this persona in the last 6 days (avoid
+            // re-running the Sunday batch and double-generating).
+            const sixDaysAgo = new Date(nowMs - 6 * 24 * 60 * 60 * 1000).toISOString();
+            const { data: existingThisWeek } = await supabase
                 .from('topics')
                 .select('id, status')
                 .eq('persona_id', persona.id)
-                .gte('created_at', `${today}T00:00:00Z`)
+                .gte('created_at', sixDaysAgo)
                 .in('status', ['draft', 'content_generating', 'content_ready', 'approved', 'scheduled'])
                 .limit(1);
 
-            if (existingToday && existingToday.length > 0) {
+            if (existingThisWeek && existingThisWeek.length > 0) {
                 personaResult.skipped = true;
-                personaResult.skipReason = `Topic already exists today (status: ${existingToday[0].status})`;
+                personaResult.skipReason = `Already has a topic from this week (status: ${existingThisWeek[0].status})`;
                 results.push(personaResult);
                 continue;
             }
 
-            // ── Step 1: Generate topic ──
+            // ── Step 1: Generate 7 topics in one Claude call ──
+            let weekTopics: Array<{ title: string; hook: string; historicalPoints: unknown; thumbnailPrompt?: string }> = [];
             try {
-                const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+                const ninetyDaysAgo = new Date(nowMs - 90 * 24 * 60 * 60 * 1000).toISOString();
                 const { data: recentData } = await supabase
                     .from('published_log')
                     .select('topic_title')
@@ -112,119 +122,123 @@ export async function GET(request: Request) {
 
                 const recentTopics = (recentData || []).map(r => r.topic_title);
 
-                const { system: topicSystem, user: topicUser } = buildTopicPrompt(persona, recentTopics, 1);
+                const { system: topicSystem, user: topicUser } = buildTopicPrompt(persona, recentTopics, TOPICS_PER_WEEK);
                 const { text: topicText, inputTokens: tIn, outputTokens: tOut } = await claude.generateContent(
                     topicSystem,
                     topicUser,
-                    { maxTokens: 4096 },
+                    { maxTokens: 16000 },
                 );
 
                 await supabase.from('cost_tracking').insert({
                     service: 'claude',
-                    operation: 'topic_generation',
+                    operation: 'topic_generation_weekly',
                     cost_usd: estimateClaudeCost(tIn, tOut),
                     tokens_input: tIn,
                     tokens_output: tOut,
                 });
 
                 const topicJsonText = topicText.replace(/```json\n?|\n?```/g, '').trim();
-                let topicParsed: unknown;
-                try {
-                    topicParsed = JSON.parse(topicJsonText);
-                } catch {
-                    personaResult.errors.push('Topic generation: AI returned invalid JSON');
-                    results.push(personaResult);
-                    continue;
-                }
-
+                const topicParsed = JSON.parse(topicJsonText);
                 const topicResult = topicResponseSchema.safeParse(topicParsed);
                 if (!topicResult.success || topicResult.data.topics.length === 0) {
                     personaResult.errors.push('Topic generation: invalid response format');
                     results.push(personaResult);
                     continue;
                 }
+                weekTopics = topicResult.data.topics.slice(0, TOPICS_PER_WEEK) as typeof weekTopics;
+            } catch (e) {
+                personaResult.errors.push(`Weekly topic generation: ${e instanceof Error ? e.message : 'unknown'}`);
+                results.push(personaResult);
+                continue;
+            }
 
-                const topic = topicResult.data.topics[0];
+            // ── Step 2: For each topic, dup-check, insert, guardrail, content-gen, schedule ──
+            for (let i = 0; i < weekTopics.length; i++) {
+                const topic = weekTopics[i];
+                const publishDateObj = new Date(monday);
+                publishDateObj.setUTCDate(publishDateObj.getUTCDate() + i);
+                const publishDate = publishDateObj.toISOString().split('T')[0];
 
-                // Duplicate check
-                const { data: dupCheck } = await supabase.rpc('check_duplicate_topic', {
-                    p_persona_id: persona.id,
-                    p_title: topic.title,
-                });
-                if (dupCheck?.[0]?.is_duplicate === true) {
-                    personaResult.skipped = true;
-                    personaResult.skipReason = `Duplicate: similar to "${dupCheck[0].similar_title}"`;
-                    results.push(personaResult);
-                    continue;
-                }
-
-                // Assign voice via LRU rotation
-                const { data: voiceId } = await supabase.rpc('get_lru_voice', {
-                    p_persona_id: persona.id,
-                });
-
-                const topicHash = crypto
-                    .createHash('md5')
-                    .update(topic.title.toLowerCase().trim())
-                    .digest('hex');
-
-                const { data: inserted, error: insertError } = await supabase
-                    .from('topics')
-                    .insert({
-                        persona_id: persona.id,
-                        title: topic.title,
-                        hook: topic.hook,
-                        historical_points: topic.historicalPoints as unknown as Database['public']['Tables']['topics']['Insert']['historical_points'],
-                        topic_hash: topicHash,
-                        voice_id: voiceId || 'default',
-                        thumbnail_prompt: topic.thumbnailPrompt || null,
-                        status: 'draft',
-                    })
-                    .select()
-                    .single();
-
-                if (insertError || !inserted) {
-                    personaResult.errors.push(`Topic insert failed: ${insertError?.message}`);
-                    results.push(personaResult);
-                    continue;
-                }
-
-                // Guardrail check
-                if (hasGuardrail(persona)) {
-                    try {
-                        const guardrailResult = await verifyTopicAgainstNotebookLM(
-                            topic.title,
-                            topic.hook,
-                            persona.guardrail_notebook_ids || [],
-                        );
-                        await supabase.from('topics').update({
-                            source_verified: guardrailResult.verified,
-                            requires_review: guardrailResult.requiresReview,
-                            review_reason: guardrailResult.reviewReason,
-                        }).eq('id', inserted.id);
-
-                        if (guardrailResult.requiresReview) {
-                            personaResult.topicCreated = inserted.id;
-                            personaResult.skipReason = 'Guardrail: flagged for manual review — skipping content generation';
-                            results.push(personaResult);
-                            continue;
-                        }
-                    } catch (e) {
-                        await supabase.from('topics').update({
-                            requires_review: true,
-                            review_reason: 'Guardrail verification failed — flagged for manual review',
-                        }).eq('id', inserted.id);
-                        personaResult.topicCreated = inserted.id;
-                        personaResult.skipReason = 'Guardrail verification error — skipping content generation';
-                        results.push(personaResult);
+                try {
+                    // Duplicate check
+                    const { data: dupCheck } = await supabase.rpc('check_duplicate_topic', {
+                        p_persona_id: persona.id,
+                        p_title: topic.title,
+                    });
+                    if (dupCheck?.[0]?.is_duplicate === true) {
+                        personaResult.errors.push(`Day ${i + 1} (${publishDate}): duplicate of "${dupCheck[0].similar_title}", skipped`);
                         continue;
                     }
-                }
 
-                personaResult.topicCreated = inserted.id;
+                    // Assign voice via LRU rotation
+                    const { data: voiceId } = await supabase.rpc('get_lru_voice', {
+                        p_persona_id: persona.id,
+                    });
 
-                // ── Step 2: Generate content pieces (scripts + captions) ──
-                try {
+                    const topicHash = crypto
+                        .createHash('md5')
+                        .update(topic.title.toLowerCase().trim())
+                        .digest('hex');
+
+                    const { data: inserted, error: insertError } = await supabase
+                        .from('topics')
+                        .insert({
+                            persona_id: persona.id,
+                            title: topic.title,
+                            hook: topic.hook,
+                            historical_points: topic.historicalPoints as unknown as Database['public']['Tables']['topics']['Insert']['historical_points'],
+                            topic_hash: topicHash,
+                            voice_id: voiceId || 'default',
+                            thumbnail_prompt: topic.thumbnailPrompt || null,
+                            status: 'draft',
+                        })
+                        .select()
+                        .single();
+
+                    if (insertError || !inserted) {
+                        personaResult.errors.push(`Day ${i + 1}: topic insert failed: ${insertError?.message}`);
+                        continue;
+                    }
+
+                    // Guardrail check
+                    let heldForReview = false;
+                    if (hasGuardrail(persona)) {
+                        try {
+                            const guardrailResult = await verifyTopicAgainstNotebookLM(
+                                topic.title,
+                                topic.hook,
+                                persona.guardrail_notebook_ids || [],
+                            );
+                            await supabase.from('topics').update({
+                                source_verified: guardrailResult.verified,
+                                requires_review: guardrailResult.requiresReview,
+                                review_reason: guardrailResult.reviewReason,
+                            }).eq('id', inserted.id);
+
+                            if (guardrailResult.requiresReview) {
+                                heldForReview = true;
+                            }
+                        } catch {
+                            await supabase.from('topics').update({
+                                requires_review: true,
+                                review_reason: 'Guardrail verification failed — flagged for manual review',
+                            }).eq('id', inserted.id);
+                            heldForReview = true;
+                        }
+                    }
+
+                    if (heldForReview) {
+                        personaResult.topicsCreated.push({
+                            id: inserted.id,
+                            title: topic.title,
+                            publishDate,
+                            cooApproved: false,
+                            heldForReview: true,
+                        });
+                        continue;
+                    }
+
+                    // Generate content pieces (scripts + captions)
                     await supabase
                         .from('topics')
                         .update({ status: 'content_generating' })
@@ -248,27 +262,16 @@ export async function GET(request: Request) {
                     });
 
                     const contentJsonText = contentText.replace(/```json\n?|\n?```/g, '').trim();
-                    let contentParsed: unknown;
-                    try {
-                        contentParsed = JSON.parse(contentJsonText);
-                    } catch {
-                        await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
-                        personaResult.errors.push('Content generation: AI returned invalid JSON');
-                        results.push(personaResult);
-                        continue;
-                    }
-
+                    const contentParsed = JSON.parse(contentJsonText);
                     const contentResult = contentResponseSchema.safeParse(contentParsed);
                     if (!contentResult.success) {
                         await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
-                        personaResult.errors.push('Content generation: invalid response format');
-                        results.push(personaResult);
+                        personaResult.errors.push(`Day ${i + 1}: content generation invalid response`);
                         continue;
                     }
 
                     // Insert content pieces
-                    const pieces = contentResult.data.pieces;
-                    for (const piece of pieces) {
+                    for (const piece of contentResult.data.pieces) {
                         const pieceType = piece.pieceType as PieceType;
                         await supabase.from('content_pieces').insert({
                             topic_id: inserted.id,
@@ -287,29 +290,25 @@ export async function GET(request: Request) {
                         });
                     }
 
-                    // COO auto-approve: topics that pass guardrail (or have no guardrail)
-                    // jump straight to scheduled with a +24h publish window so daily-publish
-                    // ships them tomorrow. Adam has 24h to read the morning digest and pull
-                    // the cord before the run. Topics that failed guardrail were already
-                    // continued out above and won't reach this branch.
-                    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                    // COO auto-approve and schedule for its day in the week
                     await supabase.from('topics').update({
                         status: 'scheduled',
                         content_ready_at: new Date().toISOString(),
-                        publish_date: tomorrow,
+                        publish_date: publishDate,
                         coo_auto_approved_at: new Date().toISOString(),
                     }).eq('id', inserted.id);
 
-                    personaResult.contentGenerated = true;
-                    personaResult.cooAutoApproved = true;
-                    personaResult.scheduledFor = tomorrow;
+                    personaResult.topicsCreated.push({
+                        id: inserted.id,
+                        title: topic.title,
+                        publishDate,
+                        cooApproved: true,
+                        heldForReview: false,
+                    });
                 } catch (e) {
-                    await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
-                    personaResult.errors.push(`Content generation: ${e instanceof Error ? e.message : 'unknown'}`);
+                    personaResult.errors.push(`Day ${i + 1} (${publishDate}): ${e instanceof Error ? e.message : 'unknown'}`);
                 }
-            } catch (e) {
-                personaResult.errors.push(`Topic generation: ${e instanceof Error ? e.message : 'unknown'}`);
-            }
+            } // end per-topic loop
 
             if (personaResult.errors.length > 0) {
                 await notifyError({
@@ -322,9 +321,13 @@ export async function GET(request: Request) {
             results.push(personaResult);
         }
 
+        const totalScheduled = results.reduce((n, r) => n + r.topicsCreated.filter(t => t.cooApproved).length, 0);
+        const totalHeld = results.reduce((n, r) => n + r.topicsCreated.filter(t => t.heldForReview).length, 0);
         return NextResponse.json({
             success: true,
-            processed: results.filter(r => r.contentGenerated).length,
+            scheduled: totalScheduled,
+            heldForReview: totalHeld,
+            personas: results.length,
             results,
         });
     } catch (error) {
