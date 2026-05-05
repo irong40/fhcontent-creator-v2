@@ -76,6 +76,8 @@ export async function GET(request: Request) {
                 personaName: persona.name,
                 topicCreated: null as string | null,
                 contentGenerated: false,
+                cooAutoApproved: false,
+                scheduledFor: null as string | null,
                 skipped: false,
                 skipReason: null as string | null,
                 errors: [] as string[],
@@ -285,12 +287,22 @@ export async function GET(request: Request) {
                         });
                     }
 
+                    // COO auto-approve: topics that pass guardrail (or have no guardrail)
+                    // jump straight to scheduled with a +24h publish window so daily-publish
+                    // ships them tomorrow. Adam has 24h to read the morning digest and pull
+                    // the cord before the run. Topics that failed guardrail were already
+                    // continued out above and won't reach this branch.
+                    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
                     await supabase.from('topics').update({
-                        status: 'content_ready',
+                        status: 'scheduled',
                         content_ready_at: new Date().toISOString(),
+                        publish_date: tomorrow,
+                        coo_auto_approved_at: new Date().toISOString(),
                     }).eq('id', inserted.id);
 
                     personaResult.contentGenerated = true;
+                    personaResult.cooAutoApproved = true;
+                    personaResult.scheduledFor = tomorrow;
                 } catch (e) {
                     await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
                     personaResult.errors.push(`Content generation: ${e instanceof Error ? e.message : 'unknown'}`);

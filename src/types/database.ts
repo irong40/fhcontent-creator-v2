@@ -126,6 +126,7 @@ export interface Database {
                     reviewed_at: string | null;
                     content_channel: ContentChannel;
                     lecture_data: Json | null;
+                    coo_auto_approved_at: string | null;
                 };
                 Insert: {
                     id?: string;
@@ -154,6 +155,7 @@ export interface Database {
                     reviewed_at?: string | null;
                     content_channel?: ContentChannel;
                     lecture_data?: Json | null;
+                    coo_auto_approved_at?: string | null;
                 };
                 Update: {
                     id?: string;
@@ -182,6 +184,7 @@ export interface Database {
                     reviewed_at?: string | null;
                     content_channel?: ContentChannel;
                     lecture_data?: Json | null;
+                    coo_auto_approved_at?: string | null;
                 };
                 Relationships: [
                     {

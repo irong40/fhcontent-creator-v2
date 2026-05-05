@@ -62,6 +62,7 @@ const mockTopic: Topic = {
     reviewed_at: null,
     content_channel: 'social' as const,
     lecture_data: null,
+    coo_auto_approved_at: null,
 };
 
 describe('buildTopicPrompt', () => {
