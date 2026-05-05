@@ -270,10 +270,15 @@ export async function GET(request: Request) {
                         continue;
                     }
 
-                    // Insert content pieces
+                    // Insert content pieces. NOTE: content_pieces does NOT have a
+                    // content_channel column — that lives on topics. Including it here
+                    // silently failed every insert (Supabase JS client doesn't throw
+                    // by default), orphaning every topic since 2026-05-03. Guard with
+                    // an error check so a future schema drift fails loudly.
+                    let piecesInserted = 0;
                     for (const piece of contentResult.data.pieces) {
                         const pieceType = piece.pieceType as PieceType;
-                        await supabase.from('content_pieces').insert({
+                        const { error: pieceErr } = await supabase.from('content_pieces').insert({
                             topic_id: inserted.id,
                             piece_type: pieceType,
                             piece_order: PIECE_ORDER[pieceType] ?? 99,
@@ -286,8 +291,19 @@ export async function GET(request: Request) {
                                 : null,
                             music_track: piece.musicTrack || null,
                             status: 'pending',
-                            content_channel: 'social',
                         });
+                        if (pieceErr) {
+                            personaResult.errors.push(`Day ${i + 1}: piece (${pieceType}) insert failed: ${pieceErr.message}`);
+                        } else {
+                            piecesInserted++;
+                        }
+                    }
+
+                    if (piecesInserted === 0) {
+                        // Don't auto-approve a topic with no pieces — daily-publish would just fail it.
+                        await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
+                        personaResult.errors.push(`Day ${i + 1}: zero pieces inserted, topic left as draft`);
+                        continue;
                     }
 
                     // COO auto-approve and schedule for its day in the week
