@@ -12,7 +12,7 @@ import type { Database } from '@/types/database';
 import type { PieceType, TopicWithPersona } from '@/types/database';
 import crypto from 'crypto';
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 const PIECE_ORDER: Record<PieceType, number> = {
     long: 1,
