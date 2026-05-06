@@ -14,7 +14,7 @@ import { interpolateTemplate } from '@/lib/utils';
 import type { HeyGenScene } from '@/lib/heygen';
 import type { ContentPiece, TopicWithBrand, Brand, Persona, Topic, PieceType, CarouselSlide } from '@/types/database';
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 const HEYGEN_PIECE_TYPES: PieceType[] = ['long', 'lecture'];
 const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'short_4'];
