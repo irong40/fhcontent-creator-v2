@@ -113,7 +113,8 @@ export async function GET(request: Request) {
         const { data: topics, error: topicError } = await supabase
             .from('topics')
             .select('*, personas(*)')
-            .in('status', ['content_ready', 'approved', 'scheduled']);
+            .in('status', ['content_ready', 'approved', 'scheduled'])
+            .order('publish_date', { ascending: true, nullsFirst: false });
 
         if (topicError) {
             return NextResponse.json(
