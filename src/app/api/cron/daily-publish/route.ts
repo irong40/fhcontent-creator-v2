@@ -173,6 +173,16 @@ export async function publishTopic(
     }
 
     if (!anySuccess) {
+        // If every piece was skipped because media isn't ready yet, leave as scheduled
+        // so the next hourly run can retry. Don't mark failed and don't alert.
+        if (result.piecesProcessed === 0) {
+            await supabase
+                .from('topics')
+                .update({ status: 'scheduled' })
+                .eq('id', topicId);
+            console.warn(`[daily-publish] Topic ${topicId} ("${topic.title}") media not ready — left scheduled for retry`);
+            return result;
+        }
         await supabase
             .from('topics')
             .update({ status: 'failed', error_message: 'All platform publishes failed' })
