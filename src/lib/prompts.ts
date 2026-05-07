@@ -109,7 +109,7 @@ FOR EACH PIECE, PROVIDE:
   * 1 discovery: #DidYouKnow #FYP #Viral
   Example: "#BlackHistory #BlackHistoryFacts #DidYouKnow #BlackExcellence #HistoryTok"
 - captionShort: 280 character caption for Twitter/X (include 2-3 of the same hashtags)
-- thumbnailPrompt: Prompt for AI thumbnail generation
+- thumbnailPrompt: Prompt for AI thumbnail generation${persona.image_subject_constraint ? `\n\nIMAGE-PROMPT SUBJECT RULE — applies to BOTH thumbnailPrompt and every carousel imagePrompt:\n${persona.image_subject_constraint}` : ''}
 
 For each piece, also include a "musicTrack" field with a mood string for background music (e.g., "inspirational", "upbeat", "dramatic", "reflective", "triumphant"). Pick a mood that matches the piece's tone and content.
 
@@ -132,6 +132,7 @@ export function buildCarouselSlidesPrompt(
     topic: Topic,
     researchContent: HistoricalPoint[],
     brandTone: string,
+    imageSubjectConstraint?: string | null,
 ): { system: string; user: string } {
     const system = `You are a visual content strategist creating carousel slides for social media.
 Voice/tone: ${brandTone}
@@ -140,7 +141,7 @@ IMPORTANT RULES:
 - Each slide must be visually focused — short, punchy text that works on a 1080x1080 image.
 - Cite primary sources where applicable (inline, e.g. "— Library of Congress, 1922").
 - NEVER use a corrective/contrarian pattern. Lead with the truth directly.
-- You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
+- You MUST respond with valid JSON only. No markdown, no code fences, no explanation.${imageSubjectConstraint ? `\n\nIMAGE-PROMPT SUBJECT RULE — every image_prompt you write MUST follow this constraint:\n${imageSubjectConstraint}` : ''}`;
 
     const user = `TOPIC: ${topic.title}
 HOOK: ${topic.hook}
@@ -159,7 +160,7 @@ For each slide provide:
 - title: bold headline for the slide (3-8 words)
 - subtitle: optional secondary line
 - body: the main text content (1-3 sentences, concise)
-- image_prompt: a vivid, detailed prompt for AI image generation that matches the slide content. Style: historical, photorealistic, cinematic lighting, no text overlay.
+- image_prompt: a vivid, detailed prompt for AI image generation that matches the slide content. Style: historical, photorealistic, cinematic lighting, no text overlay.${imageSubjectConstraint ? ` The IMAGE-PROMPT SUBJECT RULE above is mandatory and must be reflected in every image_prompt — bake the constraint INTO the prompt text itself so the downstream image model honors it.` : ''}
 
 OUTPUT FORMAT (JSON only):
 {

@@ -29,6 +29,7 @@ export interface Database {
                     brand_id: string | null;
                     newsletter_url: string | null;
                     newsletter_cta: string | null;
+                    image_subject_constraint: string | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -52,6 +53,7 @@ export interface Database {
                     brand_id?: string | null;
                     newsletter_url?: string | null;
                     newsletter_cta?: string | null;
+                    image_subject_constraint?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -75,6 +77,7 @@ export interface Database {
                     brand_id?: string | null;
                     newsletter_url?: string | null;
                     newsletter_cta?: string | null;
+                    image_subject_constraint?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
