@@ -5,6 +5,7 @@ import { heygen } from '@/lib/heygen';
 import { blotato } from '@/lib/blotato';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
+import { claude } from '@/lib/claude';
 import { uploadAudio, uploadImage } from '@/lib/storage';
 import { estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
@@ -366,6 +367,10 @@ export async function GET(request: Request) {
                 }
 
                 // ── Stage 2: Thumbnails (all pieces with thumbnail_prompt) ──
+                // Persona-scoped subject constraint: when set, every generated image is audited
+                // against it before upload. Failed images are held (piece.status = failed) instead of publishing.
+                const subjectConstraint = persona.image_subject_constraint;
+
                 for (const piece of allPieces as ContentPiece[]) {
                     if (!piece.thumbnail_prompt || piece.thumbnail_url) continue;
 
@@ -384,6 +389,21 @@ export async function GET(request: Request) {
 
                             imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
                             sourceService = 'gemini';
+                        }
+
+                        // Subject-constraint audit (only when persona has one set)
+                        if (subjectConstraint) {
+                            const audit = await claude.auditImageSubjects(imageBuffer, subjectConstraint);
+                            if (!audit.pass) {
+                                await supabase.from('content_pieces').update({
+                                    status: 'failed',
+                                    error_message: `subject-audit failed (held for review): ${audit.reason ?? 'unspecified'}`,
+                                }).eq('id', piece.id);
+                                topicResult.errors.push(
+                                    `${piece.piece_type} thumbnail held for review: ${audit.reason ?? 'audit failed'}`,
+                                );
+                                continue;
+                            }
                         }
 
                         const storagePath = `${topic.id}/${piece.piece_type}_thumbnail.png`;
@@ -438,6 +458,17 @@ export async function GET(request: Request) {
                                         const imageResponse = await fetch(dalleUrl);
                                         if (!imageResponse.ok) continue;
                                         const imageBuffer = await imageResponse.arrayBuffer();
+
+                                        // Subject-constraint audit for carousel slides
+                                        if (subjectConstraint) {
+                                            const audit = await claude.auditImageSubjects(imageBuffer, subjectConstraint);
+                                            if (!audit.pass) {
+                                                topicResult.errors.push(
+                                                    `carousel slide ${slide.slide} held: ${audit.reason ?? 'audit failed'}`,
+                                                );
+                                                continue;
+                                            }
+                                        }
 
                                         const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
                                         const slideUrl = await uploadImage(storagePath, imageBuffer, 'image/png');

@@ -59,11 +59,12 @@ export async function POST(request: NextRequest) {
         // Fetch persona for brand tone
         const { data: persona } = await supabase
             .from('personas')
-            .select('voice_style, brand, platform_accounts')
+            .select('voice_style, brand, platform_accounts, image_subject_constraint')
             .eq('id', topic.persona_id)
             .single();
 
         const brandTone = persona?.voice_style || 'authoritative yet conversational';
+        const imageSubjectConstraint = persona?.image_subject_constraint ?? null;
         const historicalPoints = topic.historical_points as HistoricalPoint[];
 
         // Mark piece as generating
@@ -77,6 +78,7 @@ export async function POST(request: NextRequest) {
             topic,
             historicalPoints,
             brandTone,
+            imageSubjectConstraint,
         );
 
         const claudeResult = await claude.generateContent(system, user, {

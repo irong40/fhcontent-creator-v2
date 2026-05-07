@@ -22,6 +22,7 @@ const mockPersona: Persona = {
     brand_id: null,
     newsletter_url: null,
     newsletter_cta: null,
+    image_subject_constraint: null,
     content_guardrail: null,
     guardrail_notebook_ids: null,
     facebook_page_ids: null,

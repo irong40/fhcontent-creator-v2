@@ -29,6 +29,7 @@ export interface Database {
                     brand_id: string | null;
                     newsletter_url: string | null;
                     newsletter_cta: string | null;
+                    image_subject_constraint: string | null;
                     content_guardrail: string | null;
                     guardrail_notebook_ids: string[] | null;
                     facebook_page_ids: string[] | null;
@@ -55,6 +56,7 @@ export interface Database {
                     brand_id?: string | null;
                     newsletter_url?: string | null;
                     newsletter_cta?: string | null;
+                    image_subject_constraint?: string | null;
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
@@ -81,6 +83,7 @@ export interface Database {
                     brand_id?: string | null;
                     newsletter_url?: string | null;
                     newsletter_cta?: string | null;
+                    image_subject_constraint?: string | null;
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
