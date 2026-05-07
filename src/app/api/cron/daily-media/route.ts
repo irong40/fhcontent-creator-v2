@@ -6,7 +6,6 @@ import { blotato } from '@/lib/blotato';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
 import { claude } from '@/lib/claude';
-import { canva, type AutofillData } from '@/lib/canva';
 import { uploadAudio, uploadImage } from '@/lib/storage';
 import { estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
@@ -16,7 +15,7 @@ import { interpolateTemplate } from '@/lib/utils';
 import type { HeyGenScene } from '@/lib/heygen';
 import type { ContentPiece, TopicWithBrand, Brand, Persona, Topic, PieceType, CarouselSlide } from '@/types/database';
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 const HEYGEN_PIECE_TYPES: PieceType[] = ['long', 'lecture'];
 const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'short_4'];
@@ -114,8 +113,9 @@ export async function GET(request: Request) {
         // Find topics that need media: content_ready, or approved/scheduled with failed pieces
         const { data: topics, error: topicError } = await supabase
             .from('topics')
-            .select('*, personas(*, brands(*))')
-            .in('status', ['content_ready', 'approved', 'scheduled']);
+            .select('*, personas(*)')
+            .in('status', ['content_ready', 'approved', 'scheduled'])
+            .order('publish_date', { ascending: true, nullsFirst: false });
 
         if (topicError) {
             return NextResponse.json(
@@ -193,7 +193,36 @@ export async function GET(request: Request) {
                     }
 
                     if (!avatarId) {
-                        topicResult.errors.push(`${piece.piece_type}: no heygen_avatar_id on persona`);
+                        // Fallback: use Blotato AI Story Video for long-form when no HeyGen avatar
+                        const templateId = persona.blotato_template_id;
+                        if (templateId && !piece.blotato_job_id) {
+                            try {
+                                const videoResponse = await blotato.createVideoFromPrompt(
+                                    templateId,
+                                    piece.script,
+                                );
+                                await supabase
+                                    .from('content_pieces')
+                                    .update({
+                                        blotato_job_id: videoResponse.item.id,
+                                        blotato_status: 'processing',
+                                        status: 'processing',
+                                    })
+                                    .eq('id', piece.id);
+                                await supabase.from('cost_tracking').insert({
+                                    service: 'blotato',
+                                    operation: 'long_video_fallback',
+                                    topic_id: topic.id,
+                                    content_piece_id: piece.id,
+                                    cost_usd: 0.15,
+                                });
+                                topicResult.blotatoSubmitted++;
+                            } catch (e) {
+                                topicResult.errors.push(
+                                    `${piece.piece_type} Blotato fallback: ${e instanceof Error ? e.message : 'unknown'}`,
+                                );
+                            }
+                        }
                         continue;
                     }
 
@@ -339,7 +368,7 @@ export async function GET(request: Request) {
 
                 // ── Stage 2: Thumbnails (all pieces with thumbnail_prompt) ──
                 // Persona-scoped subject constraint: when set, every generated image is audited
-                // against it before upload. Failed images skip publish and the piece is held for review.
+                // against it before upload. Failed images are held (piece.status = failed) instead of publishing.
                 const subjectConstraint = persona.image_subject_constraint;
 
                 for (const piece of allPieces as ContentPiece[]) {
@@ -412,20 +441,17 @@ export async function GET(request: Request) {
                     }
                 }
 
-                // ── Stage 3: Carousel (carousel piece only) ──
+                // ── Stage 3: Carousel slides (DALL-E imagery, no external design tool) ──
+                // Canva path removed 2026-05-02 — Adam canceled Canva subscription.
+                // HUVA brand templates live in templates/huva/ (Playwright-rendered, $0).
                 const carouselPiece = (allPieces as ContentPiece[]).find(p => p.piece_type === 'carousel');
-                const carouselTemplateId = persona.canva_carousel_template_id;
-
-                if (carouselPiece && carouselTemplateId && !carouselPiece.canva_design_id) {
+                if (carouselPiece && !carouselPiece.carousel_url) {
                     const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
                     if (slides && slides.length > 0) {
                         try {
-                            const autofillData: AutofillData = {};
-                            let slideImagesGenerated = 0;
-
+                            const imageUrls: string[] = [];
+                            console.log(`[daily-media] Generating ${slides.length} carousel slides via DALL-E...`);
                             for (const slide of slides) {
-                                autofillData[`slide_${slide.slide}_text`] = { type: 'text', text: slide.text };
-
                                 if (slide.imagePrompt) {
                                     try {
                                         const { url: dalleUrl } = await openai.generateImage(slide.imagePrompt);
@@ -445,63 +471,47 @@ export async function GET(request: Request) {
                                         }
 
                                         const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
-                                        const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
-
-                                        const assetId = await canva.uploadAsset(
-                                            `slide_${slide.slide}`,
-                                            imageBuffer,
-                                        );
-                                        autofillData[`slide_${slide.slide}_image`] = { type: 'image', asset_id: assetId };
-                                        slideImagesGenerated++;
+                                        const slideUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
+                                        imageUrls.push(slideUrl);
 
                                         await supabase.from('visual_assets').insert({
                                             content_piece_id: carouselPiece.id,
                                             asset_type: 'carousel_image',
                                             source_service: 'openai',
-                                            asset_url: slideImageUrl,
+                                            asset_url: slideUrl,
                                             metadata: { slide: slide.slide, prompt: slide.imagePrompt },
                                             status: 'ready',
                                         });
+
+                                        console.log(`[daily-media] Slide ${slide.slide}: done`);
                                     } catch (e) {
-                                        console.warn(`Carousel slide ${slide.slide} image failed:`, e);
+                                        console.error(`[daily-media] Carousel slide ${slide.slide} DALL-E failed:`, e);
                                     }
                                 }
                             }
 
-                            const designId = await canva.createDesignAutofill(carouselTemplateId, autofillData);
-
-                            await supabase
-                                .from('content_pieces')
-                                .update({ canva_design_id: designId })
-                                .eq('id', carouselPiece.id);
-
-                            const exportedUrls = await canva.exportDesign(designId, 'png');
-
-                            if (exportedUrls.length > 0) {
-                                // Store all slide URLs as JSON array for multi-slide carousel support
-                                const carouselUrl = exportedUrls.length === 1
-                                    ? exportedUrls[0]
-                                    : JSON.stringify(exportedUrls);
+                            if (imageUrls.length > 0) {
+                                const carouselUrl = imageUrls.length === 1
+                                    ? imageUrls[0]
+                                    : JSON.stringify(imageUrls);
                                 await supabase
                                     .from('content_pieces')
                                     .update({ carousel_url: carouselUrl })
                                     .eq('id', carouselPiece.id);
-                            }
 
-                            if (slideImagesGenerated > 0) {
                                 await supabase.from('cost_tracking').insert({
                                     service: 'openai',
                                     operation: 'dalle_carousel_slides',
                                     topic_id: topic.id,
                                     content_piece_id: carouselPiece.id,
-                                    cost_usd: estimateDalleCost(slideImagesGenerated),
+                                    cost_usd: estimateDalleCost(imageUrls.length),
                                 });
-                            }
 
-                            topicResult.carouselCreated = true;
+                                topicResult.carouselCreated = true;
+                            }
                         } catch (e) {
                             topicResult.errors.push(
-                                `carousel: ${e instanceof Error ? e.message : 'unknown'}`,
+                                `carousel fallback: ${e instanceof Error ? e.message : 'unknown'}`,
                             );
                         }
                     }

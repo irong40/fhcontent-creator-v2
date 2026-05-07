@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTargetPlatforms, getMediaUrl, isTextOnlyPlatform } from './helpers';
+import { getTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 
 describe('getTargetPlatforms', () => {
     it('returns tiktok, instagram, youtube for long video', () => {
@@ -87,5 +87,48 @@ describe('isTextOnlyPlatform', () => {
         'tiktok', 'instagram', 'youtube', 'linkedin', 'facebook', 'pinterest',
     ] as const)('returns false for %s', (platform) => {
         expect(isTextOnlyPlatform(platform)).toBe(false);
+    });
+});
+
+describe('truncateTikTokTitle', () => {
+    it('returns title unchanged when within limit', () => {
+        expect(truncateTikTokTitle('short title')).toBe('short title');
+    });
+
+    it('truncates titles longer than 90 chars with ellipsis', () => {
+        const long = 'a'.repeat(120);
+        const out = truncateTikTokTitle(long);
+        expect(out.length).toBe(90);
+        expect(out.endsWith('…')).toBe(true);
+    });
+
+    it('handles a real-world failing title from Mary Peake topic', () => {
+        const title = "Richmond's Secret School: How Mary Peake Built Virginia's First Literacy Network (1847-1862)";
+        expect(title.length).toBeGreaterThan(90);
+        const out = truncateTikTokTitle(title);
+        expect(out.length).toBeLessThanOrEqual(90);
+    });
+});
+
+describe('capInstagramHashtags', () => {
+    it('keeps captions with 5 or fewer hashtags untouched', () => {
+        const text = 'Great post #a #b #c #d #e';
+        expect(capInstagramHashtags(text)).toBe('Great post #a #b #c #d #e');
+    });
+
+    it('strips hashtags beyond the 5th', () => {
+        const text = 'Great post #a #b #c #d #e #f #g';
+        const out = capInstagramHashtags(text);
+        const matches = out.match(/#[\p{L}\p{N}_]+/gu) ?? [];
+        expect(matches.length).toBe(5);
+        expect(out).not.toMatch(/#f|#g/);
+    });
+
+    it('preserves prose ordering when stripping trailing tags', () => {
+        const text = 'Body text here.\n\n#one #two #three #four #five #six #seven #eight';
+        const out = capInstagramHashtags(text);
+        expect(out).toContain('Body text here.');
+        const matches = out.match(/#[\p{L}\p{N}_]+/gu) ?? [];
+        expect(matches.length).toBe(5);
     });
 });

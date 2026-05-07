@@ -34,6 +34,7 @@ export default function DashboardPage() {
     const [costByService, setCostByService] = useState<Record<string, number>>({});
     const [totalCost, setTotalCost] = useState(0);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     useEffect(() => {
         async function load() {
@@ -54,6 +55,13 @@ export default function DashboardPage() {
                 supabase.from('topics').select('*', { count: 'exact', head: true }).eq('status', 'failed'),
                 supabase.from('cost_summary').select('*'),
             ]);
+
+            const errors = [personasRes, topicsRes, readyRes, publishedRes, pendingRes, failedRes, costRes]
+                .filter(r => r.error)
+                .map(r => r.error!.message);
+            if (errors.length > 0) {
+                setLoadError(`Failed to load: ${errors.join('; ')}`);
+            }
 
             const activePersonas = personasRes.data ?? [];
             setPersonas(activePersonas);
@@ -134,6 +142,12 @@ export default function DashboardPage() {
     return (
         <div className="container max-w-screen-2xl py-8">
             <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
+
+            {loadError && (
+                <div className="mb-6 rounded-md border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">
+                    {loadError}
+                </div>
+            )}
 
             {personas.length > 1 && (
                 <div className="mb-6">

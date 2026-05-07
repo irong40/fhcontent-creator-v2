@@ -2,14 +2,72 @@ import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/databas
 
 export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
 
+/**
+ * Build a "brand voice" block from optional persona scaffolding fields
+ * (bio, voice_formula, signature_signoff, brand_voice_examples).
+ * Returns "" if the persona has no extra fields configured.
+ *
+ * These columns were added 2026-05-02 — types haven't been regenerated yet,
+ * so we read via bracket access and tolerate undefined.
+ */
+function buildBrandVoiceBlock(persona: Persona): string {
+    const p = persona as unknown as Record<string, unknown>;
+    const bio = typeof p.bio === 'string' ? p.bio : null;
+    const formula = typeof p.voice_formula === 'string' ? p.voice_formula : null;
+    const signoff = typeof p.signature_signoff === 'string' ? p.signature_signoff : null;
+    const examples = (p.brand_voice_examples ?? null) as Record<string, unknown> | null;
+
+    if (!bio && !formula && !signoff && !examples) return '';
+
+    const parts: string[] = [];
+
+    if (bio) {
+        parts.push(`PERSONA BACKGROUND:\n${bio}`);
+    }
+    if (formula) {
+        parts.push(`VOICE FORMULA:\nEvery line should be: ${formula}`);
+    }
+    if (examples) {
+        const pillars = Array.isArray(examples.voice_pillars) ? examples.voice_pillars : null;
+        const avoid = Array.isArray(examples.avoid) ? examples.avoid : null;
+        const hook = typeof examples.hook === 'string' ? examples.hook : null;
+        const reveal = typeof examples.reveal === 'string' ? examples.reveal : null;
+        const correction = typeof examples.correction === 'string' ? examples.correction : null;
+        const closing = typeof examples.closing === 'string' ? examples.closing : null;
+
+        if (pillars && pillars.length > 0) {
+            parts.push(`VOICE PILLARS:\n${pillars.map(v => `- ${v}`).join('\n')}`);
+        }
+        const samples: string[] = [];
+        if (hook) samples.push(`Hook example: "${hook}"`);
+        if (reveal) samples.push(`Reveal example: "${reveal}"`);
+        if (correction) samples.push(`Correction example: "${correction}"`);
+        if (closing) samples.push(`Closing example: "${closing}"`);
+        if (samples.length > 0) {
+            parts.push(`ON-BRAND EXAMPLES:\n${samples.join('\n')}`);
+        }
+        if (avoid && avoid.length > 0) {
+            parts.push(`AVOID:\n${avoid.map(v => `- ${v}`).join('\n')}`);
+        }
+    }
+    if (signoff) {
+        parts.push(`SIGNATURE SIGN-OFF (use verbatim at the end of long-form scripts and end-card text):\n"${signoff}"`);
+    }
+
+    return parts.join('\n\n');
+}
+
 export function buildTopicPrompt(
     persona: Persona,
     recentTopics: string[],
     count: number,
 ): { system: string; user: string } {
+    const voiceBlock = buildBrandVoiceBlock(persona);
+
     const system = `You are generating content topics for ${persona.name}, ${persona.brand}.
 Your voice: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `EXPERTISE AREAS:
@@ -18,12 +76,12 @@ ${persona.expertise_areas.join('\n')}
 TOPICS TO AVOID (already published):
 ${recentTopics.length > 0 ? recentTopics.join('\n') : 'None yet'}
 
-Generate exactly ${count} unique historical topic(s) about African American history in Virginia.
+Generate exactly ${count} unique topic(s) within the expertise areas listed above for the ${persona.brand} brand.
 
 For each topic, provide:
 1. title: Compelling, specific title (include year if applicable)
 2. hook: Opening line that grabs attention (question or surprising fact)
-3. historicalPoints: Exactly 4 verifiable historical facts
+3. historicalPoints: Exactly 4 verifiable facts or key points
    - Each must have: point (1-4), claim, source, year
 4. thumbnailPrompt: A vivid prompt for AI image generation
 
@@ -47,8 +105,7 @@ OUTPUT FORMAT (JSON only):
 REQUIREMENTS:
 - Each topic must be historically accurate and verifiable
 - Include specific names, dates, and places
-- Vary time periods (colonial, antebellum, reconstruction, civil rights, modern)
-- Vary geographic regions within Virginia
+- Vary across the expertise areas listed above
 - Avoid topics similar to the "TOPICS TO AVOID" list`;
 
     return { system, user };
@@ -92,7 +149,7 @@ Generate content for 6 pieces:
 - Short 4: Deep dive on Point 4
 - 60-100 words each
 - Each starts with attention-grabbing opening
-- Each ends with "Follow for more untold history"
+- Each ends with a follow CTA relevant to the ${persona.brand} brand
 
 ## 6. CAROUSEL (8-10 slides)
 - Slide 1: Hook/Title
@@ -103,11 +160,7 @@ Generate content for 6 pieces:
 
 FOR EACH PIECE, PROVIDE:
 - script: The spoken/displayed text (NEVER include the creator's name)
-- captionLong: 2200 character caption ending with 3-5 hashtags using this formula:
-  * 1-2 broad reach: #BlackHistory #BlackExcellence #BlackHistoryMonth #BlackCulture
-  * 1-2 niche educational: #BlackHistoryFacts #BlackHistory365 #HistoryTok #LearnOnTikTok #RealBlackHistory
-  * 1 discovery: #DidYouKnow #FYP #Viral
-  Example: "#BlackHistory #BlackHistoryFacts #DidYouKnow #BlackExcellence #HistoryTok"
+- captionLong: 2200 character caption ending with 3-5 hashtags relevant to the ${persona.brand} brand and expertise areas. Mix broad-reach, niche, and discovery hashtags.
 - captionShort: 280 character caption for Twitter/X (include 2-3 of the same hashtags)
 - thumbnailPrompt: Prompt for AI thumbnail generation${persona.image_subject_constraint ? `\n\nIMAGE-PROMPT SUBJECT RULE — applies to BOTH thumbnailPrompt and every carousel imagePrompt:\n${persona.image_subject_constraint}` : ''}
 
@@ -315,11 +368,12 @@ export function buildRemixPrompt(
     currentValue: string,
 ): { system: string; user: string; maxTokens: number } {
     const points = topic.historical_points as HistoricalPoint[];
+    const voiceBlock = buildBrandVoiceBlock(persona);
 
     const system = `You are a content writer creating scripts for ${persona.brand}.
 Voice style: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-
+${voiceBlock ? `\n${voiceBlock}\n` : ''}
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
 - NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.

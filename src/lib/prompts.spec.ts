@@ -23,6 +23,9 @@ const mockPersona: Persona = {
     newsletter_url: null,
     newsletter_cta: null,
     image_subject_constraint: null,
+    content_guardrail: null,
+    guardrail_notebook_ids: null,
+    facebook_page_ids: null,
     is_active: true,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -53,8 +56,14 @@ const mockTopic: Topic = {
     error_message: null,
     retry_count: 0,
     is_evergreen: false,
+    source_verified: false,
+    requires_review: false,
+    review_reason: null,
+    reviewed_by: null,
+    reviewed_at: null,
     content_channel: 'social' as const,
     lecture_data: null,
+    coo_auto_approved_at: null,
 };
 
 describe('buildTopicPrompt', () => {

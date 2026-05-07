@@ -56,13 +56,13 @@ Progress: [██████░░░░] 52%
 
 ### Blockers/Concerns
 
-- Phase 3 research flag: `$request.body` raw buffer access in n8n 2.9.0 Code nodes must be validated before building all 4 HMAC signing nodes on top of it (run /gsd:research-phase before planning Phase 3)
+- ~~Phase 3 research flag~~ RESOLVED — Web Crypto API works in n8n Code nodes; raw hex HMAC signature verified against all 4 edge functions (2026-02-27)
 - Phase 5 research flag: WF-2's 6-branch parallel fan-out may hit N8N_CONCURRENCY_PRODUCTION_LIMIT — spike workflow needed before full implementation (run /gsd:research-phase before planning Phase 5)
 - ~~Cloudflare Tunnel blocker~~ RESOLVED — faithandharmonyllc.com added to Cloudflare, tunnel n8n-prod running
 
 ## Session Continuity
 
 Last session: 2026-02-27
-Stopped at: Phases 2+3 COMPLETE. Phase 4 (Leaf Workflows) ready to start.
+Stopped at: Phases 1-3 COMPLETE. Phase 3 HMAC test verified 4/4 PASS. Phase 4 ready to execute.
 Resume file: None
-Next action: /gsd:plan-phase for Phase 4
+Next action: /gsd:execute-phase 4

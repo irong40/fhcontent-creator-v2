@@ -104,31 +104,40 @@ class GeminiClient {
         aspectRatio?: string;
     }): Promise<{ imageData: string } | null> {
         try {
-            const model = 'gemini-2.0-flash-exp';
+            const model = 'gemini-2.5-flash-image';
             const response = await fetch(
                 `${this.baseUrl}/v1beta/models/${model}:generateContent?key=${this.apiKey}`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        contents: [{ parts: [{ text: prompt }] }],
+                        contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
                         generationConfig: {
-                            responseModalities: ['IMAGE'],
+                            responseModalities: ['IMAGE', 'TEXT'],
                             ...(options?.aspectRatio && { aspectRatio: options.aspectRatio }),
                         },
                     }),
                 }
             );
 
-            if (!response.ok) return null;
+            if (!response.ok) {
+                console.error(`[gemini] Image gen failed: ${response.status} ${response.statusText}`);
+                const errBody = await response.text().catch(() => '');
+                console.error(`[gemini] Response: ${errBody.slice(0, 500)}`);
+                return null;
+            }
 
             const data = await response.json();
             const parts = data.candidates?.[0]?.content?.parts;
             const imagePart = parts?.find((p: Record<string, unknown>) => p.inlineData);
-            if (!imagePart?.inlineData?.data) return null;
+            if (!imagePart?.inlineData?.data) {
+                console.warn('[gemini] No image data in response');
+                return null;
+            }
 
-            return { imageData: imagePart.inlineData.data };
-        } catch {
+            return { imageData: imagePart.inlineData.data as string };
+        } catch (e) {
+            console.error('[gemini] Image gen exception:', e);
             return null;
         }
     }

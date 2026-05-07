@@ -81,7 +81,7 @@ export default function EditPersonaPage() {
     }
 
     async function handleDelete() {
-        if (!confirm('Delete this persona? This cannot be undone.')) return;
+        if (!confirm('Delete this persona? All associated topics, content pieces, and cost records will also be removed. This cannot be undone.')) return;
         setSaving(true);
 
         const { error: deleteError } = await supabase
@@ -99,7 +99,11 @@ export default function EditPersonaPage() {
         router.refresh();
     }
 
-    if (loading) return <div className="container py-8">Loading...</div>;
+    if (loading) return (
+        <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent" />
+        </div>
+    );
     if (!persona) return <div className="container py-8">Persona not found</div>;
 
     const accounts = persona.platform_accounts as Record<string, string>;

@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform } from './helpers';
+import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -48,11 +48,17 @@ async function publishPieceToPlatform(
     }
 
     // Choose caption
-    const caption = isTextOnlyPlatform(platform)
+    let caption = isTextOnlyPlatform(platform)
         ? (piece.caption_short || piece.caption_long || '')
         : (piece.caption_long || piece.caption_short || '');
 
-    const target = buildTarget(platform, { title: topicTitle, isAiGenerated: true });
+    // Platform-specific sanitization
+    if (platform === 'instagram') {
+        caption = capInstagramHashtags(caption);
+    }
+    const platformTitle = platform === 'tiktok' ? truncateTikTokTitle(topicTitle) : topicTitle;
+
+    const target = buildTarget(platform, { title: platformTitle, isAiGenerated: true });
 
     const response = await blotato.publishPost({
         post: {
@@ -95,7 +101,14 @@ export async function publishTopic(
         .order('piece_order');
 
     if (!pieces || pieces.length === 0) {
-        throw new Error(`No content pieces for topic: ${topicId}`);
+        // Topic exists but media generation never ran — mark failed to stop hourly retries.
+        // Not a transient error, so don't send an alert email.
+        await supabase
+            .from('topics')
+            .update({ status: 'failed', error_message: 'No content pieces — media generation may not have run' })
+            .eq('id', topicId);
+        console.warn(`[daily-publish] Topic ${topicId} ("${topic.title}") has no content pieces — marked failed, skipping`);
+        return { topicId, title: topic.title, piecesProcessed: 0, platformResults: {}, warnings: ['No content pieces — marked failed'] };
     }
 
     await supabase
@@ -166,6 +179,16 @@ export async function publishTopic(
     }
 
     if (!anySuccess) {
+        // If every piece was skipped because media isn't ready yet, leave as scheduled
+        // so the next hourly run can retry. Don't mark failed and don't alert.
+        if (result.piecesProcessed === 0) {
+            await supabase
+                .from('topics')
+                .update({ status: 'scheduled' })
+                .eq('id', topicId);
+            console.warn(`[daily-publish] Topic ${topicId} ("${topic.title}") media not ready — left scheduled for retry`);
+            return result;
+        }
         await supabase
             .from('topics')
             .update({ status: 'failed', error_message: 'All platform publishes failed' })
@@ -218,11 +241,14 @@ export async function GET(request: Request) {
         const supabase = createAdminClient();
         const today = new Date().toISOString().split('T')[0];
 
-        // Find scheduled topics where publish_date <= today
+        // Find scheduled OR approved-with-publish-date topics ready to ship.
+        // Picking up `approved` too means the manual /schedule step is no longer
+        // a hard gate — any approved topic with a publish_date <= today flows.
         const { data: topics, error } = await supabase
             .from('topics')
             .select('id, title')
-            .eq('status', 'scheduled')
+            .in('status', ['scheduled', 'approved'])
+            .not('publish_date', 'is', null)
             .lte('publish_date', today);
 
         if (error) {

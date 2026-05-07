@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { heygen } from '@/lib/heygen';
+import { remotionRenderer } from '@/lib/remotion-renderer';
 import { blotato } from '@/lib/blotato';
 import { videoGenerateSchema } from '@/lib/schemas';
 import type { PieceType } from '@/types/database';
@@ -10,7 +10,7 @@ const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'shor
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { contentPieceId, avatarId, audioUrl, blotatoTemplateId } = videoGenerateSchema.parse(body);
+        const { contentPieceId, audioUrl, blotatoTemplateId } = videoGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
 
@@ -28,17 +28,17 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const isBlotato = BLOTATO_PIECE_TYPES.includes(piece.piece_type as PieceType);
+        // Load topic for title context
+        const { data: topic } = await supabase
+            .from('topics')
+            .select('title, hook')
+            .eq('id', piece.topic_id)
+            .single();
 
-        if (isBlotato) {
-            // Blotato faceless video path for short-form content
-            if (!blotatoTemplateId) {
-                return NextResponse.json(
-                    { success: false, error: 'blotatoTemplateId required for short-form video' },
-                    { status: 400 },
-                );
-            }
+        const isShortForm = BLOTATO_PIECE_TYPES.includes(piece.piece_type as PieceType);
 
+        if (isShortForm) {
+            // Short-form: try Remotion first, fall back to Blotato
             if (!piece.script) {
                 return NextResponse.json(
                     { success: false, error: 'Content piece has no script' },
@@ -46,8 +46,52 @@ export async function POST(request: NextRequest) {
                 );
             }
 
-            const response = await blotato.createVideoFromPrompt(blotatoTemplateId, piece.script);
-            const jobId = response.item.id;
+            // Check if Remotion render server is available
+            const remotionHealth = await remotionRenderer.testConnection();
+
+            if (remotionHealth.ok) {
+                // Render locally via Remotion
+                const response = await remotionRenderer.createShortClip(
+                    topic?.title || 'Training Clip',
+                    piece.script,
+                    { audioUrl: audioUrl || undefined },
+                );
+
+                await supabase
+                    .from('content_pieces')
+                    .update({
+                        heygen_job_id: response.jobId, // reuse column for render job tracking
+                        heygen_status: 'processing',
+                        status: 'processing',
+                    })
+                    .eq('id', contentPieceId);
+
+                await supabase.from('cost_tracking').insert({
+                    service: 'remotion',
+                    operation: 'short_clip',
+                    topic_id: piece.topic_id,
+                    content_piece_id: contentPieceId,
+                    cost_usd: 0.00, // local rendering, no API cost
+                });
+
+                return NextResponse.json({
+                    success: true,
+                    jobId: response.jobId,
+                    pieceType: piece.piece_type,
+                    provider: 'remotion',
+                });
+            }
+
+            // Fallback to Blotato if Remotion unavailable
+            if (!blotatoTemplateId) {
+                return NextResponse.json(
+                    { success: false, error: 'Remotion render server unavailable and no blotatoTemplateId provided' },
+                    { status: 503 },
+                );
+            }
+
+            const blotatoResponse = await blotato.createVideoFromPrompt(blotatoTemplateId, piece.script);
+            const jobId = blotatoResponse.item.id;
 
             await supabase
                 .from('content_pieces')
@@ -73,39 +117,44 @@ export async function POST(request: NextRequest) {
                 provider: 'blotato',
             });
         } else {
-            // HeyGen avatar video path for long-form content
-            if (!avatarId || !audioUrl) {
+            // Long-form: Remotion training video (replaces HeyGen avatar)
+            if (!audioUrl) {
                 return NextResponse.json(
-                    { success: false, error: 'avatarId and audioUrl required for long-form video' },
+                    { success: false, error: 'audioUrl required for long-form video' },
                     { status: 400 },
                 );
             }
 
-            const response = await heygen.createVideoFromAudio(avatarId, audioUrl);
-            const videoId = response.data.video_id;
+            const response = await remotionRenderer.createTrainingVideo(
+                topic?.title || 'Training Video',
+                audioUrl,
+                {
+                    subtitle: topic?.hook || undefined,
+                },
+            );
 
             await supabase
                 .from('content_pieces')
                 .update({
-                    heygen_job_id: videoId,
+                    heygen_job_id: response.jobId,
                     heygen_status: 'processing',
                     status: 'processing',
                 })
                 .eq('id', contentPieceId);
 
             await supabase.from('cost_tracking').insert({
-                service: 'heygen',
-                operation: 'video_generation',
+                service: 'remotion',
+                operation: 'training_video',
                 topic_id: piece.topic_id,
                 content_piece_id: contentPieceId,
-                cost_usd: 0.25,
+                cost_usd: 0.00, // local rendering
             });
 
             return NextResponse.json({
                 success: true,
-                heygenJobId: videoId,
+                jobId: response.jobId,
                 pieceType: piece.piece_type,
-                provider: 'heygen',
+                provider: 'remotion',
             });
         }
     } catch (error) {

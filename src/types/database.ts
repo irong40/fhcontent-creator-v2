@@ -30,6 +30,9 @@ export interface Database {
                     newsletter_url: string | null;
                     newsletter_cta: string | null;
                     image_subject_constraint: string | null;
+                    content_guardrail: string | null;
+                    guardrail_notebook_ids: string[] | null;
+                    facebook_page_ids: string[] | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -54,6 +57,9 @@ export interface Database {
                     newsletter_url?: string | null;
                     newsletter_cta?: string | null;
                     image_subject_constraint?: string | null;
+                    content_guardrail?: string | null;
+                    guardrail_notebook_ids?: string[] | null;
+                    facebook_page_ids?: string[] | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -78,6 +84,9 @@ export interface Database {
                     newsletter_url?: string | null;
                     newsletter_cta?: string | null;
                     image_subject_constraint?: string | null;
+                    content_guardrail?: string | null;
+                    guardrail_notebook_ids?: string[] | null;
+                    facebook_page_ids?: string[] | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -113,8 +122,14 @@ export interface Database {
                     error_message: string | null;
                     retry_count: number;
                     is_evergreen: boolean;
+                    source_verified: boolean;
+                    requires_review: boolean;
+                    review_reason: string | null;
+                    reviewed_by: string | null;
+                    reviewed_at: string | null;
                     content_channel: ContentChannel;
                     lecture_data: Json | null;
+                    coo_auto_approved_at: string | null;
                 };
                 Insert: {
                     id?: string;
@@ -136,8 +151,14 @@ export interface Database {
                     error_message?: string | null;
                     retry_count?: number;
                     is_evergreen?: boolean;
+                    source_verified?: boolean;
+                    requires_review?: boolean;
+                    review_reason?: string | null;
+                    reviewed_by?: string | null;
+                    reviewed_at?: string | null;
                     content_channel?: ContentChannel;
                     lecture_data?: Json | null;
+                    coo_auto_approved_at?: string | null;
                 };
                 Update: {
                     id?: string;
@@ -159,8 +180,14 @@ export interface Database {
                     error_message?: string | null;
                     retry_count?: number;
                     is_evergreen?: boolean;
+                    source_verified?: boolean;
+                    requires_review?: boolean;
+                    review_reason?: string | null;
+                    reviewed_by?: string | null;
+                    reviewed_at?: string | null;
                     content_channel?: ContentChannel;
                     lecture_data?: Json | null;
+                    coo_auto_approved_at?: string | null;
                 };
                 Relationships: [
                     {

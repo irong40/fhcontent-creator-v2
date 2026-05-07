@@ -47,3 +47,22 @@ export function getCarouselUrls(piece: { carousel_url: string | null }): string[
 export function isTextOnlyPlatform(platform: Platform): boolean {
     return ['threads', 'twitter', 'bluesky'].includes(platform);
 }
+
+const TIKTOK_TITLE_MAX = 90;
+const INSTAGRAM_HASHTAG_MAX = 5;
+
+export function truncateTikTokTitle(title: string, max: number = TIKTOK_TITLE_MAX): string {
+    const t = (title ?? '').trim();
+    if (t.length <= max) return t;
+    return t.slice(0, max - 1).trimEnd() + '…';
+}
+
+export function capInstagramHashtags(text: string, max: number = INSTAGRAM_HASHTAG_MAX): string {
+    if (!text) return text;
+    const tagRe = /#[\p{L}\p{N}_]+/gu;
+    let kept = 0;
+    return text.replace(tagRe, (m) => {
+        kept += 1;
+        return kept <= max ? m : '';
+    }).replace(/[ \t]{2,}/g, ' ').replace(/ +\n/g, '\n').trimEnd();
+}

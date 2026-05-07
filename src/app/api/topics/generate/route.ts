@@ -5,6 +5,7 @@ import { claude } from '@/lib/claude';
 import { topicGenerateSchema, topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
+import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
 import type { Database } from '@/types/database';
 
 export async function POST(request: NextRequest) {
@@ -112,12 +113,52 @@ export async function POST(request: NextRequest) {
                 continue;
             }
 
-            insertedTopics.push({
-                id: inserted.id,
-                title: topic.title,
-                hook: topic.hook,
-                voiceId: voiceId || 'default',
-            });
+            // Content guardrail: verify against NotebookLM if persona requires it
+            if (hasGuardrail(persona)) {
+                try {
+                    const guardrailResult = await verifyTopicAgainstNotebookLM(
+                        topic.title,
+                        topic.hook,
+                        persona.guardrail_notebook_ids || [],
+                    );
+
+                    await supabase.from('topics').update({
+                        source_verified: guardrailResult.verified,
+                        requires_review: guardrailResult.requiresReview,
+                        review_reason: guardrailResult.reviewReason,
+                    }).eq('id', inserted.id);
+
+                    insertedTopics.push({
+                        id: inserted.id,
+                        title: topic.title,
+                        hook: topic.hook,
+                        voiceId: voiceId || 'default',
+                        sourceVerified: guardrailResult.verified,
+                        requiresReview: guardrailResult.requiresReview,
+                    });
+                } catch (guardrailError) {
+                    console.error('Guardrail verification failed, flagging for review:', guardrailError);
+                    await supabase.from('topics').update({
+                        requires_review: true,
+                        review_reason: 'Guardrail verification failed — flagged for manual review',
+                    }).eq('id', inserted.id);
+
+                    insertedTopics.push({
+                        id: inserted.id,
+                        title: topic.title,
+                        hook: topic.hook,
+                        voiceId: voiceId || 'default',
+                        requiresReview: true,
+                    });
+                }
+            } else {
+                insertedTopics.push({
+                    id: inserted.id,
+                    title: topic.title,
+                    hook: topic.hook,
+                    voiceId: voiceId || 'default',
+                });
+            }
         }
 
         // Track cost

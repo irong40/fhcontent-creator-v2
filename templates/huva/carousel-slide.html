@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Slide {{slide_n}} — History Unveiled VA</title>
+    <link rel="stylesheet" href="brand.css">
+    <style>
+        /* Carousel slides are 1080x1080 (square) — override card height */
+        html, body { height: 1080px; }
+        .huva-card { padding: 88px; }
+    </style>
+</head>
+<body>
+<div class="huva-card huva-card--navy" data-template="carousel-slide">
+    <div class="huva-paper-grain"></div>
+
+    <header style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div class="huva-eyebrow">{{eyebrow}}</div>
+        <div style="font-family:var(--huva-sans);font-weight:600;font-size:22px;letter-spacing:0.18em;color:var(--huva-old-gold);text-transform:uppercase;">
+            {{slide_n}} / {{slide_total}}
+        </div>
+    </header>
+
+    <main style="margin:auto 0;">
+        <h2 style="font-family:var(--huva-serif);font-weight:600;font-size:104px;line-height:1.08;margin-bottom:32px;">
+            <span class="huva-highlight">{{title}}</span>
+        </h2>
+        <p style="font-family:var(--huva-sans);font-size:34px;line-height:1.42;color:var(--huva-bone);max-width:920px;">
+            {{body}}
+        </p>
+    </main>
+
+    <footer style="display:flex;justify-content:space-between;align-items:flex-end;">
+        <img src="{{logo_url}}" alt="History Unveiled VA" class="huva-anchor__logo {{logo_class}}" style="height:72px;">
+        <div style="font-family:var(--huva-sans);font-size:18px;font-weight:500;letter-spacing:0.16em;color:var(--huva-old-gold);text-transform:uppercase;">
+            History Unveiled VA
+        </div>
+    </footer>
+</div>
+</body>
+</html>
