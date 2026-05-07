@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform } from './helpers';
+import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -48,11 +48,17 @@ async function publishPieceToPlatform(
     }
 
     // Choose caption
-    const caption = isTextOnlyPlatform(platform)
+    let caption = isTextOnlyPlatform(platform)
         ? (piece.caption_short || piece.caption_long || '')
         : (piece.caption_long || piece.caption_short || '');
 
-    const target = buildTarget(platform, { title: topicTitle, isAiGenerated: true });
+    // Platform-specific sanitization
+    if (platform === 'instagram') {
+        caption = capInstagramHashtags(caption);
+    }
+    const platformTitle = platform === 'tiktok' ? truncateTikTokTitle(topicTitle) : topicTitle;
+
+    const target = buildTarget(platform, { title: platformTitle, isAiGenerated: true });
 
     const response = await blotato.publishPost({
         post: {
