@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags, isSlotReady } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -111,10 +111,10 @@ export async function publishTopic(
         return { topicId, title: topic.title, piecesProcessed: 0, platformResults: {}, warnings: ['No content pieces — marked failed'] };
     }
 
-    await supabase
-        .from('topics')
-        .update({ status: 'publishing' })
-        .eq('id', topicId);
+    // NOTE: status='publishing' was previously set here, before the piece loop.
+    // That's incorrect when piece-level slot gating skips every piece (early
+    // hours of publish day, only some pieces are slot-ready). Defer the flag
+    // to the end, after we know whether anything actually fired this run.
 
     const result: PublishResult = {
         topicId,
@@ -127,6 +127,30 @@ export async function publishTopic(
     let anySuccess = false;
 
     for (const piece of pieces as ContentPiece[]) {
+        // Piece-level slot gating: pieces fire at staggered times across the
+        // day (long → 7 PM ET, shorts spread morning-to-evening, carousel at
+        // 3 PM ET). See PIECE_SLOT_OFFSET_HOURS in helpers.ts. If a piece's
+        // slot hasn't arrived yet, defer to the next hourly run. Catch-up:
+        // pieces past their slot still fire, so a missed cron tick is OK.
+        const slotReady = isSlotReady(piece.piece_type, topic.publish_at);
+        if (!slotReady) {
+            console.log(`[daily-publish] piece ${piece.id} (${piece.piece_type}) slot not yet — deferring`);
+            continue;
+        }
+
+        // Skip pieces already fully published (every platform resolved success).
+        // Without this, a piece whose slot is past would re-enter the publishing
+        // path on every hourly tick. The platform-level retry skip at line 144
+        // already handles this per-platform, but a tighter early-exit avoids
+        // the content_pieces.status overwrite below.
+        const existingPlatformsCheck = (piece.published_platforms || {}) as PublishedPlatforms;
+        const allDoneOrPending = Object.values(existingPlatformsCheck).length > 0
+            && Object.values(existingPlatformsCheck).every((p) => p && p.status !== 'failed');
+        if (allDoneOrPending && Object.keys(existingPlatformsCheck).length > 0) {
+            // All platforms previously fired and are pending/published. Nothing to do.
+            continue;
+        }
+
         const mediaUrl = getMediaUrl(piece);
         if (!mediaUrl) {
             const warning = `${piece.piece_type}: no media URL — skipped`;
@@ -185,14 +209,15 @@ export async function publishTopic(
     }
 
     if (!anySuccess) {
-        // If every piece was skipped because media isn't ready yet, leave as scheduled
-        // so the next hourly run can retry. Don't mark failed and don't alert.
+        // If every piece was skipped (slot gate, missing media, no targets),
+        // leave as scheduled so the next hourly run can retry. Don't mark
+        // failed and don't alert.
         if (result.piecesProcessed === 0) {
-            await supabase
-                .from('topics')
-                .update({ status: 'scheduled' })
-                .eq('id', topicId);
-            console.warn(`[daily-publish] Topic ${topicId} ("${topic.title}") media not ready — left scheduled for retry`);
+            const stillScheduled = topic.status === 'scheduled' || topic.status === 'approved';
+            if (!stillScheduled) {
+                // Don't downgrade publishing → scheduled. Just leave the row alone.
+                console.log(`[daily-publish] Topic ${topicId} ("${topic.title}") all pieces deferred this tick — no change`);
+            }
             return result;
         }
         await supabase
@@ -208,13 +233,34 @@ export async function publishTopic(
         return result;
     }
 
-    await supabase.from('published_log').insert({
-        persona_id: persona.id,
-        topic_id: topicId,
-        topic_title: topic.title,
-        topic_hash: topic.topic_hash,
-        published_at: new Date().toISOString(),
-    });
+    // At least one piece fired this run. Promote topic to 'publishing' so
+    // check-status can poll Blotato statuses and eventually settle the topic.
+    // Idempotent: if topic was already publishing, this is a no-op.
+    if (topic.status !== 'publishing') {
+        await supabase
+            .from('topics')
+            .update({ status: 'publishing' })
+            .eq('id', topicId);
+    }
+
+    // Only insert published_log on the FIRST run that produces success — not
+    // on every hourly tick that fires another piece's slot. Idempotent via
+    // (persona_id, topic_hash) — the table likely has a unique constraint;
+    // if not, we no-op on duplicate.
+    const { count: existingLogCount } = await supabase
+        .from('published_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('topic_id', topicId);
+
+    if (!existingLogCount || existingLogCount === 0) {
+        await supabase.from('published_log').insert({
+            persona_id: persona.id,
+            topic_id: topicId,
+            topic_title: topic.title,
+            topic_hash: topic.topic_hash,
+            published_at: new Date().toISOString(),
+        });
+    }
 
     // Notify if there were warnings (missing accounts, missing media)
     if (result.warnings.length > 0) {
@@ -261,13 +307,25 @@ export async function GET(request: Request) {
         const { data: topicsRaw, error } = await supabase
             .from('topics')
             .select('id, title, status, publish_at, publish_date, published_at')
-            .in('status', ['scheduled', 'approved', 'partially_published'])
+            // 'publishing' is included so topics mid-staggering can fire their
+            // remaining piece slots throughout the day. Per-piece slot gating
+            // and per-platform retry skip prevent re-firing already-shipped
+            // pieces.
+            .in('status', ['scheduled', 'approved', 'publishing', 'partially_published'])
             .not('publish_date', 'is', null)
             .lte('publish_date', today);
 
         const topics = (topicsRaw ?? []).filter((t) => {
             if (t.status === 'partially_published') {
                 return Boolean(t.published_at && t.published_at > sevenDaysAgo);
+            }
+            // 'publishing' topics: keep picking up until 12 h past last slot
+            // (last slot is +10h from publish_at, so 22 h after publish_at it's
+            // safe to stop touching). Also gates against ancient rows.
+            if (t.status === 'publishing') {
+                if (!t.publish_at) return true;
+                const cutoff = new Date(new Date(t.publish_at).getTime() + 22 * 60 * 60 * 1000).toISOString();
+                return nowIso < cutoff;
             }
             // scheduled / approved: enforce publish_at if present
             if (t.publish_at) return t.publish_at <= nowIso;

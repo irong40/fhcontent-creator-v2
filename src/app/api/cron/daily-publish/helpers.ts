@@ -69,6 +69,56 @@ const TIKTOK_TITLE_MAX = 90;
 // or whitespace edge cases), so cap at 4 to stay clear of the boundary.
 const INSTAGRAM_HASHTAG_MAX = 4;
 
+/**
+ * Hour-of-day offset (in hours) from a topic's publish_at for each piece type.
+ * Spreads the 6 pieces across the day so an audience sees fresh content at
+ * different waking hours instead of all 6 hitting their feed at 9 AM.
+ *
+ * Default base publish_at = 13:00 UTC (≈ 9 AM ET / 6 AM PT).
+ *
+ * | piece    | ET    | UTC   | offset |
+ * | short_1  | 9 AM  | 13:00 |  +0h   |
+ * | short_2  | 11 AM | 15:00 |  +2h   |
+ * | short_3  | 1 PM  | 17:00 |  +4h   |
+ * | carousel | 3 PM  | 19:00 |  +6h   |
+ * | short_4  | 5 PM  | 21:00 |  +8h   |
+ * | long     | 7 PM  | 23:00 | +10h   | <-- evening peak per Adam
+ * | lecture  | 7 PM  | 23:00 | +10h   |
+ */
+export const PIECE_SLOT_OFFSET_HOURS: Record<PieceType, number> = {
+    short_1: 0,
+    short_2: 2,
+    short_3: 4,
+    carousel: 6,
+    short_4: 8,
+    long: 10,
+    lecture: 10,
+};
+
+/**
+ * When this piece is allowed to publish, given the topic's base publish_at.
+ * Returns null when topicPublishAt is null (legacy topic without staggering).
+ */
+export function pieceSlotTime(
+    pieceType: PieceType,
+    topicPublishAt: string | null,
+): Date | null {
+    if (!topicPublishAt) return null;
+    const offsetHours = PIECE_SLOT_OFFSET_HOURS[pieceType] ?? 0;
+    return new Date(new Date(topicPublishAt).getTime() + offsetHours * 60 * 60 * 1000);
+}
+
+/** Returns true if `now` (default Date.now) is at or past the piece's slot. */
+export function isSlotReady(
+    pieceType: PieceType,
+    topicPublishAt: string | null,
+    now: Date = new Date(),
+): boolean {
+    const slot = pieceSlotTime(pieceType, topicPublishAt);
+    if (!slot) return true; // legacy topic with no publish_at — fire immediately
+    return now.getTime() >= slot.getTime();
+}
+
 export function truncateTikTokTitle(title: string, max: number = TIKTOK_TITLE_MAX): string {
     const t = (title ?? '').trim();
     if (t.length <= max) return t;
