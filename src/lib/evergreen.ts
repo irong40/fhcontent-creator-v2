@@ -89,11 +89,14 @@ export async function fillEvergreenGaps(targetDate: string): Promise<EvergreenRe
 
         const topic = evergreen[0];
 
-        // Re-schedule this evergreen topic for the target date
+        // Re-schedule this evergreen topic for the target date.
+        // publish_at = targetDate 13:00 UTC matches daily-topic's convention
+        // so daily-publish's intra-day filter doesn't skip it.
         await supabase
             .from('topics')
             .update({
                 publish_date: targetDate,
+                publish_at: `${targetDate}T13:00:00Z`,
                 status: 'scheduled',
             })
             .eq('id', topic.id);

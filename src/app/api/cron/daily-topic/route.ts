@@ -328,11 +328,16 @@ export async function GET(request: Request) {
                         continue;
                     }
 
-                    // COO auto-approve and schedule for its day in the week
+                    // COO auto-approve and schedule for its day in the week.
+                    // publish_at = publishDate at 13:00 UTC (≈ 9 AM ET) gives
+                    // intra-day staggering when multiple personas schedule the
+                    // same date in the future, and a sane default ship time.
+                    const publishAtIso = `${publishDate}T13:00:00Z`;
                     await supabase.from('topics').update({
                         status: 'scheduled',
                         content_ready_at: new Date().toISOString(),
                         publish_date: publishDate,
+                        publish_at: publishAtIso,
                         coo_auto_approved_at: new Date().toISOString(),
                     }).eq('id', inserted.id);
 

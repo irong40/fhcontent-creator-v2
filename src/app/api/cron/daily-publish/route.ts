@@ -245,26 +245,34 @@ export async function GET(request: Request) {
 
     try {
         const supabase = createAdminClient();
-        const today = new Date().toISOString().split('T')[0];
+        const nowIso = new Date().toISOString();
+        const today = nowIso.split('T')[0];
 
-        // Find topics ready to ship, including:
-        //  - `scheduled` / `approved` for first publish
-        //  - `partially_published` so we retry platforms that previously failed
-        //    (the per-platform retry skip at line ~144 only re-tries `failed`
-        //    platform entries, so re-running a fully-resolved topic is a no-op).
-        // Cap partial-retry to 7 days post-publish — past that, give up so we
-        // don't hammer Blotato indefinitely on a permanently-broken caption.
+        // Find topics ready to ship. Filtering rules:
+        //  - scheduled/approved: pick up if publish_at <= now() (intra-day
+        //    staggering). Falls back to publish_date <= today for legacy
+        //    rows without publish_at set.
+        //  - partially_published: retry to drain frozen platform failures
+        //    (per-platform retry skip at line ~144 gates on status='failed',
+        //    so re-running fully-resolved pieces is a no-op). Capped to 7
+        //    days post-publish so we don't hammer Blotato forever on a
+        //    permanently-broken caption.
         const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
         const { data: topicsRaw, error } = await supabase
             .from('topics')
-            .select('id, title, status, published_at')
+            .select('id, title, status, publish_at, publish_date, published_at')
             .in('status', ['scheduled', 'approved', 'partially_published'])
             .not('publish_date', 'is', null)
             .lte('publish_date', today);
 
-        const topics = (topicsRaw ?? []).filter(
-            (t) => t.status !== 'partially_published' || (t.published_at && t.published_at > sevenDaysAgo),
-        );
+        const topics = (topicsRaw ?? []).filter((t) => {
+            if (t.status === 'partially_published') {
+                return Boolean(t.published_at && t.published_at > sevenDaysAgo);
+            }
+            // scheduled / approved: enforce publish_at if present
+            if (t.publish_at) return t.publish_at <= nowIso;
+            return true; // legacy row, fall through publish_date check
+        });
 
         if (error) {
             return NextResponse.json(
@@ -293,7 +301,7 @@ export async function GET(request: Request) {
             // Re-query now that evergreen topics have been scheduled
             const { data: refetched } = await supabase
                 .from('topics')
-                .select('id, title, status, published_at')
+                .select('id, title, status, publish_at, publish_date, published_at')
                 .eq('status', 'scheduled')
                 .lte('publish_date', today);
 
