@@ -49,7 +49,10 @@ export function isTextOnlyPlatform(platform: Platform): boolean {
 }
 
 const TIKTOK_TITLE_MAX = 90;
-const INSTAGRAM_HASHTAG_MAX = 5;
+// Blotato's IG validator rejects posts with MORE THAN 5 hashtags. We've seen
+// posts with exactly 5 still rejected (likely an off-by-one in their counter
+// or whitespace edge cases), so cap at 4 to stay clear of the boundary.
+const INSTAGRAM_HASHTAG_MAX = 4;
 
 export function truncateTikTokTitle(title: string, max: number = TIKTOK_TITLE_MAX): string {
     const t = (title ?? '').trim();
