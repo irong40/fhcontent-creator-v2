@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -136,7 +136,7 @@ export async function publishTopic(
         }
 
         const existingPlatforms = (piece.published_platforms || {}) as PublishedPlatforms;
-        const targetPlatforms = getTargetPlatforms(piece.piece_type);
+        const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts);
         const updatedPlatforms = { ...existingPlatforms } as Record<string, PlatformStatus>;
 
         for (const platform of targetPlatforms) {
@@ -165,6 +165,12 @@ export async function publishTopic(
                 updatedPlatforms[platform] = { status: 'failed', error: errorMsg };
                 result.platformResults[key] = { status: 'failed', error: errorMsg };
             }
+
+            // Light per-platform throttle. Blotato cascades upload+publish to
+            // each network and we've seen 25+ back-to-back calls in a single
+            // topic. 300ms between pushes is invisible to the user but keeps
+            // us off Blotato rate-limit errors.
+            await new Promise((r) => setTimeout(r, 300));
         }
 
         await supabase
@@ -239,17 +245,34 @@ export async function GET(request: Request) {
 
     try {
         const supabase = createAdminClient();
-        const today = new Date().toISOString().split('T')[0];
+        const nowIso = new Date().toISOString();
+        const today = nowIso.split('T')[0];
 
-        // Find scheduled OR approved-with-publish-date topics ready to ship.
-        // Picking up `approved` too means the manual /schedule step is no longer
-        // a hard gate — any approved topic with a publish_date <= today flows.
-        const { data: topics, error } = await supabase
+        // Find topics ready to ship. Filtering rules:
+        //  - scheduled/approved: pick up if publish_at <= now() (intra-day
+        //    staggering). Falls back to publish_date <= today for legacy
+        //    rows without publish_at set.
+        //  - partially_published: retry to drain frozen platform failures
+        //    (per-platform retry skip at line ~144 gates on status='failed',
+        //    so re-running fully-resolved pieces is a no-op). Capped to 7
+        //    days post-publish so we don't hammer Blotato forever on a
+        //    permanently-broken caption.
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: topicsRaw, error } = await supabase
             .from('topics')
-            .select('id, title')
-            .in('status', ['scheduled', 'approved'])
+            .select('id, title, status, publish_at, publish_date, published_at')
+            .in('status', ['scheduled', 'approved', 'partially_published'])
             .not('publish_date', 'is', null)
             .lte('publish_date', today);
+
+        const topics = (topicsRaw ?? []).filter((t) => {
+            if (t.status === 'partially_published') {
+                return Boolean(t.published_at && t.published_at > sevenDaysAgo);
+            }
+            // scheduled / approved: enforce publish_at if present
+            if (t.publish_at) return t.publish_at <= nowIso;
+            return true; // legacy row, fall through publish_date check
+        });
 
         if (error) {
             return NextResponse.json(
@@ -278,7 +301,7 @@ export async function GET(request: Request) {
             // Re-query now that evergreen topics have been scheduled
             const { data: refetched } = await supabase
                 .from('topics')
-                .select('id, title')
+                .select('id, title, status, publish_at, publish_date, published_at')
                 .eq('status', 'scheduled')
                 .lte('publish_date', today);
 

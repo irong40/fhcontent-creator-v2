@@ -1,4 +1,4 @@
-import type { PieceType } from '@/types/database';
+import type { PieceType, PlatformAccounts } from '@/types/database';
 import type { Platform } from '@/lib/blotato';
 
 /**
@@ -21,6 +21,21 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
         default:
             return [];
     }
+}
+
+/**
+ * Returns the publishable target platforms for a piece, filtered by which ones
+ * actually have an account_id on the persona. Avoids spurious "No account
+ * configured" failure rows when a persona simply hasn't connected a given
+ * network yet (e.g. Dr. Carter has no Bluesky).
+ */
+export function getConfiguredTargetPlatforms(
+    pieceType: PieceType,
+    accounts: PlatformAccounts | null | undefined,
+): Platform[] {
+    const all = getTargetPlatforms(pieceType);
+    if (!accounts) return [];
+    return all.filter((p) => Boolean(accounts[p as keyof PlatformAccounts]));
 }
 
 export function getMediaUrl(piece: { piece_type: string; carousel_url: string | null; video_url: string | null }): string | null {
@@ -49,7 +64,10 @@ export function isTextOnlyPlatform(platform: Platform): boolean {
 }
 
 const TIKTOK_TITLE_MAX = 90;
-const INSTAGRAM_HASHTAG_MAX = 5;
+// Blotato's IG validator rejects posts with MORE THAN 5 hashtags. We've seen
+// posts with exactly 5 still rejected (likely an off-by-one in their counter
+// or whitespace edge cases), so cap at 4 to stay clear of the boundary.
+const INSTAGRAM_HASHTAG_MAX = 4;
 
 export function truncateTikTokTitle(title: string, max: number = TIKTOK_TITLE_MAX): string {
     const t = (title ?? '').trim();

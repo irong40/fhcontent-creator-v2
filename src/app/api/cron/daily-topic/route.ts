@@ -1,28 +1,19 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
-import { topicResponseSchema, contentResponseSchema } from '@/lib/schemas';
-import { buildTopicPrompt, buildContentPrompt } from '@/lib/prompts';
+import { topicResponseSchema } from '@/lib/schemas';
+import { buildTopicPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
 import type { Database } from '@/types/database';
-import type { PieceType, TopicWithPersona } from '@/types/database';
 import crypto from 'crypto';
 
-export const maxDuration = 800;
-
-const PIECE_ORDER: Record<PieceType, number> = {
-    long: 1,
-    short_1: 2,
-    short_2: 3,
-    short_3: 4,
-    short_4: 5,
-    carousel: 6,
-    lecture: 7,
-};
+// 7 personas × 1 topic-list Claude call ≈ 90s. Keep 300s guard for safety
+// margin without holding the function open.
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
     if (!validateCronSecret(request)) {
@@ -91,15 +82,37 @@ export async function GET(request: Request) {
                 errors: [] as string[],
             };
 
-            // Skip if a topic was created for this persona in the last 6 days (avoid
-            // re-running the Sunday batch and double-generating).
+            // Skip if a non-stale, valid topic was created for this persona in
+            // the last 6 days (avoid re-running the Sunday batch and double-
+            // generating). EXCLUDE 'draft' and 'content_generating' from the
+            // skip-set: a topic stuck in those states is an artifact of a prior
+            // partial run (Vercel timeout, Claude error) — left alone, the
+            // persona would be skipped forever. Auto-fail those stale rows so
+            // the Sunday batch can proceed cleanly.
             const sixDaysAgo = new Date(nowMs - 6 * 24 * 60 * 60 * 1000).toISOString();
+            const oneDayAgo = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+
+            const { data: staleDrafts } = await supabase
+                .from('topics')
+                .select('id, title, status')
+                .eq('persona_id', persona.id)
+                .in('status', ['draft', 'content_generating'])
+                .lt('created_at', oneDayAgo);
+            if (staleDrafts && staleDrafts.length > 0) {
+                for (const stale of staleDrafts) {
+                    await supabase.from('topics').update({
+                        status: 'failed',
+                        error_message: `Auto-failed by daily-topic: stuck in ${stale.status} >24h`,
+                    }).eq('id', stale.id);
+                }
+            }
+
             const { data: existingThisWeek } = await supabase
                 .from('topics')
                 .select('id, status')
                 .eq('persona_id', persona.id)
                 .gte('created_at', sixDaysAgo)
-                .in('status', ['draft', 'content_generating', 'content_ready', 'approved', 'scheduled'])
+                .in('status', ['approved', 'scheduled', 'partially_published', 'published'])
                 .limit(1);
 
             if (existingThisWeek && existingThisWeek.length > 0) {
@@ -180,6 +193,12 @@ export async function GET(request: Request) {
                         .update(topic.title.toLowerCase().trim())
                         .digest('hex');
 
+                    // Insert with publish_date already set so the new content-
+                    // generator cron can find drafts and promote them through
+                    // content-gen → scheduled. Spreads the heavy 7-Claude-call
+                    // content generation across 30-min ticks instead of one
+                    // 800s Sunday burst that times out at the 7th topic.
+                    const publishAtIso = `${publishDate}T13:00:00Z`;
                     const { data: inserted, error: insertError } = await supabase
                         .from('topics')
                         .insert({
@@ -191,6 +210,8 @@ export async function GET(request: Request) {
                             voice_id: voiceId || 'default',
                             thumbnail_prompt: topic.thumbnailPrompt || null,
                             status: 'draft',
+                            publish_date: publishDate,
+                            publish_at: publishAtIso,
                         })
                         .select()
                         .single();
@@ -227,99 +248,18 @@ export async function GET(request: Request) {
                         }
                     }
 
-                    if (heldForReview) {
-                        personaResult.topicsCreated.push({
-                            id: inserted.id,
-                            title: topic.title,
-                            publishDate,
-                            cooApproved: false,
-                            heldForReview: true,
-                        });
-                        continue;
-                    }
-
-                    // Generate content pieces (scripts + captions)
-                    await supabase
-                        .from('topics')
-                        .update({ status: 'content_generating' })
-                        .eq('id', inserted.id);
-
-                    const topicWithPersona = { ...inserted, personas: persona } as unknown as TopicWithPersona;
-                    const { system: contentSystem, user: contentUser } = buildContentPrompt(persona, topicWithPersona);
-                    const { text: contentText, inputTokens: cIn, outputTokens: cOut } = await claude.generateContent(
-                        contentSystem,
-                        contentUser,
-                        { maxTokens: 8192 },
-                    );
-
-                    await supabase.from('cost_tracking').insert({
-                        service: 'claude',
-                        operation: 'content_generation',
-                        topic_id: inserted.id,
-                        cost_usd: estimateClaudeCost(cIn, cOut),
-                        tokens_input: cIn,
-                        tokens_output: cOut,
-                    });
-
-                    const contentJsonText = contentText.replace(/```json\n?|\n?```/g, '').trim();
-                    const contentParsed = JSON.parse(contentJsonText);
-                    const contentResult = contentResponseSchema.safeParse(contentParsed);
-                    if (!contentResult.success) {
-                        await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
-                        personaResult.errors.push(`Day ${i + 1}: content generation invalid response`);
-                        continue;
-                    }
-
-                    // Insert content pieces. NOTE: content_pieces does NOT have a
-                    // content_channel column — that lives on topics. Including it here
-                    // silently failed every insert (Supabase JS client doesn't throw
-                    // by default), orphaning every topic since 2026-05-03. Guard with
-                    // an error check so a future schema drift fails loudly.
-                    let piecesInserted = 0;
-                    for (const piece of contentResult.data.pieces) {
-                        const pieceType = piece.pieceType as PieceType;
-                        const { error: pieceErr } = await supabase.from('content_pieces').insert({
-                            topic_id: inserted.id,
-                            piece_type: pieceType,
-                            piece_order: PIECE_ORDER[pieceType] ?? 99,
-                            script: piece.script || null,
-                            caption_long: piece.captionLong || null,
-                            caption_short: piece.captionShort || null,
-                            thumbnail_prompt: piece.thumbnailPrompt || null,
-                            carousel_slides: piece.carouselSlides
-                                ? (piece.carouselSlides as unknown as Database['public']['Tables']['content_pieces']['Insert']['carousel_slides'])
-                                : null,
-                            music_track: piece.musicTrack || null,
-                            status: 'pending',
-                        });
-                        if (pieceErr) {
-                            personaResult.errors.push(`Day ${i + 1}: piece (${pieceType}) insert failed: ${pieceErr.message}`);
-                        } else {
-                            piecesInserted++;
-                        }
-                    }
-
-                    if (piecesInserted === 0) {
-                        // Don't auto-approve a topic with no pieces — daily-publish would just fail it.
-                        await supabase.from('topics').update({ status: 'draft' }).eq('id', inserted.id);
-                        personaResult.errors.push(`Day ${i + 1}: zero pieces inserted, topic left as draft`);
-                        continue;
-                    }
-
-                    // COO auto-approve and schedule for its day in the week
-                    await supabase.from('topics').update({
-                        status: 'scheduled',
-                        content_ready_at: new Date().toISOString(),
-                        publish_date: publishDate,
-                        coo_auto_approved_at: new Date().toISOString(),
-                    }).eq('id', inserted.id);
-
+                    // Topic shell created. Heavy content-pieces generation is
+                    // now handled by /api/cron/content-generator (every 30 min)
+                    // so this Sunday cron stays well under maxDuration even
+                    // with 7 topics per persona. Topics stay status=draft with
+                    // publish_date already set; the content-gen cron promotes
+                    // them to status=scheduled once content_pieces are ready.
                     personaResult.topicsCreated.push({
                         id: inserted.id,
                         title: topic.title,
                         publishDate,
-                        cooApproved: true,
-                        heldForReview: false,
+                        cooApproved: !heldForReview,
+                        heldForReview,
                     });
                 } catch (e) {
                     personaResult.errors.push(`Day ${i + 1} (${publishDate}): ${e instanceof Error ? e.message : 'unknown'}`);

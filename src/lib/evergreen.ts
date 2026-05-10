@@ -28,11 +28,21 @@ export async function fillEvergreenGaps(targetDate: string): Promise<EvergreenRe
     const supabase = createAdminClient();
     const results: EvergreenResult[] = [];
 
-    // Get all active personas
+    // Only fill gaps for personas in autonomous mode. Other personas (e.g.
+    // Masonic NotebookLM-guarded ones) require manual approval and must not
+    // get blind evergreen reschedules.
+    const allowedIds = (process.env.AUTO_TOPIC_PERSONA_IDS || '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
+
+    if (allowedIds.length === 0) return results;
+
     const { data: personas } = await supabase
         .from('personas')
         .select('id, name')
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .in('id', allowedIds);
 
     if (!personas || personas.length === 0) return results;
 
@@ -79,11 +89,14 @@ export async function fillEvergreenGaps(targetDate: string): Promise<EvergreenRe
 
         const topic = evergreen[0];
 
-        // Re-schedule this evergreen topic for the target date
+        // Re-schedule this evergreen topic for the target date.
+        // publish_at = targetDate 13:00 UTC matches daily-topic's convention
+        // so daily-publish's intra-day filter doesn't skip it.
         await supabase
             .from('topics')
             .update({
                 publish_date: targetDate,
+                publish_at: `${targetDate}T13:00:00Z`,
                 status: 'scheduled',
             })
             .eq('id', topic.id);

@@ -112,6 +112,7 @@ export interface Database {
                     voice_id: string;
                     thumbnail_prompt: string | null;
                     publish_date: string | null;
+                    publish_at: string | null;
                     publish_time: string;
                     status: TopicStatus;
                     created_at: string;
@@ -141,6 +142,7 @@ export interface Database {
                     voice_id: string;
                     thumbnail_prompt?: string | null;
                     publish_date?: string | null;
+                    publish_at?: string | null;
                     publish_time?: string;
                     status?: TopicStatus;
                     created_at?: string;
@@ -170,6 +172,7 @@ export interface Database {
                     voice_id?: string;
                     thumbnail_prompt?: string | null;
                     publish_date?: string | null;
+                    publish_at?: string | null;
                     publish_time?: string;
                     status?: TopicStatus;
                     created_at?: string;

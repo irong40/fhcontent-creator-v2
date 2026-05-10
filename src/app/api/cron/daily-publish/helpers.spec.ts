@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
+import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 
 describe('getTargetPlatforms', () => {
     it('returns tiktok, instagram, youtube for long video', () => {
@@ -26,6 +26,41 @@ describe('getTargetPlatforms', () => {
         expect(platforms).not.toContain('threads');
         expect(platforms).not.toContain('twitter');
         expect(platforms).not.toContain('bluesky');
+    });
+});
+
+describe('getConfiguredTargetPlatforms', () => {
+    it('drops bluesky for a persona without a bluesky account', () => {
+        const accounts = {
+            tiktok: 'tt_1', instagram: 'ig_1', youtube: 'yt_1',
+            threads: 'th_1', twitter: 'tw_1',
+            // bluesky intentionally missing
+        };
+        const out = getConfiguredTargetPlatforms('short_1', accounts);
+        expect(out).not.toContain('bluesky');
+        expect(out).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter']);
+    });
+
+    it('returns empty when accounts is null', () => {
+        expect(getConfiguredTargetPlatforms('long', null)).toEqual([]);
+    });
+
+    it('keeps all platforms when all accounts configured', () => {
+        const accounts = {
+            tiktok: 't', instagram: 'i', youtube: 'y',
+            threads: 'th', twitter: 'tw', bluesky: 'bs',
+        };
+        expect(getConfiguredTargetPlatforms('short_2', accounts)).toEqual(
+            ['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'bluesky'],
+        );
+    });
+
+    it('returns instagram-only carousel when ig account is set', () => {
+        expect(getConfiguredTargetPlatforms('carousel', { instagram: 'i' })).toEqual(['instagram']);
+    });
+
+    it('returns empty carousel when ig account is missing', () => {
+        expect(getConfiguredTargetPlatforms('carousel', { tiktok: 't' })).toEqual([]);
     });
 });
 
@@ -111,17 +146,17 @@ describe('truncateTikTokTitle', () => {
 });
 
 describe('capInstagramHashtags', () => {
-    it('keeps captions with 5 or fewer hashtags untouched', () => {
-        const text = 'Great post #a #b #c #d #e';
-        expect(capInstagramHashtags(text)).toBe('Great post #a #b #c #d #e');
+    it('keeps captions with 4 or fewer hashtags untouched', () => {
+        const text = 'Great post #a #b #c #d';
+        expect(capInstagramHashtags(text)).toBe('Great post #a #b #c #d');
     });
 
-    it('strips hashtags beyond the 5th', () => {
+    it('strips hashtags beyond the 4th', () => {
         const text = 'Great post #a #b #c #d #e #f #g';
         const out = capInstagramHashtags(text);
         const matches = out.match(/#[\p{L}\p{N}_]+/gu) ?? [];
-        expect(matches.length).toBe(5);
-        expect(out).not.toMatch(/#f|#g/);
+        expect(matches.length).toBe(4);
+        expect(out).not.toMatch(/#e|#f|#g/);
     });
 
     it('preserves prose ordering when stripping trailing tags', () => {
@@ -129,6 +164,13 @@ describe('capInstagramHashtags', () => {
         const out = capInstagramHashtags(text);
         expect(out).toContain('Body text here.');
         const matches = out.match(/#[\p{L}\p{N}_]+/gu) ?? [];
-        expect(matches.length).toBe(5);
+        expect(matches.length).toBe(4);
+    });
+
+    it('caps a real-world 20-hashtag history caption to 4', () => {
+        const text = 'Body text.\n\n#history #blackhistory #virginia #virginiahistory #readjusterparty #reconstruction #americanhistory #untoldhistory #education #historyteacher #civilwar #postcivilwar #virginiastate #petersburg #danville #biracial #democracy #historiansoftiktok #learnontiktok #historytok';
+        const out = capInstagramHashtags(text);
+        const matches = out.match(/#[\p{L}\p{N}_]+/gu) ?? [];
+        expect(matches.length).toBe(4);
     });
 });
