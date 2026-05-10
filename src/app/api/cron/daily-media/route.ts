@@ -110,11 +110,19 @@ export async function GET(request: Request) {
     try {
         const supabase = createAdminClient();
 
-        // Find topics that need media: content_ready, or approved/scheduled with failed pieces
+        // Find topics that need media: content_ready, or approved/scheduled with failed pieces.
+        // Bound to today + 1 day so a Sunday batch (7 topics) doesn't try to
+        // generate media for the whole upcoming week in one Vercel invocation
+        // (maxDuration=800s, but ElevenLabs+HeyGen+DALL-E sequential calls
+        // for 7×6 pieces will time out). Subsequent daily 06:00 UTC runs
+        // catch the rest of the week.
+        const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
+            .toISOString().split('T')[0];
         const { data: topics, error: topicError } = await supabase
             .from('topics')
             .select('*, personas(*)')
             .in('status', ['content_ready', 'approved', 'scheduled'])
+            .lte('publish_date', tomorrow)
             .order('publish_date', { ascending: true, nullsFirst: false });
 
         if (topicError) {
@@ -508,6 +516,18 @@ export async function GET(request: Request) {
                                 });
 
                                 topicResult.carouselCreated = true;
+                            } else if (slides.length > 0) {
+                                // All slides failed (DALL-E error or audit rejection).
+                                // Mark the carousel piece failed so daily-publish
+                                // doesn't block on it forever and check-status can
+                                // still resolve the topic from the other pieces.
+                                await supabase.from('content_pieces').update({
+                                    status: 'failed',
+                                    error_message: `Carousel: 0/${slides.length} slides generated (DALL-E + audit rejection)`,
+                                }).eq('id', carouselPiece.id);
+                                topicResult.errors.push(
+                                    `carousel: 0/${slides.length} slides — marked failed`,
+                                );
                             }
                         } catch (e) {
                             topicResult.errors.push(
@@ -567,9 +587,8 @@ export async function GET(request: Request) {
 
                     if (!existingEpisode || existingEpisode.length === 0) {
                         try {
-                            const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL
-                                ? `https://${process.env.VERCEL_URL}`
-                                : 'http://localhost:3000';
+                            const siteUrl = process.env.NEXT_PUBLIC_SITE_URL
+                                || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
                             const podcastRes = await fetch(`${siteUrl}/api/media/podcast`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
