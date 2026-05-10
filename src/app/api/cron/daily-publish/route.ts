@@ -165,6 +165,12 @@ export async function publishTopic(
                 updatedPlatforms[platform] = { status: 'failed', error: errorMsg };
                 result.platformResults[key] = { status: 'failed', error: errorMsg };
             }
+
+            // Light per-platform throttle. Blotato cascades upload+publish to
+            // each network and we've seen 25+ back-to-back calls in a single
+            // topic. 300ms between pushes is invisible to the user but keeps
+            // us off Blotato rate-limit errors.
+            await new Promise((r) => setTimeout(r, 300));
         }
 
         await supabase

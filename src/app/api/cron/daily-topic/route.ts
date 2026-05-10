@@ -91,15 +91,37 @@ export async function GET(request: Request) {
                 errors: [] as string[],
             };
 
-            // Skip if a topic was created for this persona in the last 6 days (avoid
-            // re-running the Sunday batch and double-generating).
+            // Skip if a non-stale, valid topic was created for this persona in
+            // the last 6 days (avoid re-running the Sunday batch and double-
+            // generating). EXCLUDE 'draft' and 'content_generating' from the
+            // skip-set: a topic stuck in those states is an artifact of a prior
+            // partial run (Vercel timeout, Claude error) — left alone, the
+            // persona would be skipped forever. Auto-fail those stale rows so
+            // the Sunday batch can proceed cleanly.
             const sixDaysAgo = new Date(nowMs - 6 * 24 * 60 * 60 * 1000).toISOString();
+            const oneDayAgo = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+
+            const { data: staleDrafts } = await supabase
+                .from('topics')
+                .select('id, title, status')
+                .eq('persona_id', persona.id)
+                .in('status', ['draft', 'content_generating'])
+                .lt('created_at', oneDayAgo);
+            if (staleDrafts && staleDrafts.length > 0) {
+                for (const stale of staleDrafts) {
+                    await supabase.from('topics').update({
+                        status: 'failed',
+                        error_message: `Auto-failed by daily-topic: stuck in ${stale.status} >24h`,
+                    }).eq('id', stale.id);
+                }
+            }
+
             const { data: existingThisWeek } = await supabase
                 .from('topics')
                 .select('id, status')
                 .eq('persona_id', persona.id)
                 .gte('created_at', sixDaysAgo)
-                .in('status', ['draft', 'content_generating', 'content_ready', 'approved', 'scheduled'])
+                .in('status', ['approved', 'scheduled', 'partially_published', 'published'])
                 .limit(1);
 
             if (existingThisWeek && existingThisWeek.length > 0) {

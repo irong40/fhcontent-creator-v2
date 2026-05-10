@@ -28,11 +28,21 @@ export async function fillEvergreenGaps(targetDate: string): Promise<EvergreenRe
     const supabase = createAdminClient();
     const results: EvergreenResult[] = [];
 
-    // Get all active personas
+    // Only fill gaps for personas in autonomous mode. Other personas (e.g.
+    // Masonic NotebookLM-guarded ones) require manual approval and must not
+    // get blind evergreen reschedules.
+    const allowedIds = (process.env.AUTO_TOPIC_PERSONA_IDS || '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
+
+    if (allowedIds.length === 0) return results;
+
     const { data: personas } = await supabase
         .from('personas')
         .select('id, name')
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .in('id', allowedIds);
 
     if (!personas || personas.length === 0) return results;
 
