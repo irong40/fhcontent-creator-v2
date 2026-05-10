@@ -162,6 +162,13 @@ export async function publishTopic(
         const existingPlatforms = (piece.published_platforms || {}) as PublishedPlatforms;
         const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts);
         const updatedPlatforms = { ...existingPlatforms } as Record<string, PlatformStatus>;
+        // Track whether we actually called Blotato (success OR failure) for any
+        // platform on this piece. Skipped/no-op cases (platform already pending
+        // or published, no account configured) DON'T count as attempts — without
+        // this gate, a piece whose retries are all no-ops gets piecesProcessed++
+        // and triggers the "All platform publishes failed" path even though the
+        // piece is already fully published.
+        let pieceAttempted = false;
 
         for (const platform of targetPlatforms) {
             const existing = existingPlatforms[platform as keyof PublishedPlatforms];
@@ -177,6 +184,7 @@ export async function publishTopic(
 
             const key = `${piece.piece_type}:${platform}`;
 
+            pieceAttempted = true;
             try {
                 const { platformStatus, result: platformResult } =
                     await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl);
@@ -196,6 +204,10 @@ export async function publishTopic(
             // us off Blotato rate-limit errors.
             await new Promise((r) => setTimeout(r, 300));
         }
+
+        // Only touch the piece row if we actually fired something. Otherwise the
+        // piece is already fully resolved and our retry pass is a no-op for it.
+        if (!pieceAttempted) continue;
 
         await supabase
             .from('content_pieces')
