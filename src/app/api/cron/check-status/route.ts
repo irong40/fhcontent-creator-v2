@@ -242,7 +242,11 @@ async function pollBlotatoStatuses(supabase: SupabaseClient): Promise<BlotatoPol
         }
     }
 
-    // Promote topics based on piece resolution status
+    // Promote topics based on piece resolution status. Hold off on promotion
+    // until EVERY piece for the topic has either fired (has published_platforms)
+    // or is terminally failed (piece.status='failed') — otherwise pieces still
+    // waiting their slot (e.g. long video at +10h) would be ignored and the
+    // topic prematurely settles to 'published'.
     const topicIds = [...new Set(publishingPieces.map(p => p.topic_id))];
     for (const topicId of topicIds) {
         const { data: topicPieces } = await supabase
@@ -252,10 +256,17 @@ async function pollBlotatoStatuses(supabase: SupabaseClient): Promise<BlotatoPol
 
         if (!topicPieces) continue;
 
-        // Check if all pieces with published_platforms have fully resolved statuses
         const piecesWithPlatforms = topicPieces.filter(
             p => p.published_platforms && Object.keys(p.published_platforms as Record<string, unknown>).length > 0,
         );
+        const piecesAwaitingSlot = topicPieces.filter(
+            p => (!p.published_platforms || Object.keys(p.published_platforms as Record<string, unknown>).length === 0)
+                && p.status !== 'failed',
+        );
+
+        // If any piece is still waiting its slot, don't promote yet.
+        if (piecesAwaitingSlot.length > 0) continue;
+
         const allPlatformsResolved = piecesWithPlatforms.every(p => {
             const platforms = p.published_platforms as Record<string, { status: string }>;
             return Object.values(platforms).every(ps => ps.status !== 'pending');

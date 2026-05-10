@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
+import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags, isSlotReady, pieceSlotTime, PIECE_SLOT_OFFSET_HOURS } from './helpers';
 
 describe('getTargetPlatforms', () => {
     it('returns tiktok, instagram, youtube for long video', () => {
@@ -172,5 +172,78 @@ describe('capInstagramHashtags', () => {
         const out = capInstagramHashtags(text);
         const matches = out.match(/#[\p{L}\p{N}_]+/gu) ?? [];
         expect(matches.length).toBe(4);
+    });
+});
+
+describe('PIECE_SLOT_OFFSET_HOURS', () => {
+    it('places long video in evening (peak) slot', () => {
+        expect(PIECE_SLOT_OFFSET_HOURS.long).toBe(10);
+    });
+
+    it('orders shorts so short_1 fires earliest', () => {
+        const offsets = [
+            PIECE_SLOT_OFFSET_HOURS.short_1,
+            PIECE_SLOT_OFFSET_HOURS.short_2,
+            PIECE_SLOT_OFFSET_HOURS.short_3,
+            PIECE_SLOT_OFFSET_HOURS.short_4,
+        ];
+        // short_1 first, short_4 last among shorts
+        expect(offsets[0]).toBeLessThan(offsets[1]);
+        expect(offsets[1]).toBeLessThan(offsets[2]);
+        expect(offsets[2]).toBeLessThan(offsets[3]);
+    });
+
+    it('puts carousel between shorts (3 PM ET-ish)', () => {
+        expect(PIECE_SLOT_OFFSET_HOURS.carousel).toBe(6);
+    });
+});
+
+describe('pieceSlotTime', () => {
+    it('returns null when topicPublishAt is null', () => {
+        expect(pieceSlotTime('long', null)).toBeNull();
+    });
+
+    it('adds the correct offset for long (10h)', () => {
+        const base = '2026-05-12T13:00:00Z';
+        const out = pieceSlotTime('long', base);
+        expect(out?.toISOString()).toBe('2026-05-12T23:00:00.000Z');
+    });
+
+    it('returns base time for short_1 (offset 0)', () => {
+        const base = '2026-05-12T13:00:00Z';
+        const out = pieceSlotTime('short_1', base);
+        expect(out?.toISOString()).toBe('2026-05-12T13:00:00.000Z');
+    });
+});
+
+describe('isSlotReady', () => {
+    it('returns true when slot has passed', () => {
+        const base = '2026-05-12T13:00:00Z'; // long → 23:00
+        const now = new Date('2026-05-13T00:00:00Z');
+        expect(isSlotReady('long', base, now)).toBe(true);
+    });
+
+    it('returns false when slot is in the future', () => {
+        const base = '2026-05-12T13:00:00Z'; // long → 23:00
+        const now = new Date('2026-05-12T15:00:00Z');
+        expect(isSlotReady('long', base, now)).toBe(false);
+    });
+
+    it('returns true at exact slot time (>=)', () => {
+        const base = '2026-05-12T13:00:00Z';
+        const now = new Date('2026-05-12T23:00:00Z');
+        expect(isSlotReady('long', base, now)).toBe(true);
+    });
+
+    it('returns true when topicPublishAt is null (legacy fallback)', () => {
+        expect(isSlotReady('long', null)).toBe(true);
+    });
+
+    it('short_1 ready at base time, long not yet', () => {
+        const base = '2026-05-12T13:00:00Z';
+        const now = new Date('2026-05-12T13:00:00Z');
+        expect(isSlotReady('short_1', base, now)).toBe(true);
+        expect(isSlotReady('short_2', base, now)).toBe(false);
+        expect(isSlotReady('long', base, now)).toBe(false);
     });
 });
