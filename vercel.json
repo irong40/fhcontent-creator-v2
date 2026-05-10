@@ -5,6 +5,10 @@
       "schedule": "0 2 * * 0"
     },
     {
+      "path": "/api/cron/content-generator",
+      "schedule": "*/30 * * * *"
+    },
+    {
       "path": "/api/cron/daily-media",
       "schedule": "0 6 * * *"
     },
