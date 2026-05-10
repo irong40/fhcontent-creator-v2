@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
+import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 
 describe('getTargetPlatforms', () => {
     it('returns tiktok, instagram, youtube for long video', () => {
@@ -26,6 +26,41 @@ describe('getTargetPlatforms', () => {
         expect(platforms).not.toContain('threads');
         expect(platforms).not.toContain('twitter');
         expect(platforms).not.toContain('bluesky');
+    });
+});
+
+describe('getConfiguredTargetPlatforms', () => {
+    it('drops bluesky for a persona without a bluesky account', () => {
+        const accounts = {
+            tiktok: 'tt_1', instagram: 'ig_1', youtube: 'yt_1',
+            threads: 'th_1', twitter: 'tw_1',
+            // bluesky intentionally missing
+        };
+        const out = getConfiguredTargetPlatforms('short_1', accounts);
+        expect(out).not.toContain('bluesky');
+        expect(out).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter']);
+    });
+
+    it('returns empty when accounts is null', () => {
+        expect(getConfiguredTargetPlatforms('long', null)).toEqual([]);
+    });
+
+    it('keeps all platforms when all accounts configured', () => {
+        const accounts = {
+            tiktok: 't', instagram: 'i', youtube: 'y',
+            threads: 'th', twitter: 'tw', bluesky: 'bs',
+        };
+        expect(getConfiguredTargetPlatforms('short_2', accounts)).toEqual(
+            ['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'bluesky'],
+        );
+    });
+
+    it('returns instagram-only carousel when ig account is set', () => {
+        expect(getConfiguredTargetPlatforms('carousel', { instagram: 'i' })).toEqual(['instagram']);
+    });
+
+    it('returns empty carousel when ig account is missing', () => {
+        expect(getConfiguredTargetPlatforms('carousel', { tiktok: 't' })).toEqual([]);
     });
 });
 

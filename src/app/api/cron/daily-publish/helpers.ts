@@ -1,4 +1,4 @@
-import type { PieceType } from '@/types/database';
+import type { PieceType, PlatformAccounts } from '@/types/database';
 import type { Platform } from '@/lib/blotato';
 
 /**
@@ -21,6 +21,21 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
         default:
             return [];
     }
+}
+
+/**
+ * Returns the publishable target platforms for a piece, filtered by which ones
+ * actually have an account_id on the persona. Avoids spurious "No account
+ * configured" failure rows when a persona simply hasn't connected a given
+ * network yet (e.g. Dr. Carter has no Bluesky).
+ */
+export function getConfiguredTargetPlatforms(
+    pieceType: PieceType,
+    accounts: PlatformAccounts | null | undefined,
+): Platform[] {
+    const all = getTargetPlatforms(pieceType);
+    if (!accounts) return [];
+    return all.filter((p) => Boolean(accounts[p as keyof PlatformAccounts]));
 }
 
 export function getMediaUrl(piece: { piece_type: string; carousel_url: string | null; video_url: string | null }): string | null {

@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -136,7 +136,7 @@ export async function publishTopic(
         }
 
         const existingPlatforms = (piece.published_platforms || {}) as PublishedPlatforms;
-        const targetPlatforms = getTargetPlatforms(piece.piece_type);
+        const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts);
         const updatedPlatforms = { ...existingPlatforms } as Record<string, PlatformStatus>;
 
         for (const platform of targetPlatforms) {
@@ -241,15 +241,24 @@ export async function GET(request: Request) {
         const supabase = createAdminClient();
         const today = new Date().toISOString().split('T')[0];
 
-        // Find scheduled OR approved-with-publish-date topics ready to ship.
-        // Picking up `approved` too means the manual /schedule step is no longer
-        // a hard gate — any approved topic with a publish_date <= today flows.
-        const { data: topics, error } = await supabase
+        // Find topics ready to ship, including:
+        //  - `scheduled` / `approved` for first publish
+        //  - `partially_published` so we retry platforms that previously failed
+        //    (the per-platform retry skip at line ~144 only re-tries `failed`
+        //    platform entries, so re-running a fully-resolved topic is a no-op).
+        // Cap partial-retry to 7 days post-publish — past that, give up so we
+        // don't hammer Blotato indefinitely on a permanently-broken caption.
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: topicsRaw, error } = await supabase
             .from('topics')
-            .select('id, title')
-            .in('status', ['scheduled', 'approved'])
+            .select('id, title, status, published_at')
+            .in('status', ['scheduled', 'approved', 'partially_published'])
             .not('publish_date', 'is', null)
             .lte('publish_date', today);
+
+        const topics = (topicsRaw ?? []).filter(
+            (t) => t.status !== 'partially_published' || (t.published_at && t.published_at > sevenDaysAgo),
+        );
 
         if (error) {
             return NextResponse.json(
@@ -278,7 +287,7 @@ export async function GET(request: Request) {
             // Re-query now that evergreen topics have been scheduled
             const { data: refetched } = await supabase
                 .from('topics')
-                .select('id, title')
+                .select('id, title, status, published_at')
                 .eq('status', 'scheduled')
                 .lte('publish_date', today);
 
