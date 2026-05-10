@@ -160,8 +160,8 @@ Generate content for 6 pieces:
 
 FOR EACH PIECE, PROVIDE:
 - script: The spoken/displayed text (NEVER include the creator's name)
-- captionLong: 2200 character caption ending with 3-5 hashtags relevant to the ${persona.brand} brand and expertise areas. Mix broad-reach, niche, and discovery hashtags.
-- captionShort: 280 character caption for Twitter/X (include 2-3 of the same hashtags)
+- captionLong: 2200 character caption. End with EXACTLY 3 hashtags — no more, no fewer. Choose 3 high-relevance tags for the ${persona.brand} brand. Do NOT add a long hashtag list under any circumstance — Instagram rejects posts with more than 5 hashtags, so 3 is the hard ceiling.
+- captionShort: 280 character caption for Twitter/X. End with EXACTLY 2 hashtags — no more.
 - thumbnailPrompt: Prompt for AI thumbnail generation${persona.image_subject_constraint ? `\n\nIMAGE-PROMPT SUBJECT RULE — applies to BOTH thumbnailPrompt and every carousel imagePrompt:\n${persona.image_subject_constraint}` : ''}
 
 For each piece, also include a "musicTrack" field with a mood string for background music (e.g., "inspirational", "upbeat", "dramatic", "reflective", "triumphant"). Pick a mood that matches the piece's tone and content.
@@ -346,8 +346,8 @@ const REMIX_MAX_TOKENS: Record<RemixField, number> = {
 
 const REMIX_FIELD_LABELS: Record<RemixField, string> = {
     script: 'script (spoken text)',
-    caption_long: 'long caption (up to 2200 characters, ending with 3-5 hashtags)',
-    caption_short: 'short caption (up to 280 characters for Twitter/X, with 2-3 hashtags)',
+    caption_long: 'long caption (up to 2200 characters, ending with EXACTLY 3 hashtags — Instagram rejects posts with more than 5)',
+    caption_short: 'short caption (up to 280 characters for Twitter/X, ending with EXACTLY 2 hashtags)',
     thumbnail_prompt: 'thumbnail image generation prompt',
     carousel_slides: 'carousel slides (array of slide objects with slide number, text, and imagePrompt)',
 };
