@@ -8,9 +8,10 @@ describe('getTargetPlatforms', () => {
 
     it.each([
         'short_1', 'short_2', 'short_3', 'short_4',
-    ] as const)('returns 6 platforms for %s', (pieceType) => {
+    ] as const)('returns 5 platforms for %s (bluesky disabled 2026-05-10)', (pieceType) => {
         const result = getTargetPlatforms(pieceType);
-        expect(result).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'bluesky']);
+        expect(result).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter']);
+        expect(result).not.toContain('bluesky');
     });
 
     it('returns only instagram for carousel', () => {
@@ -30,28 +31,26 @@ describe('getTargetPlatforms', () => {
 });
 
 describe('getConfiguredTargetPlatforms', () => {
-    it('drops bluesky for a persona without a bluesky account', () => {
+    it('omits bluesky from short_* even if an account is configured (disabled 2026-05-10)', () => {
         const accounts = {
             tiktok: 'tt_1', instagram: 'ig_1', youtube: 'yt_1',
-            threads: 'th_1', twitter: 'tw_1',
-            // bluesky intentionally missing
+            threads: 'th_1', twitter: 'tw_1', bluesky: 'bs_1',
         };
         const out = getConfiguredTargetPlatforms('short_1', accounts);
         expect(out).not.toContain('bluesky');
-        expect(out).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter']);
     });
 
     it('returns empty when accounts is null', () => {
         expect(getConfiguredTargetPlatforms('long', null)).toEqual([]);
     });
 
-    it('keeps all platforms when all accounts configured', () => {
+    it('returns the 5 expected platforms when all accounts configured', () => {
         const accounts = {
             tiktok: 't', instagram: 'i', youtube: 'y',
             threads: 'th', twitter: 'tw', bluesky: 'bs',
         };
         expect(getConfiguredTargetPlatforms('short_2', accounts)).toEqual(
-            ['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'bluesky'],
+            ['tiktok', 'instagram', 'youtube', 'threads', 'twitter'],
         );
     });
 

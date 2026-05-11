@@ -57,11 +57,12 @@ describe('publishing platform distribution', () => {
         expect(getTargetPlatforms('long')).toHaveLength(3);
     });
 
-    it('short videos target 6 platforms', () => {
-        expect(getTargetPlatforms('short_1')).toHaveLength(6);
-        expect(getTargetPlatforms('short_2')).toHaveLength(6);
-        expect(getTargetPlatforms('short_3')).toHaveLength(6);
-        expect(getTargetPlatforms('short_4')).toHaveLength(6);
+    it('short videos target 5 platforms (bluesky disabled 2026-05-10)', () => {
+        expect(getTargetPlatforms('short_1')).toHaveLength(5);
+        expect(getTargetPlatforms('short_2')).toHaveLength(5);
+        expect(getTargetPlatforms('short_3')).toHaveLength(5);
+        expect(getTargetPlatforms('short_4')).toHaveLength(5);
+        expect(getTargetPlatforms('short_1')).not.toContain('bluesky');
     });
 
     it('carousel targets only instagram', () => {

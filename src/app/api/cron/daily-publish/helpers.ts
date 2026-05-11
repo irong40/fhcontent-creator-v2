@@ -4,8 +4,12 @@ import type { Platform } from '@/lib/blotato';
 /**
  * Platform distribution matrix:
  * - long video  → tiktok, instagram, youtube
- * - short 1-4   → tiktok, instagram, youtube, threads, twitter, bluesky
+ * - short 1-4   → tiktok, instagram, youtube, threads, twitter
  * - carousel    → instagram
+ *
+ * NOTE: Bluesky disabled 2026-05-10 per Adam — no accounts wired up, was
+ * generating spurious 'No account configured' failure rows. Re-add to the
+ * short_* list when an account is configured on personas.platform_accounts.
  */
 export function getTargetPlatforms(pieceType: PieceType): Platform[] {
     switch (pieceType) {
@@ -15,7 +19,7 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
         case 'short_2':
         case 'short_3':
         case 'short_4':
-            return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'bluesky'];
+            return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter'];
         case 'carousel':
             return ['instagram'];
         default:
