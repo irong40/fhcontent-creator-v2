@@ -20,6 +20,22 @@ export const maxDuration = 800;
 const HEYGEN_PIECE_TYPES: PieceType[] = ['long', 'lecture'];
 const BLOTATO_PIECE_TYPES: PieceType[] = ['short_1', 'short_2', 'short_3', 'short_4'];
 
+/**
+ * Belt-and-suspenders directive prepended to every DALL-E call when the
+ * persona has an image_subject_constraint. Catches legacy/scheduled prompts
+ * authored before the prompts.ts framing-discipline rules landed.
+ */
+function applySubjectGuardrail(prompt: string, constraint: string | null | undefined): string {
+    if (!constraint) return prompt;
+    const directive =
+        'HARD CONSTRAINT — read before rendering: ' + constraint + ' ' +
+        'Render ZERO background figures, ZERO crowds, ZERO incidental people. ' +
+        'If the prompt below describes people, render a TIGHT CLOSE-UP of ONE individual only, with dark brown skin clearly and unambiguously visible — never silhouette, never wide shot. ' +
+        'If the prompt below mentions maps, "scenes", "community", or groups, omit all human figures entirely and render only objects, documents, architecture, or landscape. ' +
+        'Prompt follows:\n\n';
+    return directive + prompt;
+}
+
 /** Build HeyGen scene array: intro (optional) + main + outro (optional) */
 function buildHeyGenScenes(
     avatarId: string,
@@ -386,13 +402,14 @@ export async function GET(request: Request) {
                         let imageBuffer: ArrayBuffer;
                         let sourceService = 'openai';
 
+                        const guardedThumbnailPrompt = applySubjectGuardrail(piece.thumbnail_prompt, subjectConstraint);
                         try {
-                            const { url: dalleUrl } = await openai.generateImage(piece.thumbnail_prompt);
+                            const { url: dalleUrl } = await openai.generateImage(guardedThumbnailPrompt);
                             const imageResponse = await fetch(dalleUrl);
                             if (!imageResponse.ok) throw new Error('Failed to download DALL-E image');
                             imageBuffer = await imageResponse.arrayBuffer();
                         } catch {
-                            const geminiResult = await gemini.generateImage(piece.thumbnail_prompt);
+                            const geminiResult = await gemini.generateImage(guardedThumbnailPrompt);
                             if (!geminiResult) throw new Error('Both DALL-E and Gemini failed');
 
                             imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
@@ -462,7 +479,8 @@ export async function GET(request: Request) {
                             for (const slide of slides) {
                                 if (slide.imagePrompt) {
                                     try {
-                                        const { url: dalleUrl } = await openai.generateImage(slide.imagePrompt);
+                                        const guardedSlidePrompt = applySubjectGuardrail(slide.imagePrompt, subjectConstraint);
+                                        const { url: dalleUrl } = await openai.generateImage(guardedSlidePrompt);
                                         const imageResponse = await fetch(dalleUrl);
                                         if (!imageResponse.ok) continue;
                                         const imageBuffer = await imageResponse.arrayBuffer();
