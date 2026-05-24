@@ -403,17 +403,23 @@ export async function GET(request: Request) {
                         let sourceService = 'openai';
 
                         const guardedThumbnailPrompt = applySubjectGuardrail(piece.thumbnail_prompt, subjectConstraint);
+                        let dalleErrMsg = '';
                         try {
                             const { url: dalleUrl } = await openai.generateImage(guardedThumbnailPrompt);
                             const imageResponse = await fetch(dalleUrl);
-                            if (!imageResponse.ok) throw new Error('Failed to download DALL-E image');
+                            if (!imageResponse.ok) throw new Error(`download ${imageResponse.status}`);
                             imageBuffer = await imageResponse.arrayBuffer();
-                        } catch {
-                            const geminiResult = await gemini.generateImage(guardedThumbnailPrompt);
-                            if (!geminiResult) throw new Error('Both DALL-E and Gemini failed');
-
-                            imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
-                            sourceService = 'gemini';
+                        } catch (dalleErr) {
+                            dalleErrMsg = dalleErr instanceof Error ? dalleErr.message : String(dalleErr);
+                            console.warn(`[daily-media] DALL-E failed for ${piece.piece_type}: ${dalleErrMsg}`);
+                            try {
+                                const geminiResult = await gemini.generateImage(guardedThumbnailPrompt);
+                                imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
+                                sourceService = 'gemini';
+                            } catch (geminiErr) {
+                                const geminiMsg = geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
+                                throw new Error(`DALL-E: ${dalleErrMsg.slice(0, 200)} | Gemini: ${geminiMsg.slice(0, 200)}`);
+                            }
                         }
 
                         // Subject-constraint audit (only when persona has one set)

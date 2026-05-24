@@ -99,47 +99,46 @@ class GeminiClient {
         return { text };
     }
 
-    /** Generate an image using Gemini's Imagen model (fallback for DALL-E) */
+    /** Generate an image using Gemini's Imagen model (fallback for DALL-E).
+     *  Throws on failure with the actual API body or finishReason so the
+     *  caller's alert email shows the real reason (auth / content-policy /
+     *  quota) instead of a generic "failed" message. */
     async generateImage(prompt: string, options?: {
         aspectRatio?: string;
-    }): Promise<{ imageData: string } | null> {
-        try {
-            const model = 'gemini-2.5-flash-image';
-            const response = await fetch(
-                `${this.baseUrl}/v1beta/models/${model}:generateContent?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
-                        generationConfig: {
-                            responseModalities: ['IMAGE', 'TEXT'],
-                            ...(options?.aspectRatio && { aspectRatio: options.aspectRatio }),
-                        },
-                    }),
-                }
-            );
-
-            if (!response.ok) {
-                console.error(`[gemini] Image gen failed: ${response.status} ${response.statusText}`);
-                const errBody = await response.text().catch(() => '');
-                console.error(`[gemini] Response: ${errBody.slice(0, 500)}`);
-                return null;
+    }): Promise<{ imageData: string }> {
+        const model = 'gemini-2.5-flash-image';
+        const response = await fetch(
+            `${this.baseUrl}/v1beta/models/${model}:generateContent?key=${this.apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
+                    generationConfig: {
+                        responseModalities: ['IMAGE', 'TEXT'],
+                        ...(options?.aspectRatio && { aspectRatio: options.aspectRatio }),
+                    },
+                }),
             }
+        );
 
-            const data = await response.json();
-            const parts = data.candidates?.[0]?.content?.parts;
-            const imagePart = parts?.find((p: Record<string, unknown>) => p.inlineData);
-            if (!imagePart?.inlineData?.data) {
-                console.warn('[gemini] No image data in response');
-                return null;
-            }
-
-            return { imageData: imagePart.inlineData.data as string };
-        } catch (e) {
-            console.error('[gemini] Image gen exception:', e);
-            return null;
+        if (!response.ok) {
+            const errBody = await response.text().catch(() => '');
+            throw new Error(`Gemini image API ${response.status}: ${errBody.slice(0, 400)}`);
         }
+
+        const data = await response.json();
+        const finishReason = data.candidates?.[0]?.finishReason;
+        const parts = data.candidates?.[0]?.content?.parts;
+        const imagePart = parts?.find((p: Record<string, unknown>) => p.inlineData);
+        if (!imagePart?.inlineData?.data) {
+            const safetyRatings = data.candidates?.[0]?.safetyRatings;
+            throw new Error(
+                `Gemini returned no image (finishReason=${finishReason ?? 'unknown'}, safety=${JSON.stringify(safetyRatings ?? [])})`
+            );
+        }
+
+        return { imageData: imagePart.inlineData.data as string };
     }
 
     /** Generate music via Google Lyria RealTime (lyria-realtime-exp) */

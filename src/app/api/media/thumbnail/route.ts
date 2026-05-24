@@ -46,24 +46,28 @@ export async function POST(request: NextRequest) {
         let imageBuffer: ArrayBuffer;
         let sourceService = 'openai';
 
+        let dalleErrMsg = '';
         try {
             // Primary: DALL-E 3
             const { url: dalleUrl } = await openai.generateImage(piece.thumbnail_prompt);
 
             // Download DALL-E temporary URL
             const imageResponse = await fetch(dalleUrl);
-            if (!imageResponse.ok) throw new Error('Failed to download DALL-E image');
+            if (!imageResponse.ok) throw new Error(`download ${imageResponse.status}`);
             imageBuffer = await imageResponse.arrayBuffer();
         } catch (dalleError) {
-            // Fallback: Gemini Imagen
-            console.warn('DALL-E failed, trying Gemini fallback:', dalleError);
-            const geminiResult = await gemini.generateImage(piece.thumbnail_prompt);
-            if (!geminiResult) {
-                throw new Error('Both DALL-E and Gemini image generation failed');
+            dalleErrMsg = dalleError instanceof Error ? dalleError.message : String(dalleError);
+            console.warn('DALL-E failed, trying Gemini fallback:', dalleErrMsg);
+            try {
+                const geminiResult = await gemini.generateImage(piece.thumbnail_prompt);
+                imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
+                sourceService = 'gemini';
+            } catch (geminiError) {
+                const geminiMsg = geminiError instanceof Error ? geminiError.message : String(geminiError);
+                throw new Error(
+                    `DALL-E: ${dalleErrMsg.slice(0, 200)} | Gemini: ${geminiMsg.slice(0, 200)}`,
+                );
             }
-
-            imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
-            sourceService = 'gemini';
         }
 
         // Upload to Supabase Storage
