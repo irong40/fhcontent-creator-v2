@@ -733,6 +733,48 @@ export interface Database {
                     }
                 ];
             };
+            errors: {
+                Row: {
+                    id: string;
+                    source: string;
+                    message: string;
+                    topic_id: string | null;
+                    persona_name: string | null;
+                    environment: string;
+                    severity: 'error' | 'warning' | 'info';
+                    acknowledged: boolean;
+                    acknowledged_at: string | null;
+                    acknowledged_by: string | null;
+                    created_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    source: string;
+                    message: string;
+                    topic_id?: string | null;
+                    persona_name?: string | null;
+                    environment?: string;
+                    severity?: 'error' | 'warning' | 'info';
+                    acknowledged?: boolean;
+                    acknowledged_at?: string | null;
+                    acknowledged_by?: string | null;
+                    created_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    source?: string;
+                    message?: string;
+                    topic_id?: string | null;
+                    persona_name?: string | null;
+                    environment?: string;
+                    severity?: 'error' | 'warning' | 'info';
+                    acknowledged?: boolean;
+                    acknowledged_at?: string | null;
+                    acknowledged_by?: string | null;
+                    created_at?: string;
+                };
+                Relationships: [];
+            };
             workflow_locks: {
                 Row: {
                     id: string;

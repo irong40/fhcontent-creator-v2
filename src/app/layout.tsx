@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "@/components/sign-out-button";
 import { NavLinks } from "@/components/nav-links";
+import { NotificationBell } from "@/components/notification-bell";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -45,6 +46,7 @@ export default async function RootLayout({
               </div>
               <NavLinks />
               <div className="ml-auto flex items-center gap-4">
+                {user && <NotificationBell />}
                 {user && <SignOutButton />}
               </div>
             </div>
