@@ -587,8 +587,21 @@ export async function GET(request: Request) {
                                 .eq('id', piece.id);
 
                             topicResult.musicGenerated++;
+                        } else if (persona.default_music_url) {
+                            // Lyria failed twice — fall back to the persona's pre-uploaded
+                            // default music track so videos still ship with a music bed.
+                            await supabase
+                                .from('content_pieces')
+                                .update({ music_track: persona.default_music_url })
+                                .eq('id', piece.id);
+                            topicResult.musicGenerated++;
+                            console.warn(`[daily-media] Lyria failed for ${piece.piece_type} — used persona default_music_url`);
                         } else {
-                            console.warn(`Music generation skipped for ${piece.piece_type} (mood: ${mood}) — Lyria unavailable`);
+                            // No fallback configured. Surface as a warning so it's visible
+                            // (was previously a silent console.warn only).
+                            topicResult.errors.push(
+                                `${piece.piece_type} music: Lyria unavailable (mood: ${mood}) and no default_music_url set on persona — video will ship without music bed`,
+                            );
                         }
                     } catch (e) {
                         topicResult.errors.push(

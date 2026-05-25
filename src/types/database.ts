@@ -33,6 +33,7 @@ export interface Database {
                     content_guardrail: string | null;
                     guardrail_notebook_ids: string[] | null;
                     facebook_page_ids: string[] | null;
+                    default_music_url: string | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -60,6 +61,7 @@ export interface Database {
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
+                    default_music_url?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -87,6 +89,7 @@ export interface Database {
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
+                    default_music_url?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
