@@ -894,6 +894,12 @@ export interface PlatformStatus {
     post_id?: string;
     published_at?: string;
     error?: string;
+    /** Number of failed attempts on this platform. Incremented by
+     *  daily-publish on each retry. Capped by MAX_PLATFORM_RETRIES — at
+     *  the cap we stop retrying so the topic settles as partially_published
+     *  instead of burning hourly API calls on a permanently broken
+     *  platform (revoked token, deleted account, etc.). */
+    retry_count?: number;
 }
 
 export interface PublishedPlatforms {

@@ -16,6 +16,28 @@ interface PlatformResult {
     error?: string;
 }
 
+/** Stop retrying a platform after this many failed attempts. ~5 hourly retries
+ *  spans most of a publish day; beyond that it's almost always a permanent
+ *  issue (revoked token, deleted account, malformed caption) that won't
+ *  resolve itself. The topic settles as partially_published. */
+const MAX_PLATFORM_RETRIES = 5;
+
+/** Aggregate per-platform success/failure counts across every piece's
+ *  published_platforms map. Used to distinguish a true total-failure topic
+ *  from a partial-success topic whose current-tick retries also failed. */
+function countPlatformOutcomes(pieces: ContentPiece[]): { published: number; failed: number } {
+    let published = 0;
+    let failed = 0;
+    for (const p of pieces) {
+        const platforms = (p.published_platforms ?? {}) as Record<string, PlatformStatus>;
+        for (const ps of Object.values(platforms)) {
+            if (ps?.status === 'published') published++;
+            else if (ps?.status === 'failed') failed++;
+        }
+    }
+    return { published, failed };
+}
+
 interface PublishResult {
     topicId: string;
     title: string;
@@ -197,6 +219,18 @@ export async function publishTopic(
             const existing = existingPlatforms[platform as keyof PublishedPlatforms];
             if (existing && existing.status !== 'failed') continue;
 
+            // Per-platform retry budget. After MAX_PLATFORM_RETRIES failed
+            // attempts, almost certainly a permanent issue (revoked token,
+            // deleted account, frozen caption). Stop hammering and let the
+            // topic settle as partially_published.
+            const priorRetries = existing?.retry_count ?? 0;
+            if (existing?.status === 'failed' && priorRetries >= MAX_PLATFORM_RETRIES) {
+                const warning = `${piece.piece_type}: ${platform} exhausted retry budget (${priorRetries}/${MAX_PLATFORM_RETRIES}) — last error: ${existing.error ?? 'unknown'}`;
+                result.warnings.push(warning);
+                console.warn(`[daily-publish] ${piece.id} ${platform} retry budget exhausted`);
+                continue;
+            }
+
             const accountId = accounts[platform as keyof PlatformAccounts];
             if (!accountId) {
                 const warning = `${piece.piece_type}: no ${platform} account configured — skipped`;
@@ -217,7 +251,11 @@ export async function publishTopic(
             } catch (e) {
                 const errorMsg = e instanceof Error ? e.message : 'Unknown error';
                 console.error(`Failed to publish piece ${piece.id} to ${platform}:`, errorMsg);
-                updatedPlatforms[platform] = { status: 'failed', error: errorMsg };
+                updatedPlatforms[platform] = {
+                    status: 'failed',
+                    error: errorMsg,
+                    retry_count: priorRetries + 1,
+                };
                 result.platformResults[key] = { status: 'failed', error: errorMsg };
             }
 
@@ -261,6 +299,24 @@ export async function publishTopic(
             }
             return result;
         }
+        // Smart partial-success detection: scan all pieces' platform statuses
+        // for any prior 'published' result. If found, this run's failures are
+        // retry attempts on already-partial topics — mark partially_published
+        // (not failed) and suppress the duplicate alert. check-status cron
+        // would later auto-correct anyway, but the alert already spammed.
+        const totals = countPlatformOutcomes(pieces as ContentPiece[]);
+        if (totals.published > 0) {
+            await supabase
+                .from('topics')
+                .update({
+                    status: 'partially_published',
+                    error_message: `${totals.published} succeeded, ${totals.failed} failed (this tick's retries also failed)`,
+                })
+                .eq('id', topicId);
+            // No alert — partially_published is the system working, not failing.
+            return result;
+        }
+
         await supabase
             .from('topics')
             .update({ status: 'failed', error_message: 'All platform publishes failed' })
