@@ -11,6 +11,22 @@ import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import type { Persona, PlatformAccounts } from '@/types/database';
 
+const PLATFORMS: Array<keyof PlatformAccounts> = [
+    'tiktok',
+    'instagram',
+    'youtube',
+    'threads',
+    'twitter',
+    'bluesky',
+    'linkedin',
+    'facebook',
+    'fanbase',
+];
+
+function linesToArray(raw: string): string[] {
+    return raw.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
 export default function EditPersonaPage() {
     const router = useRouter();
     const params = useParams();
@@ -28,7 +44,7 @@ export default function EditPersonaPage() {
                 .eq('id', params.id as string)
                 .single();
             if (error) setError(error.message);
-            else setPersona(data);
+            else setPersona(data as Persona);
             setLoading(false);
         }
         load();
@@ -41,33 +57,39 @@ export default function EditPersonaPage() {
 
         const formData = new FormData(e.currentTarget);
 
-        const expertiseRaw = formData.get('expertise_areas') as string;
-        const voicePoolRaw = formData.get('voice_pool') as string;
-
         const platformAccounts: PlatformAccounts = {};
-        for (const platform of ['tiktok', 'instagram', 'youtube', 'threads', 'twitter'] as const) {
+        for (const platform of PLATFORMS) {
             const val = (formData.get(`platform_${platform}`) as string)?.trim();
             if (val) platformAccounts[platform] = val;
         }
 
+        const update: Record<string, unknown> = {
+            name: formData.get('name') as string,
+            brand: formData.get('brand') as string,
+            tagline: (formData.get('tagline') as string) || null,
+            expertise_areas: linesToArray(formData.get('expertise_areas') as string),
+            voice_style: formData.get('voice_style') as string,
+            content_guidelines: (formData.get('content_guidelines') as string) || null,
+            content_guardrail: (formData.get('content_guardrail') as string) || null,
+            image_subject_constraint: (formData.get('image_subject_constraint') as string) || null,
+            platform_accounts: platformAccounts,
+            voice_pool: linesToArray(formData.get('voice_pool') as string),
+            profile_image_url: (formData.get('profile_image_url') as string) || null,
+            heygen_avatar_id: (formData.get('heygen_avatar_id') as string) || null,
+            heygen_voice_id: (formData.get('heygen_voice_id') as string) || null,
+            blotato_template_id: (formData.get('blotato_template_id') as string) || null,
+            default_music_url: (formData.get('default_music_url') as string) || null,
+            newsletter_url: (formData.get('newsletter_url') as string) || null,
+            newsletter_cta: (formData.get('newsletter_cta') as string) || null,
+            guardrail_notebook_ids: linesToArray(formData.get('guardrail_notebook_ids') as string),
+            facebook_page_ids: linesToArray(formData.get('facebook_page_ids') as string),
+            is_active: formData.get('is_active') === 'on',
+            updated_at: new Date().toISOString(),
+        };
+
         const { error: updateError } = await supabase
             .from('personas')
-            .update({
-                name: formData.get('name') as string,
-                brand: formData.get('brand') as string,
-                tagline: (formData.get('tagline') as string) || null,
-                expertise_areas: expertiseRaw.split('\n').map(s => s.trim()).filter(Boolean),
-                voice_style: formData.get('voice_style') as string,
-                content_guidelines: (formData.get('content_guidelines') as string) || null,
-                platform_accounts: platformAccounts,
-                voice_pool: voicePoolRaw.split('\n').map(s => s.trim()).filter(Boolean),
-                profile_image_url: (formData.get('profile_image_url') as string) || null,
-                heygen_avatar_id: (formData.get('heygen_avatar_id') as string) || null,
-                canva_brand_kit_id: (formData.get('canva_brand_kit_id') as string) || null,
-                canva_carousel_template_id: (formData.get('canva_carousel_template_id') as string) || null,
-                is_active: formData.get('is_active') === 'on',
-                updated_at: new Date().toISOString(),
-            })
+            .update(update)
             .eq('id', params.id as string);
 
         if (updateError) {
@@ -106,7 +128,7 @@ export default function EditPersonaPage() {
     );
     if (!persona) return <div className="container py-8">Persona not found</div>;
 
-    const accounts = persona.platform_accounts as Record<string, string>;
+    const accounts = (persona.platform_accounts ?? {}) as Record<string, string>;
 
     return (
         <div className="container max-w-screen-md py-8">
@@ -159,6 +181,20 @@ export default function EditPersonaPage() {
                             <Label htmlFor="content_guidelines">Content Guidelines</Label>
                             <Textarea id="content_guidelines" name="content_guidelines" rows={3} defaultValue={persona.content_guidelines ?? ''} />
                         </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="content_guardrail">Content Guardrail</Label>
+                            <p className="text-xs text-muted-foreground">
+                                Hard editorial rule injected into Claude prompts. Topic / script must comply or generation is rejected.
+                            </p>
+                            <Textarea id="content_guardrail" name="content_guardrail" rows={3} defaultValue={persona.content_guardrail ?? ''} />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="image_subject_constraint">Image Subject Constraint</Label>
+                            <p className="text-xs text-muted-foreground">
+                                Rule injected into image-generation prompts AND used by the Claude vision audit. Example: &ldquo;All people depicted must be Black/African American.&rdquo; Leave blank for no constraint.
+                            </p>
+                            <Textarea id="image_subject_constraint" name="image_subject_constraint" rows={3} defaultValue={persona.image_subject_constraint ?? ''} />
+                        </div>
                     </CardContent>
                 </Card>
 
@@ -167,12 +203,22 @@ export default function EditPersonaPage() {
                         <CardTitle>Platform Accounts (Blotato IDs)</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        {['tiktok', 'instagram', 'youtube', 'threads', 'twitter'].map((platform) => (
+                        {PLATFORMS.map((platform) => (
                             <div key={platform} className="space-y-2">
                                 <Label htmlFor={`platform_${platform}`}>{platform.charAt(0).toUpperCase() + platform.slice(1)}</Label>
                                 <Input id={`platform_${platform}`} name={`platform_${platform}`} defaultValue={accounts[platform] ?? ''} />
                             </div>
                         ))}
+                        <Separator />
+                        <div className="space-y-2">
+                            <Label htmlFor="facebook_page_ids">Facebook Page IDs (one per line, for multi-page publishing)</Label>
+                            <Textarea
+                                id="facebook_page_ids"
+                                name="facebook_page_ids"
+                                rows={3}
+                                defaultValue={(persona.facebook_page_ids ?? []).join('\n')}
+                            />
+                        </div>
                     </CardContent>
                 </Card>
 
@@ -185,18 +231,64 @@ export default function EditPersonaPage() {
                             <Label htmlFor="voice_pool">Voice Pool (ElevenLabs IDs, one per line) *</Label>
                             <Textarea id="voice_pool" name="voice_pool" rows={4} defaultValue={persona.voice_pool.join('\n')} required />
                         </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="default_music_url">Default Music URL</Label>
+                            <p className="text-xs text-muted-foreground">
+                                Pre-uploaded fallback music track. Used by daily-media when Lyria music generation fails. Leave blank to skip music gracefully on failure.
+                            </p>
+                            <Input id="default_music_url" name="default_music_url" defaultValue={persona.default_music_url ?? ''} placeholder="https://..." />
+                        </div>
                         <Separator />
                         <div className="space-y-2">
                             <Label htmlFor="heygen_avatar_id">HeyGen Avatar ID</Label>
                             <Input id="heygen_avatar_id" name="heygen_avatar_id" defaultValue={persona.heygen_avatar_id ?? ''} />
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="canva_brand_kit_id">Canva Brand Kit ID</Label>
-                            <Input id="canva_brand_kit_id" name="canva_brand_kit_id" defaultValue={persona.canva_brand_kit_id ?? ''} />
+                            <Label htmlFor="heygen_voice_id">HeyGen Voice ID</Label>
+                            <Input id="heygen_voice_id" name="heygen_voice_id" defaultValue={persona.heygen_voice_id ?? ''} />
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="canva_carousel_template_id">Canva Carousel Template ID</Label>
-                            <Input id="canva_carousel_template_id" name="canva_carousel_template_id" defaultValue={persona.canva_carousel_template_id ?? ''} />
+                            <Label htmlFor="blotato_template_id">Blotato Template ID (for AI Story Video / faceless shorts)</Label>
+                            <Input id="blotato_template_id" name="blotato_template_id" defaultValue={persona.blotato_template_id ?? ''} />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="mt-4">
+                    <CardHeader>
+                        <CardTitle>Newsletter</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="newsletter_url">Newsletter URL</Label>
+                            <Input id="newsletter_url" name="newsletter_url" defaultValue={persona.newsletter_url ?? ''} placeholder="https://...substack.com" />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="newsletter_cta">Newsletter CTA</Label>
+                            <p className="text-xs text-muted-foreground">
+                                Call-to-action text appended to long-form video outros and captions.
+                            </p>
+                            <Input id="newsletter_cta" name="newsletter_cta" defaultValue={persona.newsletter_cta ?? ''} />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="mt-4">
+                    <CardHeader>
+                        <CardTitle>Advanced</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="guardrail_notebook_ids">Guardrail Notebook IDs (NotebookLM, one per line)</Label>
+                            <p className="text-xs text-muted-foreground">
+                                IDs of NotebookLM notebooks consulted by the content guardrail before scripts are written.
+                            </p>
+                            <Textarea
+                                id="guardrail_notebook_ids"
+                                name="guardrail_notebook_ids"
+                                rows={3}
+                                defaultValue={(persona.guardrail_notebook_ids ?? []).join('\n')}
+                            />
                         </div>
                     </CardContent>
                 </Card>
