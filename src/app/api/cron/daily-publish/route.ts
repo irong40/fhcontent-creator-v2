@@ -22,6 +22,15 @@ interface PublishResult {
     piecesProcessed: number;
     platformResults: Record<string, PlatformResult>;
     warnings: string[];
+    /**
+     * True when every piece in the topic was slot-gated this tick (nothing
+     * fired AND no errors). Distinguishes "pipeline working, waiting for
+     * the next piece's slot" from "pipeline broken / nothing to do" in the
+     * COO daily publish report.
+     */
+    deferred?: boolean;
+    /** Number of pieces deferred this tick because their slot hasn't arrived. */
+    piecesDeferred?: number;
 }
 
 async function publishPieceToPlatform(
@@ -122,6 +131,7 @@ export async function publishTopic(
         piecesProcessed: 0,
         platformResults: {},
         warnings: [],
+        piecesDeferred: 0,
     };
 
     let anySuccess = false;
@@ -135,6 +145,7 @@ export async function publishTopic(
         const slotReady = isSlotReady(piece.piece_type, topic.publish_at);
         if (!slotReady) {
             console.log(`[daily-publish] piece ${piece.id} (${piece.piece_type}) slot not yet — deferring`);
+            result.piecesDeferred = (result.piecesDeferred ?? 0) + 1;
             continue;
         }
 
@@ -161,6 +172,18 @@ export async function publishTopic(
 
         const existingPlatforms = (piece.published_platforms || {}) as PublishedPlatforms;
         const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts);
+
+        // Misconfiguration: piece type has zero target platforms (no account set
+        // on the persona for any platform that accepts this piece type). Without
+        // this warning the piece silently re-enters every hourly tick and never
+        // ships. Surface so it lands in the alert email like other config issues.
+        if (targetPlatforms.length === 0) {
+            const warning = `${piece.piece_type}: no target platforms configured for this piece type`;
+            result.warnings.push(warning);
+            console.warn(`[daily-publish] Piece ${piece.id} (${piece.piece_type}): no target platforms — check persona accounts`);
+            continue;
+        }
+
         const updatedPlatforms = { ...existingPlatforms } as Record<string, PlatformStatus>;
         // Track whether we actually called Blotato (success OR failure) for any
         // platform on this piece. Skipped/no-op cases (platform already pending
@@ -229,6 +252,12 @@ export async function publishTopic(
             if (!stillScheduled) {
                 // Don't downgrade publishing → scheduled. Just leave the row alone.
                 console.log(`[daily-publish] Topic ${topicId} ("${topic.title}") all pieces deferred this tick — no change`);
+            }
+            // Mark this run as "deferred" if every piece was slot-gated (vs.
+            // genuinely broken — missing media / config / no targets, which
+            // would have populated result.warnings).
+            if ((result.piecesDeferred ?? 0) > 0 && result.warnings.length === 0) {
+                result.deferred = true;
             }
             return result;
         }
@@ -397,9 +426,14 @@ export async function GET(request: Request) {
             }
         }
 
+        const topicsDeferred = results.filter((r) => r.deferred).length;
+        const topicsShipped = results.filter((r) => r.piecesProcessed > 0).length;
+
         return NextResponse.json({
             success: true,
             processed: results.length,
+            topicsShipped,
+            topicsDeferred,
             results,
             errors: errors.length > 0 ? errors : undefined,
             evergreen: evergreenFills.length > 0 ? evergreenFills : undefined,
