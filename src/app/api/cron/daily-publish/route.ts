@@ -24,8 +24,9 @@ const MAX_PLATFORM_RETRIES = 5;
 
 /** Aggregate per-platform success/failure counts across every piece's
  *  published_platforms map. Used to distinguish a true total-failure topic
- *  from a partial-success topic whose current-tick retries also failed. */
-function countPlatformOutcomes(pieces: ContentPiece[]): { published: number; failed: number } {
+ *  from a partial-success topic whose current-tick retries also failed.
+ *  Exported for unit testing. */
+export function countPlatformOutcomes(pieces: ContentPiece[]): { published: number; failed: number } {
     let published = 0;
     let failed = 0;
     for (const p of pieces) {
