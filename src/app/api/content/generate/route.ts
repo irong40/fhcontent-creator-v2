@@ -72,17 +72,9 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Insert content pieces
+        // Insert 6 content pieces
         const insertedPieces = [];
         for (const piece of parsed.data.pieces) {
-            // STOP-THE-BLEED (2026-05-28): skip carousel for personas with an image subject
-            // constraint (e.g. HUVA). The carousel image-audit gate has no fallback yet, so every
-            // slide fails ("0/8 slides generated") and clogs the queue. Re-enable once task B ships
-            // provider-retry-on-audit-failure. Shorts/longs unaffected.
-            if (piece.pieceType === 'carousel' && persona.image_subject_constraint) {
-                continue;
-            }
-
             const { data: inserted, error: insertError } = await supabase
                 .from('content_pieces')
                 .insert({
