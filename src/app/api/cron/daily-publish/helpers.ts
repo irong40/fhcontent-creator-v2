@@ -68,6 +68,9 @@ export function isTextOnlyPlatform(platform: Platform): boolean {
 }
 
 const TIKTOK_TITLE_MAX = 90;
+// Blotato/YouTube reject a post title longer than 100 characters
+// (400: "body.post.target.title must NOT have more than 100 characters").
+const YOUTUBE_TITLE_MAX = 100;
 // Blotato's IG validator rejects posts with MORE THAN 5 hashtags. We've seen
 // posts with exactly 5 still rejected (likely an off-by-one in their counter
 // or whitespace edge cases), so cap at 4 to stay clear of the boundary.
@@ -124,6 +127,12 @@ export function isSlotReady(
 }
 
 export function truncateTikTokTitle(title: string, max: number = TIKTOK_TITLE_MAX): string {
+    const t = (title ?? '').trim();
+    if (t.length <= max) return t;
+    return t.slice(0, max - 1).trimEnd() + '…';
+}
+
+export function truncateYouTubeTitle(title: string, max: number = YOUTUBE_TITLE_MAX): string {
     const t = (title ?? '').trim();
     if (t.length <= max) return t;
     return t.slice(0, max - 1).trimEnd() + '…';

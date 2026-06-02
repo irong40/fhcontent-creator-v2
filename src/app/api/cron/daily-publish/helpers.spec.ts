@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags, isSlotReady, pieceSlotTime, PIECE_SLOT_OFFSET_HOURS } from './helpers';
+import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, pieceSlotTime, PIECE_SLOT_OFFSET_HOURS } from './helpers';
 
 describe('getTargetPlatforms', () => {
     it('returns tiktok, instagram, youtube for long video', () => {
@@ -141,6 +141,31 @@ describe('truncateTikTokTitle', () => {
         expect(title.length).toBeGreaterThan(90);
         const out = truncateTikTokTitle(title);
         expect(out.length).toBeLessThanOrEqual(90);
+    });
+});
+
+describe('truncateYouTubeTitle', () => {
+    it('returns title unchanged when within the 100-char limit', () => {
+        expect(truncateYouTubeTitle('short title')).toBe('short title');
+    });
+
+    it('truncates titles longer than 100 chars with ellipsis', () => {
+        const long = 'a'.repeat(150);
+        const out = truncateYouTubeTitle(long);
+        expect(out.length).toBe(100);
+        expect(out.endsWith('…')).toBe(true);
+    });
+
+    it('keeps a 100-char title intact (boundary)', () => {
+        const exact = 'b'.repeat(100);
+        expect(truncateYouTubeTitle(exact)).toBe(exact);
+    });
+
+    it('caps a real-world long topic title to <=100 chars', () => {
+        const title = 'The Untold Story of Free Black Communities in Antebellum Virginia: Education, Resistance, and Survival 1830-1865';
+        expect(title.length).toBeGreaterThan(100);
+        const out = truncateYouTubeTitle(title);
+        expect(out.length).toBeLessThanOrEqual(100);
     });
 });
 

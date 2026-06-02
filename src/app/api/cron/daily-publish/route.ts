@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, capInstagramHashtags, isSlotReady } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady } from './helpers';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -88,7 +88,10 @@ async function publishPieceToPlatform(
     if (platform === 'instagram') {
         caption = capInstagramHashtags(caption);
     }
-    const platformTitle = platform === 'tiktok' ? truncateTikTokTitle(topicTitle) : topicTitle;
+    const platformTitle =
+        platform === 'tiktok' ? truncateTikTokTitle(topicTitle)
+        : platform === 'youtube' ? truncateYouTubeTitle(topicTitle)
+        : topicTitle;
 
     const target = buildTarget(platform, { title: platformTitle, isAiGenerated: true });
 
