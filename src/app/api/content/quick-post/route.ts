@@ -4,6 +4,7 @@ import { claude } from '@/lib/claude';
 import { blotato, buildTarget } from '@/lib/blotato';
 import type { Platform } from '@/lib/blotato';
 import { quickPostSchema } from '@/lib/schemas';
+import { openai } from '@/lib/openai';
 import { estimateClaudeCost, estimateDalleCost } from '@/lib/utils';
 
 export async function POST(request: NextRequest) {
@@ -54,28 +55,12 @@ Respond with ONLY the caption text, no JSON or markdown.`,
         let mediaUrls: string[] = [];
         if (imagePrompt) {
             try {
-                const openaiRes = await fetch('https://api.openai.com/v1/images/generations', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                    },
-                    body: JSON.stringify({
-                        model: 'dall-e-3',
-                        prompt: imagePrompt,
-                        n: 1,
-                        size: '1024x1024',
-                    }),
-                });
-
-                if (openaiRes.ok) {
-                    const imageData = await openaiRes.json();
-                    const imageUrl = imageData.data?.[0]?.url;
-                    if (imageUrl) {
-                        // Upload to Blotato for publishing
-                        const uploaded = await blotato.uploadMedia(imageUrl);
-                        mediaUrls = [uploaded.url];
-                    }
+                // gpt-image-1 (dall-e-3 was retired on this account) returns
+                // base64 bytes, not a URL — hand them to Blotato's base64 upload.
+                const { imageData } = await openai.generateImage(imagePrompt);
+                if (imageData) {
+                    const uploaded = await blotato.uploadMediaBase64(imageData, 'image/png');
+                    mediaUrls = [uploaded.url];
                 }
 
                 await supabase.from('cost_tracking').insert({

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
-import { gemini } from '@/lib/gemini';
 import { uploadImage } from '@/lib/storage';
-import { estimateClaudeCost, base64ToArrayBuffer } from '@/lib/utils';
+import { estimateClaudeCost } from '@/lib/utils';
 import { carouselGenerateSchema, carouselSlidesResponseSchema } from '@/lib/schemas';
 import { buildCarouselSlidesPrompt } from '@/lib/prompts';
+import { renderHuvaSlide } from '@/lib/huva-template';
 import type { CarouselSlide, HistoricalPoint, Topic } from '@/types/database';
+
+// satori + resvg-js (native addon) require the Node.js serverless runtime.
+export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
     try {
@@ -109,10 +112,13 @@ export async function POST(request: NextRequest) {
             tokens_output: claudeResult.outputTokens,
         });
 
-        // Step 2: Generate images for each slide via Gemini
+        // Step 2: Render each slide via the satori HUVA template (template-first).
+        // Carousel slides are text-over-background with NO people, so they are
+        // rendered deterministically on the node runtime ($0, never fails, no audit).
         const carouselSlides: CarouselSlide[] = [];
         const imageUrls: string[] = [];
         let imagesGenerated = 0;
+        const slideTotal = generatedSlides.length;
 
         for (const slide of generatedSlides) {
             const slideEntry: CarouselSlide = {
@@ -122,35 +128,28 @@ export async function POST(request: NextRequest) {
             };
 
             try {
-                const imageResult = await gemini.generateImage(slide.image_prompt, {
-                    aspectRatio: '1:1',
+                const imageBuffer = await renderHuvaSlide(slideEntry, slideTotal);
+                const storagePath = `${topic.id}/carousel_slide_${slide.slide_number}.png`;
+                const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
+
+                imageUrls.push(slideImageUrl);
+                imagesGenerated++;
+
+                // Track visual asset
+                await supabase.from('visual_assets').insert({
+                    content_piece_id: contentPieceId,
+                    asset_type: 'carousel_image',
+                    source_service: 'template',
+                    asset_url: slideImageUrl,
+                    metadata: {
+                        slide: slide.slide_number,
+                        title: slide.title,
+                        prompt: slide.image_prompt,
+                    },
+                    status: 'ready',
                 });
-
-                if (imageResult?.imageData) {
-                    // Upload base64 image to Supabase Storage
-                    const imageBuffer = base64ToArrayBuffer(imageResult.imageData);
-                    const storagePath = `${topic.id}/carousel_slide_${slide.slide_number}.png`;
-                    const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
-
-                    imageUrls.push(slideImageUrl);
-                    imagesGenerated++;
-
-                    // Track visual asset
-                    await supabase.from('visual_assets').insert({
-                        content_piece_id: contentPieceId,
-                        asset_type: 'carousel_image',
-                        source_service: 'gemini',
-                        asset_url: slideImageUrl,
-                        metadata: {
-                            slide: slide.slide_number,
-                            title: slide.title,
-                            prompt: slide.image_prompt,
-                        },
-                        status: 'ready',
-                    });
-                }
             } catch (e) {
-                console.warn(`Failed to generate image for slide ${slide.slide_number}:`, e);
+                console.warn(`Failed to render image for slide ${slide.slide_number}:`, e);
             }
 
             carouselSlides.push(slideEntry);

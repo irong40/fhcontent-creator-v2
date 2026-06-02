@@ -1,6 +1,6 @@
 /**
  * OpenAI API Client
- * Image generation (DALL-E) and embeddings
+ * Image generation (gpt-image-1) and embeddings
  */
 
 class OpenAIClient {
@@ -38,19 +38,37 @@ class OpenAIClient {
         }
     }
 
+    /**
+     * Generate an image with OpenAI's `gpt-image-1` model.
+     *
+     * NOTE: `dall-e-3` was retired from this account ("model does not exist",
+     * 400) — `gpt-image-1` is the current image model. Unlike DALL-E 3,
+     * gpt-image-1 ALWAYS returns base64 (`b64_json`) and never a `url`, so this
+     * returns the decoded image bytes directly. Its `size` and `quality`
+     * vocabularies also differ (square is `1024x1024`; quality is
+     * `low|medium|high|auto`, default `auto`).
+     */
     async generateImage(prompt: string, options?: {
         model?: string;
-        size?: '1024x1024' | '1024x1792' | '1792x1024';
-        quality?: 'standard' | 'hd';
-    }): Promise<{ url: string }> {
-        const response = await this.request<{ data: Array<{ url: string }> }>('/v1/images/generations', 'POST', {
-            model: options?.model || 'dall-e-3',
-            prompt,
-            n: 1,
-            size: options?.size || '1024x1024',
-            quality: options?.quality || 'standard',
-        });
-        return { url: response.data[0].url };
+        size?: '1024x1024' | '1024x1536' | '1536x1024' | 'auto';
+        quality?: 'low' | 'medium' | 'high' | 'auto';
+    }): Promise<{ imageData: string }> {
+        const response = await this.request<{ data: Array<{ b64_json?: string }> }>(
+            '/v1/images/generations',
+            'POST',
+            {
+                model: options?.model || 'gpt-image-1',
+                prompt,
+                n: 1,
+                size: options?.size || '1024x1024',
+                quality: options?.quality || 'auto',
+            },
+        );
+        const b64 = response.data?.[0]?.b64_json;
+        if (!b64) {
+            throw new Error('gpt-image-1 returned no b64_json image data');
+        }
+        return { imageData: b64 };
     }
 }
 

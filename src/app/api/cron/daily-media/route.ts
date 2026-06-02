@@ -17,6 +17,9 @@ import { renderHuvaSlide } from '@/lib/huva-template';
 import type { HeyGenScene } from '@/lib/heygen';
 import type { ContentPiece, TopicWithBrand, Brand, Persona, Topic, PieceType, CarouselSlide } from '@/types/database';
 
+// resvg-js is a native addon and satori/font I/O reads from disk — must run on
+// the Node.js serverless runtime, never edge.
+export const runtime = 'nodejs';
 export const maxDuration = 800;
 
 const HEYGEN_PIECE_TYPES: PieceType[] = ['long', 'lecture'];
@@ -397,47 +400,39 @@ export async function GET(request: Request) {
                 // against it before upload. Failed images are held (piece.status = failed) instead of publishing.
                 const subjectConstraint = persona.image_subject_constraint;
 
+                // Photoreal-image ladder deps (shared by thumbnails below).
+                // Imagen 4 primary → gpt-image-1 secondary → satori template fallback.
+                // Every photographic rung is audited against the persona subject
+                // constraint; the template fallback (no people) bypasses it legitimately.
+                const imageLadderDeps: SlideLadderDeps = {
+                    generatePrimary: async (prompt) => {
+                        const result = await gemini.generateImage(prompt, { aspectRatio: '1:1' });
+                        return base64ToArrayBuffer(result.imageData);
+                    },
+                    generateSecondary: async (prompt) => {
+                        const result = await openai.generateImage(prompt);
+                        return base64ToArrayBuffer(result.imageData);
+                    },
+                    audit: (image, constraint) => claude.auditImageSubjects(image, constraint),
+                    renderTemplate: (slide) => renderHuvaSlide(slide, 1),
+                    applyGuardrail: applySubjectGuardrail,
+                    log: (m) => console.log(m),
+                };
+
                 for (const piece of allPieces as ContentPiece[]) {
                     if (!piece.thumbnail_prompt || piece.thumbnail_url) continue;
 
                     try {
-                        let imageBuffer: ArrayBuffer;
-                        let sourceService = 'openai';
-
-                        const guardedThumbnailPrompt = applySubjectGuardrail(piece.thumbnail_prompt, subjectConstraint);
-                        let dalleErrMsg = '';
-                        try {
-                            const { url: dalleUrl } = await openai.generateImage(guardedThumbnailPrompt);
-                            const imageResponse = await fetch(dalleUrl);
-                            if (!imageResponse.ok) throw new Error(`download ${imageResponse.status}`);
-                            imageBuffer = await imageResponse.arrayBuffer();
-                        } catch (dalleErr) {
-                            dalleErrMsg = dalleErr instanceof Error ? dalleErr.message : String(dalleErr);
-                            console.warn(`[daily-media] DALL-E failed for ${piece.piece_type}: ${dalleErrMsg}`);
-                            try {
-                                const geminiResult = await gemini.generateImage(guardedThumbnailPrompt);
-                                imageBuffer = base64ToArrayBuffer(geminiResult.imageData);
-                                sourceService = 'gemini';
-                            } catch (geminiErr) {
-                                const geminiMsg = geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
-                                throw new Error(`DALL-E: ${dalleErrMsg.slice(0, 200)} | Gemini: ${geminiMsg.slice(0, 200)}`);
-                            }
-                        }
-
-                        // Subject-constraint audit (only when persona has one set)
-                        if (subjectConstraint) {
-                            const audit = await claude.auditImageSubjects(imageBuffer, subjectConstraint);
-                            if (!audit.pass) {
-                                await supabase.from('content_pieces').update({
-                                    status: 'failed',
-                                    error_message: `subject-audit failed (held for review): ${audit.reason ?? 'unspecified'}`,
-                                }).eq('id', piece.id);
-                                topicResult.errors.push(
-                                    `${piece.piece_type} thumbnail held for review: ${audit.reason ?? 'audit failed'}`,
-                                );
-                                continue;
-                            }
-                        }
+                        // Run the photoreal ladder. A thumbnail can never hard-fail:
+                        // if both generative rungs fail the audit / throw, the satori
+                        // template (a HUVA text card) is the guaranteed last resort.
+                        const result = await generateSlideWithLadder(
+                            { slide: 0, text: piece.thumbnail_prompt, imagePrompt: piece.thumbnail_prompt },
+                            subjectConstraint,
+                            imageLadderDeps,
+                        );
+                        const imageBuffer = result.imageBuffer;
+                        const sourceService = result.source === 'imagen' ? 'gemini' : result.source;
 
                         const storagePath = `${topic.id}/${piece.piece_type}_thumbnail.png`;
                         const thumbnailUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
@@ -452,14 +447,22 @@ export async function GET(request: Request) {
                             asset_type: 'thumbnail',
                             source_service: sourceService,
                             asset_url: thumbnailUrl,
-                            metadata: { prompt: piece.thumbnail_prompt },
+                            metadata: {
+                                prompt: piece.thumbnail_prompt,
+                                attempts: result.attempts.map(a => ({
+                                    provider: a.provider,
+                                    attempt: a.attempt,
+                                    outcome: a.outcome,
+                                    ...(a.detail ? { detail: a.detail } : {}),
+                                })),
+                            },
                             status: 'ready',
                         });
 
-                        if (sourceService === 'openai') {
+                        if (result.source === 'openai') {
                             await supabase.from('cost_tracking').insert({
                                 service: 'openai',
-                                operation: 'dalle_thumbnail',
+                                operation: 'gpt_image_thumbnail',
                                 topic_id: topic.id,
                                 content_piece_id: piece.id,
                                 cost_usd: estimateDalleCost(1),
@@ -474,71 +477,46 @@ export async function GET(request: Request) {
                     }
                 }
 
-                // ── Stage 3: Carousel slides (DALL-E imagery, no external design tool) ──
+                // ── Stage 3: Carousel slides (TEMPLATE-FIRST, satori-rendered) ──
                 // Canva path removed 2026-05-02 — Adam canceled Canva subscription.
-                // HUVA brand templates live in templates/huva/ (Playwright-rendered, $0).
+                // HUVA carousel slides are text-over-background with NO people, so they
+                // are rendered deterministically with satori (+ resvg) on the node
+                // serverless runtime: $0, never fails, no subject audit needed. This is
+                // the PRIMARY and only path for carousel slides — no generative models.
                 const carouselPiece = (allPieces as ContentPiece[]).find(p => p.piece_type === 'carousel');
                 if (carouselPiece && !carouselPiece.carousel_url) {
                     const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
                     if (slides && slides.length > 0) {
                         try {
                             const imageUrls: string[] = [];
-                            // Count how many winning slides came from each provider so
-                            // cost tracking reflects the actual API spend (template = $0).
-                            let dalleSlideCount = 0;
-                            const slideTotal = slides.filter(s => s.imagePrompt).length;
-                            console.log(`[daily-media] Generating ${slideTotal} carousel slides via DALL-E→Gemini→template ladder...`);
+                            const renderable = slides.filter(s => s.imagePrompt || s.text);
+                            const slideTotal = renderable.length;
+                            console.log(`[daily-media] Rendering ${slideTotal} carousel slides via satori template...`);
 
-                            // Injected I/O for the audit-driven retry ladder. Keeps the
-                            // orchestration logic (carousel-slide.ts) unit-testable.
-                            const ladderDeps: SlideLadderDeps = {
-                                generateDalle: async (prompt) => {
-                                    const { url } = await openai.generateImage(prompt);
-                                    const res = await fetch(url);
-                                    if (!res.ok) throw new Error(`download ${res.status}`);
-                                    return res.arrayBuffer();
-                                },
-                                generateGemini: async (prompt) => {
-                                    const result = await gemini.generateImage(prompt);
-                                    return base64ToArrayBuffer(result.imageData);
-                                },
-                                audit: (image, constraint) => claude.auditImageSubjects(image, constraint),
-                                renderTemplate: (slide) => renderHuvaSlide(slide, slideTotal),
-                                applyGuardrail: applySubjectGuardrail,
-                                log: (m) => console.log(m),
-                            };
-
-                            for (const slide of slides) {
-                                if (!slide.imagePrompt) continue;
+                            for (const slide of renderable) {
                                 try {
-                                    const result = await generateSlideWithLadder(slide, subjectConstraint, ladderDeps);
+                                    const imageBuffer = await renderHuvaSlide(slide, slideTotal);
 
                                     const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
-                                    const slideUrl = await uploadImage(storagePath, result.imageBuffer, 'image/png');
+                                    const slideUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
                                     imageUrls.push(slideUrl);
-                                    if (result.source === 'dalle') dalleSlideCount++;
 
                                     await supabase.from('visual_assets').insert({
                                         content_piece_id: carouselPiece.id,
                                         asset_type: 'carousel_image',
-                                        source_service: result.source === 'dalle' ? 'openai' : result.source,
+                                        source_service: 'template',
                                         asset_url: slideUrl,
                                         metadata: {
                                             slide: slide.slide,
                                             prompt: slide.imagePrompt,
-                                            attempts: result.attempts.map(a => ({
-                                                provider: a.provider,
-                                                attempt: a.attempt,
-                                                outcome: a.outcome,
-                                                ...(a.detail ? { detail: a.detail } : {}),
-                                            })),
+                                            attempts: [{ provider: 'template', attempt: 1, outcome: 'used' }],
                                         },
                                         status: 'ready',
                                     });
 
-                                    console.log(`[daily-media] Slide ${slide.slide}: done via ${result.source}`);
+                                    console.log(`[daily-media] Slide ${slide.slide}: done via template`);
                                 } catch (e) {
-                                    // Only reachable if even the template renderer threw.
+                                    // Only reachable if the satori renderer itself throws.
                                     console.error(`[daily-media] Carousel slide ${slide.slide} failed entirely:`, e);
                                     topicResult.errors.push(
                                         `carousel slide ${slide.slide}: ${e instanceof Error ? e.message : 'unknown'}`,
@@ -555,18 +533,6 @@ export async function GET(request: Request) {
                                     .update({ carousel_url: carouselUrl })
                                     .eq('id', carouselPiece.id);
 
-                                // Only DALL-E slides incur OpenAI image cost; Gemini and
-                                // template fallbacks are tracked elsewhere / are $0.
-                                if (dalleSlideCount > 0) {
-                                    await supabase.from('cost_tracking').insert({
-                                        service: 'openai',
-                                        operation: 'dalle_carousel_slides',
-                                        topic_id: topic.id,
-                                        content_piece_id: carouselPiece.id,
-                                        cost_usd: estimateDalleCost(dalleSlideCount),
-                                    });
-                                }
-
                                 topicResult.carouselCreated = true;
                             } else if (slides.length > 0) {
                                 // All slides failed (DALL-E error or audit rejection).
@@ -575,7 +541,7 @@ export async function GET(request: Request) {
                                 // still resolve the topic from the other pieces.
                                 await supabase.from('content_pieces').update({
                                     status: 'failed',
-                                    error_message: `Carousel: 0/${slides.length} slides generated (all providers + template fallback failed)`,
+                                    error_message: `Carousel: 0/${slides.length} slides rendered (satori template renderer failed)`,
                                 }).eq('id', carouselPiece.id);
                                 topicResult.errors.push(
                                     `carousel: 0/${slides.length} slides — marked failed`,

@@ -99,24 +99,36 @@ class GeminiClient {
         return { text };
     }
 
-    /** Generate an image using Gemini's Imagen model (fallback for DALL-E).
-     *  Throws on failure with the actual API body or finishReason so the
-     *  caller's alert email shows the real reason (auth / content-policy /
-     *  quota) instead of a generic "failed" message. */
+    /** Generate a photographic image using Google Imagen 4 via the REST
+     *  `:predict` endpoint (NOT the `:generateContent` shape — that is for the
+     *  conversational Gemini models and returns no image bytes for this use).
+     *
+     *  Model id verified against the live ListModels API on 2026-06-02:
+     *  `imagen-4.0-generate-001` (siblings: -ultra-generate-001, -fast-generate-001).
+     *
+     *  Request shape: { instances: [{ prompt }], parameters: { sampleCount, aspectRatio } }
+     *  Response shape: { predictions: [{ bytesBase64Encoded, mimeType }] }
+     *
+     *  Throws on failure with the actual API body so the caller's alert shows the
+     *  real reason (auth / content-policy / quota / paid-plan-required) instead of
+     *  a generic "failed" message. NOTE: Imagen `:predict` requires a *paid* Google
+     *  AI plan; on a free-tier key it 400s with "only available on paid plans",
+     *  in which case the caller falls through to the gpt-image-1 / template rungs. */
     async generateImage(prompt: string, options?: {
         aspectRatio?: string;
+        model?: string;
     }): Promise<{ imageData: string }> {
-        const model = 'gemini-2.5-flash-image';
+        const model = options?.model || 'imagen-4.0-generate-001';
         const response = await fetch(
-            `${this.baseUrl}/v1beta/models/${model}:generateContent?key=${this.apiKey}`,
+            `${this.baseUrl}/v1beta/models/${model}:predict?key=${this.apiKey}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
-                    generationConfig: {
-                        responseModalities: ['IMAGE', 'TEXT'],
-                        ...(options?.aspectRatio && { aspectRatio: options.aspectRatio }),
+                    instances: [{ prompt }],
+                    parameters: {
+                        sampleCount: 1,
+                        aspectRatio: options?.aspectRatio || '1:1',
                     },
                 }),
             }
@@ -124,21 +136,20 @@ class GeminiClient {
 
         if (!response.ok) {
             const errBody = await response.text().catch(() => '');
-            throw new Error(`Gemini image API ${response.status}: ${errBody.slice(0, 400)}`);
+            throw new Error(`Imagen API ${response.status}: ${errBody.slice(0, 400)}`);
         }
 
         const data = await response.json();
-        const finishReason = data.candidates?.[0]?.finishReason;
-        const parts = data.candidates?.[0]?.content?.parts;
-        const imagePart = parts?.find((p: Record<string, unknown>) => p.inlineData);
-        if (!imagePart?.inlineData?.data) {
-            const safetyRatings = data.candidates?.[0]?.safetyRatings;
+        const prediction = data.predictions?.[0];
+        const imageData = prediction?.bytesBase64Encoded;
+        if (!imageData) {
+            const filtered = data.predictions?.[0]?.raiFilteredReason;
             throw new Error(
-                `Gemini returned no image (finishReason=${finishReason ?? 'unknown'}, safety=${JSON.stringify(safetyRatings ?? [])})`
+                `Imagen returned no image (raiFilteredReason=${filtered ?? 'unknown'}, body=${JSON.stringify(data).slice(0, 200)})`
             );
         }
 
-        return { imageData: imagePart.inlineData.data as string };
+        return { imageData: imageData as string };
     }
 
     /** Generate music via Google Lyria RealTime (lyria-realtime-exp) */
