@@ -198,6 +198,7 @@ ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in captions.
 - NEVER alter the quote. It is reproduced verbatim in the video; your captions surround it.
+- When quoting words inside any JSON string value, use typographic curly quotes (“ ”) — NEVER straight double quotes, which break the JSON.
 
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
