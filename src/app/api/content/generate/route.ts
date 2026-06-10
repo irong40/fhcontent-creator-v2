@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
-import { contentGenerateSchema, contentResponseSchema } from '@/lib/schemas';
+import { contentGenerateSchema, contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import type { PieceType, TopicWithPersona } from '@/types/database';
@@ -14,7 +14,19 @@ const PIECE_ORDER: Record<PieceType, number> = {
     short_4: 5,
     carousel: 6,
     lecture: 1,
+    quote_video: 1,
 };
+
+/** Normalized piece shape shared by the standard (6-piece) and quote_video (1-piece) responses. */
+interface GeneratedPiece {
+    pieceType: PieceType;
+    script: string;
+    captionLong: string;
+    captionShort: string;
+    thumbnailPrompt?: string;
+    carouselSlides?: unknown;
+    musicTrack?: string;
+}
 
 export async function POST(request: NextRequest) {
     try {
@@ -61,7 +73,11 @@ export async function POST(request: NextRequest) {
                 { status: 502 },
             );
         }
-        const parsed = contentResponseSchema.safeParse(rawParsed);
+        // quote_video personas return 1 piece; standard personas return 6.
+        const responseSchema = persona.content_format === 'quote_video'
+            ? quoteContentResponseSchema
+            : contentResponseSchema;
+        const parsed = responseSchema.safeParse(rawParsed);
 
         if (!parsed.success) {
             // Revert topic status on parse failure
@@ -72,9 +88,9 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Insert 6 content pieces
+        // Insert content pieces (6 standard, 1 for quote_video personas)
         const insertedPieces = [];
-        for (const piece of parsed.data.pieces) {
+        for (const piece of parsed.data.pieces as GeneratedPiece[]) {
             const { data: inserted, error: insertError } = await supabase
                 .from('content_pieces')
                 .insert({

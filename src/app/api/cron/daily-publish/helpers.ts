@@ -22,6 +22,10 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
             return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter'];
         case 'carousel':
             return ['instagram'];
+        case 'quote_video':
+            // Looping quote card (<5s video, 10s+ read time). Video platforms
+            // only — the loop-replay view mechanic doesn't exist on text feeds.
+            return ['tiktok', 'instagram', 'youtube'];
         default:
             return [];
     }
@@ -100,6 +104,9 @@ export const PIECE_SLOT_OFFSET_HOURS: Record<PieceType, number> = {
     short_4: 8,
     long: 10,
     lecture: 10,
+    // Quote personas produce ONE piece/day; +4h = 1 PM ET, clear of the
+    // standard personas' 9 AM and 7 PM peaks on shared brand channels.
+    quote_video: 4,
 };
 
 /**

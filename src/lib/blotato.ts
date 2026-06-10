@@ -195,6 +195,11 @@ export interface BlotatoUser {
 export function buildTarget(platform: Platform, options: {
     title?: string;
     isAiGenerated?: boolean;
+    /**
+     * TikTok only. Default true. MUST be false for pieces with a baked-in
+     * music bed (quote_video) — otherwise TikTok lays its own track over ours.
+     */
+    autoAddMusic?: boolean;
 } = {}): BlotatoTarget {
     switch (platform) {
         case 'tiktok':
@@ -208,7 +213,7 @@ export function buildTarget(platform: Platform, options: {
                 isYourBrand: true,
                 isAiGenerated: options.isAiGenerated ?? true,
                 title: options.title,
-                autoAddMusic: true,
+                autoAddMusic: options.autoAddMusic ?? true,
             };
         case 'instagram':
             return {

@@ -14,6 +14,7 @@ import { validateCronSecret } from '../middleware';
 import { interpolateTemplate } from '@/lib/utils';
 import { generateSlideWithLadder, type SlideLadderDeps } from '@/lib/carousel-slide';
 import { renderHuvaSlide } from '@/lib/huva-template';
+import { renderQuoteCard } from '@/lib/quote-template';
 import type { HeyGenScene } from '@/lib/heygen';
 import type { ContentPiece, TopicWithBrand, Brand, Persona, Topic, PieceType, CarouselSlide } from '@/types/database';
 
@@ -204,6 +205,57 @@ export async function GET(request: Request) {
                     podcastGenerated: false,
                     errors: [] as string[],
                 };
+
+                // ── Stage 0: quote_video personas — render the quote card, then stop ──
+                // The card PNG is stored on carousel_url; the local renderer on the
+                // music machine (render_quote_videos.py) turns it into a <5s looping
+                // mp4 with a bar-aligned ACE-Step music loop and writes video_url,
+                // which daily-publish ships. No HeyGen/Blotato/thumbnail/Lyria spend
+                // on this path — the card is satori-rendered ($0, zero human figures).
+                if (persona.content_format === 'quote_video') {
+                    const quotePiece = (allPieces as ContentPiece[]).find(
+                        p => p.piece_type === 'quote_video',
+                    );
+                    if (quotePiece && !quotePiece.carousel_url) {
+                        try {
+                            const points = (topic.historical_points ?? []) as { claim: string; source: string; year: string }[];
+                            const q = points[0];
+                            if (!q?.claim) throw new Error('topic has no quote in historical_points[0]');
+
+                            // Topic titles are "{Figure Name}: {essence}" — the figure is the attribution.
+                            const attribution = topic.title.includes(':')
+                                ? topic.title.split(':')[0].trim()
+                                : q.source;
+
+                            const png = await renderQuoteCard({
+                                quote: q.claim,
+                                attribution,
+                                source: q.source,
+                                year: q.year,
+                                brandMark: persona.brand,
+                            });
+                            const cardUrl = await uploadImage(`${topic.id}/quote_card.png`, png, 'image/png');
+
+                            await supabase
+                                .from('content_pieces')
+                                .update({ carousel_url: cardUrl, status: 'processing' })
+                                .eq('id', quotePiece.id);
+
+                            topicResult.carouselCreated = true;
+                        } catch (e) {
+                            const msg = e instanceof Error ? e.message : 'unknown';
+                            topicResult.errors.push(`quote_card: ${msg}`);
+                            await notifyError({
+                                source: 'daily-media',
+                                message: `quote card render failed for "${topic.title}": ${msg}`,
+                                topicId: topic.id,
+                                personaName: persona.name,
+                            });
+                        }
+                    }
+                    results.push(topicResult);
+                    continue;
+                }
 
                 // ── Stage 1a: Long-form video (HeyGen avatar path) ──
                 const heygenPieces = (allPieces as ContentPiece[]).filter(

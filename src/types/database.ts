@@ -34,6 +34,7 @@ export interface Database {
                     guardrail_notebook_ids: string[] | null;
                     facebook_page_ids: string[] | null;
                     default_music_url: string | null;
+                    content_format: ContentFormat;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -62,6 +63,7 @@ export interface Database {
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
                     default_music_url?: string | null;
+                    content_format?: ContentFormat;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -90,6 +92,7 @@ export interface Database {
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
                     default_music_url?: string | null;
+                    content_format?: ContentFormat;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -969,7 +972,10 @@ export type TopicStatus =
     | 'published'
     | 'failed';
 
-export type PieceType = 'long' | 'short_1' | 'short_2' | 'short_3' | 'short_4' | 'carousel' | 'lecture';
+export type PieceType = 'long' | 'short_1' | 'short_2' | 'short_3' | 'short_4' | 'carousel' | 'lecture' | 'quote_video';
+
+/** Persona production format — see migration 016. */
+export type ContentFormat = 'standard' | 'quote_video';
 
 export type PieceStatus =
     | 'pending'

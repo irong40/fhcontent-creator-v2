@@ -57,6 +57,7 @@ export async function POST(
             short_4: 'SHORT VIDEO 4 (30 seconds, 60-100 words, deep dive on Point 4)',
             carousel: 'CAROUSEL (8-10 slides with imagePrompt per slide)',
             lecture: 'LECTURE VIDEO (20-30 minutes, multi-scene educational content)',
+            quote_video: 'QUOTE VIDEO (verbatim quote + attribution on-screen text, captions only)',
         };
 
         const isCarousel = pieceType === 'carousel';

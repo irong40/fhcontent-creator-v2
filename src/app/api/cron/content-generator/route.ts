@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
-import { contentResponseSchema } from '@/lib/schemas';
+import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
@@ -23,6 +23,7 @@ const PIECE_ORDER: Record<PieceType, number> = {
     short_4: 5,
     carousel: 6,
     lecture: 7,
+    quote_video: 1,
 };
 
 export async function GET(request: Request) {
@@ -121,7 +122,11 @@ export async function GET(request: Request) {
 
                 const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();
                 const parsed = JSON.parse(jsonText);
-                const contentResult = contentResponseSchema.safeParse(parsed);
+                // quote_video personas return 1 piece; standard personas return 6.
+                const responseSchema = persona.content_format === 'quote_video'
+                    ? quoteContentResponseSchema
+                    : contentResponseSchema;
+                const contentResult = responseSchema.safeParse(parsed);
                 if (!contentResult.success) {
                     await supabase.from('topics').update({ status: 'draft' }).eq('id', topic.id);
                     topicResult.error = 'Invalid Claude response shape';
@@ -130,7 +135,15 @@ export async function GET(request: Request) {
                 }
 
                 let piecesInserted = 0;
-                for (const piece of contentResult.data.pieces) {
+                for (const piece of contentResult.data.pieces as Array<{
+                    pieceType: PieceType;
+                    script: string;
+                    captionLong: string;
+                    captionShort: string;
+                    thumbnailPrompt?: string;
+                    carouselSlides?: unknown;
+                    musicTrack?: string;
+                }>) {
                     const pieceType = piece.pieceType as PieceType;
                     const { error: pieceErr } = await supabase.from('content_pieces').insert({
                         topic_id: topic.id,

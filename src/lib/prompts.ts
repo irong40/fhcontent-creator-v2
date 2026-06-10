@@ -57,11 +57,78 @@ function buildBrandVoiceBlock(persona: Persona): string {
     return parts.join('\n\n');
 }
 
+/**
+ * Topic prompt for quote_video personas (see migration 016). Emits the SAME
+ * JSON shape as the standard topic prompt (title, hook, 4 historicalPoints)
+ * so daily-topic needs no branching: point 1 IS the quote (claim = verbatim
+ * quote text), points 2-4 are context facts used for caption writing.
+ *
+ * Loop-strategy constraint: the clip runs <5s but the quote must take 10s+
+ * to read, so the quote is required to be 35-60 words.
+ */
+function buildQuoteTopicPrompt(
+    persona: Persona,
+    recentTopics: string[],
+    count: number,
+): { system: string; user: string } {
+    const voiceBlock = buildBrandVoiceBlock(persona);
+
+    const system = `You are curating historical quotes for ${persona.name}, ${persona.brand}.
+Your voice: ${persona.voice_style}
+${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}
+You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
+
+    const user = `EXPERTISE AREAS:
+${persona.expertise_areas.join('\n')}
+
+TOPICS TO AVOID (already published):
+${recentTopics.length > 0 ? recentTopics.join('\n') : 'None yet'}
+
+Generate exactly ${count} unique quote topic(s). Each topic is ONE real, verbatim, documented quote from ONE historical figure within the expertise areas.
+
+QUOTE REQUIREMENTS (all mandatory):
+- The quote must be REAL and verifiable — an actual documented statement from a speech, letter, autobiography, interview, or published writing. NEVER invent, paraphrase, or "improve" a quote. Misattributed viral quotes are an instant credibility kill for this brand — when in doubt about authenticity, pick a different quote.
+- The quote must be 35-60 words long. This is a hard requirement: shorter quotes are rejected by validation. If a figure's famous quote is shorter, choose a longer documented passage instead.
+- Vary the figures across the batch — no figure twice in one batch.
+
+For each topic, provide:
+1. title: "{Figure Name}: {2-4 word essence}" (e.g., "Frederick Douglass: Power Concedes Nothing")
+2. hook: One sentence of historical context for the quote (when/where/why it was said) — used in the caption.
+3. historicalPoints: Exactly 4 entries:
+   - Point 1: claim = the VERBATIM quote text (35-60 words, no surrounding quote marks), source = the specific speech/letter/book it comes from, year = year it was said/written
+   - Points 2-4: claim = a verifiable supporting fact about the figure or the moment of the quote, with source and year
+4. thumbnailPrompt: leave as an empty string (quote cards are template-rendered, no AI imagery)
+
+OUTPUT FORMAT (JSON only):
+{
+  "topics": [
+    {
+      "title": "...",
+      "hook": "...",
+      "historicalPoints": [
+        {"point": 1, "claim": "...", "source": "...", "year": "..."},
+        {"point": 2, "claim": "...", "source": "...", "year": "..."},
+        {"point": 3, "claim": "...", "source": "...", "year": "..."},
+        {"point": 4, "claim": "...", "source": "...", "year": "..."}
+      ],
+      "thumbnailPrompt": ""
+    }
+  ]
+}`;
+
+    return { system, user };
+}
+
 export function buildTopicPrompt(
     persona: Persona,
     recentTopics: string[],
     count: number,
 ): { system: string; user: string } {
+    if (persona.content_format === 'quote_video') {
+        return buildQuoteTopicPrompt(persona, recentTopics, count);
+    }
+
     const voiceBlock = buildBrandVoiceBlock(persona);
 
     const system = `You are generating content topics for ${persona.name}, ${persona.brand}.
@@ -111,10 +178,64 @@ REQUIREMENTS:
     return { system, user };
 }
 
+/**
+ * Content prompt for quote_video personas: ONE piece (the looping quote card
+ * video) instead of the standard 6-piece set. The quote card itself is
+ * template-rendered from the topic's point 1 — this call only writes captions.
+ */
+function buildQuoteContentPrompt(
+    persona: Persona,
+    topic: Topic,
+): { system: string; user: string } {
+    const points = topic.historical_points as HistoricalPoint[];
+    const quote = points[0];
+    const contextFacts = points.slice(1);
+
+    const system = `You are a content writer creating captions for ${persona.brand}.
+Voice style: ${persona.voice_style}
+${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+
+IMPORTANT RULES:
+- NEVER mention the creator's name ("${persona.name}") anywhere in captions.
+- NEVER alter the quote. It is reproduced verbatim in the video; your captions surround it.
+
+You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
+
+    const user = `TOPIC: ${topic.title}
+CONTEXT: ${topic.hook}
+
+THE QUOTE (appears on screen in the video):
+"${quote.claim}"
+— ${quote.source}, ${quote.year}
+
+SUPPORTING FACTS (for caption depth):
+${contextFacts.map(p => `- ${p.claim} (${p.source}, ${p.year})`).join('\n')}
+
+Generate content for 1 piece — a short looping quote video:
+
+FOR THE PIECE, PROVIDE:
+- script: The exact on-screen text — the verbatim quote, then a line break, then the attribution line (figure name, source, year). Do not add anything else.
+- captionLong: 2200 character max caption. Open with the historical context, weave in 1-2 supporting facts, close with a follow CTA for the ${persona.brand} brand. End with EXACTLY 3 high-relevance hashtags — no more, no fewer (Instagram rejects posts with more than 5 hashtags, so 3 is the hard ceiling).
+- captionShort: 280 character max caption for Twitter/X. End with EXACTLY 2 hashtags.
+
+OUTPUT FORMAT (JSON only):
+{
+  "pieces": [
+    {"pieceType": "quote_video", "script": "...", "captionLong": "...", "captionShort": "..."}
+  ]
+}`;
+
+    return { system, user };
+}
+
 export function buildContentPrompt(
     persona: Persona,
     topic: Topic,
 ): { system: string; user: string } {
+    if (persona.content_format === 'quote_video') {
+        return buildQuoteContentPrompt(persona, topic);
+    }
+
     const points = topic.historical_points as HistoricalPoint[];
 
     const system = `You are a content writer creating scripts for ${persona.brand}.

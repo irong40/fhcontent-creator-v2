@@ -61,6 +61,34 @@ export const contentResponseSchema = z.object({
     pieces: z.array(generatedPieceSchema).length(6),
 });
 
+// --- quote_video persona response (single looping quote-card piece) ---
+
+/** Words in a string, whitespace-delimited. Exported for loop-length validation. */
+export function countWords(text: string): number {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Loop strategy: the clip runs <5s but must take 10s+ to read, so the
+ * on-screen script (quote + attribution) must be at least 30 words.
+ * Average silent reading speed ≈ 3-4 words/sec → 30 words ≈ 10s minimum.
+ */
+export const QUOTE_MIN_WORDS = 30;
+
+const generatedQuotePieceSchema = z.object({
+    pieceType: z.literal('quote_video'),
+    script: z.string().refine(
+        s => countWords(s) >= QUOTE_MIN_WORDS,
+        { message: `quote_video script must be at least ${QUOTE_MIN_WORDS} words so the quote outlasts the loop` },
+    ),
+    captionLong: z.string(),
+    captionShort: z.string(),
+});
+
+export const quoteContentResponseSchema = z.object({
+    pieces: z.array(generatedQuotePieceSchema).length(1),
+});
+
 export const regeneratePieceResponseSchema = generatedPieceSchema;
 export type RegeneratePieceResponse = z.infer<typeof regeneratePieceResponseSchema>;
 

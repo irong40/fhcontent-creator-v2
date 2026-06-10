@@ -93,7 +93,13 @@ async function publishPieceToPlatform(
         : platform === 'youtube' ? truncateYouTubeTitle(topicTitle)
         : topicTitle;
 
-    const target = buildTarget(platform, { title: platformTitle, isAiGenerated: true });
+    const target = buildTarget(platform, {
+        title: platformTitle,
+        isAiGenerated: true,
+        // quote_video carries its own ACE-Step music loop — TikTok must not
+        // auto-add a library track on top of it.
+        autoAddMusic: piece.piece_type !== 'quote_video',
+    });
 
     const response = await blotato.publishPost({
         post: {
