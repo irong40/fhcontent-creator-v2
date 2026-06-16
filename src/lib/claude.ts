@@ -48,6 +48,48 @@ class ClaudeClient {
     }
 
     /**
+     * Generates a structured JSON object via tool use. The model is forced to
+     * call a single tool whose input_schema describes the desired shape, and the
+     * SDK returns that input as an already-parsed object. This eliminates the
+     * entire class of JSON.parse failures that plain text generation suffers
+     * when content contains unescaped quotes (e.g. quote-card personas) — the
+     * model can never emit a raw `"` that breaks parsing because the tool input
+     * is transported as structured data, not a hand-formatted JSON string.
+     */
+    async generateStructured<T = unknown>(
+        systemPrompt: string,
+        userPrompt: string,
+        tool: { name: string; description: string; inputSchema: Record<string, unknown> },
+        options?: { model?: string; maxTokens?: number },
+    ): Promise<{ data: T; inputTokens: number; outputTokens: number }> {
+        const response = await this.client.messages.create({
+            model: options?.model || 'claude-sonnet-4-5-20250929',
+            max_tokens: options?.maxTokens || 4096,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+            tools: [{
+                name: tool.name,
+                description: tool.description,
+                input_schema: tool.inputSchema as Anthropic.Tool.InputSchema,
+            }],
+            tool_choice: { type: 'tool', name: tool.name },
+        });
+
+        const toolUse = response.content.find(
+            (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+        if (!toolUse) {
+            throw new Error('Claude returned no tool_use block for forced tool call');
+        }
+
+        return {
+            data: toolUse.input as T,
+            inputTokens: response.usage.input_tokens,
+            outputTokens: response.usage.output_tokens,
+        };
+    }
+
+    /**
      * Audits a generated image against a persona's subject constraint.
      * Returns `{ pass: true }` if the image satisfies the constraint, or
      * `{ pass: false, reason }` if it does not. Uses Haiku for cost efficiency
