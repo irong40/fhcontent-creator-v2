@@ -7,13 +7,32 @@ import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
-import type { Database, PieceType, TopicWithPersona } from '@/types/database';
+import type { Database, PieceType, TopicWithPersona, HistoricalPoint } from '@/types/database';
 
 // Drains topic drafts created by daily-topic. Generates content_pieces and
 // promotes draft → scheduled. Caps work per run so we don't reproduce the
 // daily-topic 800s timeout that prompted this split.
 export const maxDuration = 300;
 const MAX_TOPICS_PER_RUN = 2;
+// After this many failed generation attempts a topic is held for manual review
+// (requires_review=true) instead of being re-selected every run. Prevents a
+// single malformed topic from looping forever and flooding the alert channel.
+const MAX_RETRIES = 3;
+
+// Flat scalar tool schema for the quote path: the model returns ONLY the two
+// captions. There is no array/object field for the model to (mis)serialize as a
+// JSON string, which is what kept reintroducing the parse failures. The on-
+// screen script is built deterministically in code (see GET). Authoritative
+// validation still runs through the zod response schema via safeParse below.
+const QUOTE_CAPTIONS_TOOL_SCHEMA: Record<string, unknown> = {
+    type: 'object',
+    properties: {
+        captionLong: { type: 'string' },
+        captionShort: { type: 'string' },
+    },
+    required: ['captionLong', 'captionShort'],
+    additionalProperties: false,
+};
 
 const PIECE_ORDER: Record<PieceType, number> = {
     long: 1,
@@ -105,11 +124,63 @@ export async function GET(request: Request) {
 
             try {
                 const { system, user } = buildContentPrompt(persona, topic);
-                const { text, inputTokens, outputTokens } = await claude.generateContent(
-                    system,
-                    user,
-                    { maxTokens: 8192 },
-                );
+                // quote_video personas return 1 piece; standard personas return 6.
+                const isQuote = persona.content_format === 'quote_video';
+                const responseSchema = isQuote
+                    ? quoteContentResponseSchema
+                    : contentResponseSchema;
+
+                let parsed: unknown;
+                let inputTokens: number;
+                let outputTokens: number;
+
+                if (isQuote) {
+                    // Robust quote path. The on-screen script is fully
+                    // deterministic — the verbatim quote (topic point 1) plus an
+                    // attribution line — so we assemble it in code. The quote
+                    // text, which is what kept breaking model-authored JSON, never
+                    // round-trips through the model. The model returns ONLY the two
+                    // captions, as flat scalar tool fields, so there is no array to
+                    // be serialized into a broken JSON string.
+                    const points = topic.historical_points as HistoricalPoint[];
+                    const quote = points[0];
+                    const figureName = topic.title.split(':')[0].trim();
+                    const script = `${quote.claim}\n\n— ${figureName}, ${quote.source}, ${quote.year}`;
+
+                    const captionsSystem = `${system}
+
+OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT write it. Call the \`emit_quote_captions\` tool and provide ONLY captionLong and captionShort as plain text values (the tool handles all encoding; do not add quotes, backslashes, or escaping).`;
+
+                    const { data, inputTokens: it, outputTokens: ot } =
+                        await claude.generateStructured<{ captionLong: string; captionShort: string }>(
+                            captionsSystem,
+                            user,
+                            {
+                                name: 'emit_quote_captions',
+                                description: 'Return the long and short captions for this quote post.',
+                                inputSchema: QUOTE_CAPTIONS_TOOL_SCHEMA,
+                            },
+                            { maxTokens: 4096 },
+                        );
+                    inputTokens = it;
+                    outputTokens = ot;
+                    parsed = {
+                        pieces: [{
+                            pieceType: 'quote_video',
+                            script,
+                            captionLong: data.captionLong,
+                            captionShort: data.captionShort,
+                        }],
+                    };
+                } else {
+                    // Standard 6-piece path: unchanged text-mode generation.
+                    const { text, inputTokens: it, outputTokens: ot } =
+                        await claude.generateContent(system, user, { maxTokens: 8192 });
+                    inputTokens = it;
+                    outputTokens = ot;
+                    const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();
+                    parsed = JSON.parse(jsonText);
+                }
 
                 await supabase.from('cost_tracking').insert({
                     service: 'claude',
@@ -120,18 +191,14 @@ export async function GET(request: Request) {
                     tokens_output: outputTokens,
                 });
 
-                const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();
-                const parsed = JSON.parse(jsonText);
-                // quote_video personas return 1 piece; standard personas return 6.
-                const responseSchema = persona.content_format === 'quote_video'
-                    ? quoteContentResponseSchema
-                    : contentResponseSchema;
                 const contentResult = responseSchema.safeParse(parsed);
                 if (!contentResult.success) {
-                    await supabase.from('topics').update({ status: 'draft' }).eq('id', topic.id);
-                    topicResult.error = 'Invalid Claude response shape';
-                    results.push(topicResult);
-                    continue;
+                    // Shape/validation failure (e.g. quote under the word floor).
+                    // Throw so the unified catch applies the retry circuit-breaker
+                    // rather than silently resetting to draft and looping forever.
+                    throw new Error(
+                        `Invalid content shape: ${contentResult.error.issues.map(i => i.message).join('; ')}`,
+                    );
                 }
 
                 let piecesInserted = 0;
@@ -163,32 +230,43 @@ export async function GET(request: Request) {
                 }
 
                 if (piecesInserted === 0) {
-                    await supabase.from('topics').update({
-                        status: 'draft',
-                        error_message: 'Content-generator: zero pieces inserted',
-                    }).eq('id', topic.id);
-                    topicResult.error = 'Zero pieces inserted';
-                } else {
-                    await supabase.from('topics').update({
-                        status: 'scheduled',
-                        content_ready_at: new Date().toISOString(),
-                        coo_auto_approved_at: new Date().toISOString(),
-                    }).eq('id', topic.id);
-                    topicResult.piecesInserted = piecesInserted;
+                    throw new Error('zero pieces inserted');
                 }
+
+                await supabase.from('topics').update({
+                    status: 'scheduled',
+                    content_ready_at: new Date().toISOString(),
+                    coo_auto_approved_at: new Date().toISOString(),
+                }).eq('id', topic.id);
+                topicResult.piecesInserted = piecesInserted;
             } catch (e) {
                 const errMsg = e instanceof Error ? e.message : 'unknown';
+                // Circuit-breaker: count the attempt; once retries are exhausted
+                // hold the topic for manual review (requires_review excludes it
+                // from the draft-selection query) instead of resetting to
+                // 'draft' to be re-picked next run. Only the final, exhausting
+                // failure pages — earlier attempts just increment the counter —
+                // so one bad topic can no longer flood the alert channel.
+                const nextRetry = (topic.retry_count ?? 0) + 1;
+                const exhausted = nextRetry >= MAX_RETRIES;
                 await supabase.from('topics').update({
                     status: 'draft',
+                    retry_count: nextRetry,
+                    requires_review: exhausted ? true : (topic.requires_review ?? false),
+                    review_reason: exhausted
+                        ? `Content-generator failed ${nextRetry}× — needs manual review`
+                        : (topic.review_reason ?? null),
                     error_message: `Content-generator: ${errMsg}`,
                 }).eq('id', topic.id);
                 topicResult.error = errMsg;
-                await notifyError({
-                    source: 'content-generator',
-                    message: errMsg,
-                    topicId: topic.id,
-                    personaName: persona.name,
-                });
+                if (exhausted) {
+                    await notifyError({
+                        source: 'content-generator',
+                        message: `Held for review after ${nextRetry} failed attempts: ${errMsg}`,
+                        topicId: topic.id,
+                        personaName: persona.name,
+                    });
+                }
             }
 
             results.push(topicResult);
