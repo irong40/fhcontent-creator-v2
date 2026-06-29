@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { remotionRenderer } from '@/lib/remotion-renderer';
 import { blotato } from '@/lib/blotato';
 import { claude } from '@/lib/claude';
 import { buildNewsletterDraftPrompt } from '@/lib/prompts';
@@ -15,83 +14,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export const maxDuration = 300;
 
 const MAX_RETRIES = 3;
-
-interface RenderPollResult {
-    checked: number;
-    completed: number;
-    failed: number;
-    stillProcessing: number;
-}
-
-async function pollRenderStatuses(supabase: SupabaseClient): Promise<RenderPollResult | null> {
-    // heygen_job_id and heygen_status columns are reused for Remotion job tracking
-    const { data: pendingPieces, error } = await supabase
-        .from('content_pieces')
-        .select('id, topic_id, piece_type, heygen_job_id, retry_count')
-        .eq('heygen_status', 'processing')
-        .not('heygen_job_id', 'is', null);
-
-    if (error) throw new Error(error.message);
-    if (!pendingPieces || pendingPieces.length === 0) return null;
-
-    let completed = 0;
-    let failed = 0;
-    let stillProcessing = 0;
-
-    for (const piece of pendingPieces) {
-        try {
-            const status = await remotionRenderer.getJobStatus(piece.heygen_job_id!);
-
-            if (status.status === 'completed') {
-                await supabase
-                    .from('content_pieces')
-                    .update({
-                        video_url: status.videoUrl || status.videoPath,
-                        heygen_status: 'done',
-                        status: 'produced',
-                        produced_at: new Date().toISOString(),
-                    })
-                    .eq('id', piece.id);
-                completed++;
-            } else if (status.status === 'failed') {
-                const retryCount = piece.retry_count ?? 0;
-                if (retryCount < MAX_RETRIES) {
-                    await supabase
-                        .from('content_pieces')
-                        .update({
-                            heygen_status: null,
-                            heygen_job_id: null,
-                            retry_count: retryCount + 1,
-                            error_message: status.error || 'Remotion rendering failed',
-                        })
-                        .eq('id', piece.id);
-                } else {
-                    await supabase
-                        .from('content_pieces')
-                        .update({
-                            heygen_status: 'failed',
-                            status: 'failed',
-                            error_message: `Render failed after ${MAX_RETRIES} retries: ${status.error || 'unknown'}`,
-                        })
-                        .eq('id', piece.id);
-                    await notifyError({
-                        source: 'check-status',
-                        message: `Remotion render failed after ${MAX_RETRIES} retries: ${status.error || 'unknown'}`,
-                        topicId: piece.topic_id,
-                    });
-                }
-                failed++;
-            } else {
-                stillProcessing++;
-            }
-        } catch (e) {
-            console.error(`Error checking render status for piece ${piece.id}:`, e);
-            failed++;
-        }
-    }
-
-    return { checked: pendingPieces.length, completed, failed, stillProcessing };
-}
 
 interface BlotatoVideoPollResult {
     checked: number;
@@ -427,7 +349,6 @@ export async function GET(request: Request) {
         // Clean up expired workflow locks
         const staleLocksRemoved = await cleanStaleLocks();
 
-        const renderResult = await pollRenderStatuses(supabase);
         const blotatoVideoResult = await pollBlotatoVideoStatuses(supabase);
         const blotatoResult = await pollBlotatoStatuses(supabase);
 
@@ -447,14 +368,12 @@ export async function GET(request: Request) {
             );
         }
 
-        const emptyRender = { checked: 0, completed: 0, failed: 0, stillProcessing: 0 };
         const emptyBlotatoVideo = { checked: 0, completed: 0, failed: 0, stillProcessing: 0 };
 
-        if (!renderResult && !blotatoVideoResult && blotatoResult.checked === 0) {
+        if (!blotatoVideoResult && blotatoResult.checked === 0) {
             return NextResponse.json({
                 success: true,
                 message: 'No pending jobs',
-                remotion: emptyRender,
                 blotatoVideo: emptyBlotatoVideo,
                 blotato: blotatoResult,
                 staleLocksRemoved,
@@ -465,7 +384,6 @@ export async function GET(request: Request) {
 
         return NextResponse.json({
             success: true,
-            remotion: renderResult ?? emptyRender,
             blotatoVideo: blotatoVideoResult ?? emptyBlotatoVideo,
             blotato: blotatoResult,
             staleLocksRemoved,

@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { blotato } from '@/lib/blotato';
 import { claude } from '@/lib/claude';
-import { remotionRenderer } from '@/lib/remotion-renderer';
 import { elevenlabs } from '@/lib/elevenlabs';
 import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
@@ -40,7 +39,6 @@ export async function GET() {
         }),
         testService('blotato', () => blotato.testConnection()),
         testService('claude', () => claude.testConnection()),
-        testService('remotion', () => remotionRenderer.testConnection()),
         testService('elevenlabs', () => elevenlabs.testConnection()),
         testService('openai', () => openai.testConnection()),
         testService('gemini', () => gemini.testConnection()),
