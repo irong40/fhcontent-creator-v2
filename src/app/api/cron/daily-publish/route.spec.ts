@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countPlatformOutcomes } from './route';
+import { countPlatformOutcomes, hasRetryablePlatform } from './route';
 import type { ContentPiece, PlatformStatus } from '@/types/database';
 
 /**
@@ -85,5 +85,40 @@ describe('countPlatformOutcomes', () => {
             { published_platforms: undefined } as unknown as ContentPiece,
         ];
         expect(countPlatformOutcomes(pieces)).toEqual({ published: 0, failed: 0 });
+    });
+});
+
+describe('hasRetryablePlatform', () => {
+    const MAX = 5;
+
+    it('is true for a fresh failure (retry_count 0) — the transient Blotato-401 case', () => {
+        // Regression: this exact shape (every platform failed with retry_count 1,
+        // no prior success) was marked terminally failed during the 6/28 outage.
+        const pieces = [piece({
+            tiktok: { status: 'failed', error: '401', retry_count: 1 },
+            youtube: { status: 'failed', error: '401', retry_count: 1 },
+        })];
+        expect(hasRetryablePlatform(pieces, MAX)).toBe(true);
+    });
+
+    it('is false once every failed platform has exhausted its retry budget', () => {
+        const pieces = [piece({
+            tiktok: { status: 'failed', error: 'x', retry_count: 5 },
+            youtube: { status: 'failed', error: 'x', retry_count: 6 },
+        })];
+        expect(hasRetryablePlatform(pieces, MAX)).toBe(false);
+    });
+
+    it('is true if at least one failed platform is still under budget', () => {
+        const pieces = [piece({
+            tiktok: { status: 'failed', error: 'x', retry_count: 5 },
+            youtube: { status: 'failed', error: 'x', retry_count: 2 },
+        })];
+        expect(hasRetryablePlatform(pieces, MAX)).toBe(true);
+    });
+
+    it('ignores non-failed platforms and empty maps', () => {
+        expect(hasRetryablePlatform([piece({ tiktok: { status: 'pending' } })], MAX)).toBe(false);
+        expect(hasRetryablePlatform([piece({})], MAX)).toBe(false);
     });
 });

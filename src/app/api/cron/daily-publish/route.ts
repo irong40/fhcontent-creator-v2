@@ -39,6 +39,18 @@ export function countPlatformOutcomes(pieces: ContentPiece[]): { published: numb
     return { published, failed };
 }
 
+/** True if any piece still has a failed platform under its per-platform retry
+ *  budget — i.e. a total-failure topic is still TRANSIENT and should be left
+ *  retryable rather than marked terminally 'failed'. Exported for testing. */
+export function hasRetryablePlatform(pieces: ContentPiece[], maxRetries: number): boolean {
+    return pieces.some((p) => {
+        const platforms = (p.published_platforms ?? {}) as Record<string, PlatformStatus>;
+        return Object.values(platforms).some(
+            (ps) => ps?.status === 'failed' && (ps.retry_count ?? 0) < maxRetries,
+        );
+    });
+}
+
 interface PublishResult {
     topicId: string;
     title: string;
@@ -327,13 +339,33 @@ export async function publishTopic(
             return result;
         }
 
+        // Distinguish a TRANSIENT total-failure (e.g. a Blotato 401 auth
+        // outage that hits every platform at once) from a PERMANENT one. A
+        // transient failure must stay retryable: marking it terminal 'failed'
+        // here is exactly what silently killed days of content during the
+        // 2026-06-28 Blotato key outage — 'failed' is excluded from the
+        // selector, so the topic never retried even after the key was fixed.
+        // Only give up once every failed platform has exhausted its
+        // per-platform retry budget (MAX_PLATFORM_RETRIES).
+        const anyRetryable = hasRetryablePlatform(pieces as ContentPiece[], MAX_PLATFORM_RETRIES);
+        if (anyRetryable) {
+            // Leave the topic 'scheduled' so the next hourly tick retries the
+            // failed platforms. Per-platform retry_count still bounds this to
+            // MAX_PLATFORM_RETRIES attempts, after which it settles below.
+            await supabase
+                .from('topics')
+                .update({ status: 'scheduled', error_message: 'Transient publish failure — retrying' })
+                .eq('id', topicId);
+            return result;
+        }
+
         await supabase
             .from('topics')
-            .update({ status: 'failed', error_message: 'All platform publishes failed' })
+            .update({ status: 'failed', error_message: 'All platform publishes failed (retries exhausted)' })
             .eq('id', topicId);
         await notifyError({
             source: 'publishTopic',
-            message: 'All platform publishes failed',
+            message: 'All platform publishes failed (retries exhausted)',
             topicId,
             personaName: persona.name,
         });
