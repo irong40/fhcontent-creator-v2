@@ -35,6 +35,7 @@ export interface Database {
                     facebook_page_ids: string[] | null;
                     default_music_url: string | null;
                     content_format: ContentFormat;
+                    blotato_video_enabled: boolean;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -64,6 +65,7 @@ export interface Database {
                     facebook_page_ids?: string[] | null;
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
+                    blotato_video_enabled?: boolean;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -93,6 +95,7 @@ export interface Database {
                     facebook_page_ids?: string[] | null;
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
+                    blotato_video_enabled?: boolean;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;

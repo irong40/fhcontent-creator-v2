@@ -182,9 +182,17 @@ export async function GET(request: Request) {
                 // Long-form lectures and shorts both render through Blotato's
                 // createVideoFromPrompt. The persona's blotato_template_id picks
                 // the visual style; the piece script is the narration prompt.
-                const videoPieces = (allPieces as ContentPiece[]).filter(
-                    p => VIDEO_PIECE_TYPES.includes(p.piece_type as PieceType),
-                );
+                //
+                // Skipped when persona.blotato_video_enabled is false: Blotato
+                // gives no control over its auto-generated imagery, so personas
+                // with a strict image_subject_constraint (e.g. Dr. Carter) have
+                // their video produced by the local renderer instead. Carousels,
+                // thumbnails, and music below still run.
+                const videoPieces = persona.blotato_video_enabled === false
+                    ? []
+                    : (allPieces as ContentPiece[]).filter(
+                        p => VIDEO_PIECE_TYPES.includes(p.piece_type as PieceType),
+                    );
 
                 for (const piece of videoPieces) {
                     // Skip if Blotato job is actively processing or already done

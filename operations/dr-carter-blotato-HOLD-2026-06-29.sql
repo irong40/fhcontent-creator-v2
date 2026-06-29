@@ -1,0 +1,38 @@
+-- dr-carter-blotato-HOLD-2026-06-29.sql
+-- Provenance + restore reference for the 2026-06-29 hold.
+--
+-- WHY: Dr. Imani Carter's long + short videos were produced by Blotato AI Story
+-- Video, which auto-generates its own imagery with NO way to enforce her
+-- image_subject_constraint (Black subjects only). Result: white people appeared
+-- in Black-history videos (hard HUVA-rule violation). The clips are also only
+-- ~2-3 min, too short for YouTube mid-roll monetization. Both problems are
+-- fixed by the local ffmpeg long-form renderer (audited imagery + 8 min).
+--
+-- ACTION TAKEN (already applied to live DB qjpujskwqaehxnqypxzu):
+--   1. personas.blotato_video_enabled = false for Dr. Imani Carter
+--      (migration 017) -> daily-media skips Blotato video for her.
+--   2. All her un-published long/short_1..4 pieces held out of the publisher:
+--      status='failed', blotato_status=NULL, blotato_job_id=NULL,
+--      error_message='HOLD 2026-06-29 (was: <status>): ...'.
+--      126 pieces held (26 long, 26/25/25/24 shorts).
+--
+-- The held pieces keep their scripts/topics. Regenerate video via the local
+-- renderer, which writes video_url and re-publishes. Carousels (template,
+-- no people) and Freedom Voices quote videos are unaffected and still flowing.
+--
+-- The exact UPDATE applied:
+--
+-- UPDATE content_pieces cp
+-- SET status='failed', blotato_status=NULL, blotato_job_id=NULL,
+--     error_message='HOLD 2026-06-29 (was: '||cp.status||'): Blotato imagery '
+--       ||'non-compliant (HUVA Black-subjects rule) + long not monetizable; '
+--       ||'regenerate via local renderer'
+-- FROM topics t, personas p
+-- WHERE cp.topic_id=t.id AND t.persona_id=p.id
+--   AND p.name='Dr. Imani Carter'
+--   AND cp.piece_type IN ('long','short_1','short_2','short_3','short_4')
+--   AND cp.status NOT IN ('published','failed');
+--
+-- To find the held set later:
+--   SELECT id, piece_type, error_message FROM content_pieces
+--   WHERE error_message LIKE 'HOLD 2026-06-29%';
