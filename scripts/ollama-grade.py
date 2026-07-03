@@ -48,11 +48,13 @@ DIMENSION_LABELS = {
 FILLER_WORDS = ["really", "very", "just", "basically", "literally", "actually", "simply"]
 FILLER_OPENERS = ["in today's world", "let me tell you", "the truth is", "here's the thing"]
 
-# 0 hashtags for text-first platforms, ranges for the visual ones
+# 0 hashtags for text-first platforms, ranges for the visual ones.
+# Covers the full Blotato publish target list (src/lib/blotato.ts Platform).
 HASHTAG_LIMITS = {
     "twitter": (0, 0), "x": (0, 0), "threads": (0, 0), "bluesky": (0, 0),
     "linkedin": (0, 0), "facebook": (0, 0),
     "instagram": (3, 5), "tiktok": (0, 5),
+    "youtube": (0, 3), "pinterest": (0, 5),
 }
 
 
@@ -118,7 +120,8 @@ def mechanical_rules(post, platform):
     }
 
     passive = re.findall(
-        r"\b(?:was|were|is being|are being|has been|have been)\s+\w+(?:ed|en|built|done|made)\b",
+        r"\b(?:was|were|is being|are being|has been|have been)\s+"
+        r"(?:\w+(?:ed|en)|\w*(?:built|done|made|held|kept|left|lost|paid|sent|set|shown|sold|told|won))\b",
         lower,
     )
     results["active_voice"] = {
@@ -234,7 +237,7 @@ def compute_overall(dimensions, rules):
 
     score = sum(weights[k] * dimensions[k]["score"] for k in weights)
     penalty = min(3.0, 0.5 * sum(1 for r in rules.values() if not r["pass"]))
-    return round(max(0.0, score - penalty), 1), penalty
+    return round(max(0.0, score - penalty), 1), penalty, weights
 
 
 def render_markdown(result):
@@ -247,8 +250,9 @@ def render_markdown(result):
         "| Dimension | Weight | Score | Note |",
         "|-----------|--------|-------|------|",
     ]
+    weights_used = result["weights_used"]
     for key, label in DIMENSION_LABELS.items():
-        w = f"{int(WEIGHTS[key] * 100)}%"
+        w = f"{round(weights_used[key] * 100)}%" if key in weights_used else "n/a"
         s = d[key]["score"]
         s = "skipped (no brief)" if s is None else f"{s}/10"
         lines.append(f"| {label} | {w} | {s} | {d[key]['note']} |")
@@ -330,10 +334,11 @@ def main():
         for f in model_out.get("fixes", [])[:3]
     ]
 
-    overall, penalty = compute_overall(dimensions, rules)
+    overall, penalty, weights_used = compute_overall(dimensions, rules)
     result = {
         "overall": overall,
         "rule_penalty": penalty,
+        "weights_used": {k: round(v, 4) for k, v in weights_used.items()},
         "dimensions": dimensions,
         "rules": rules,
         "fixes": fixes,
