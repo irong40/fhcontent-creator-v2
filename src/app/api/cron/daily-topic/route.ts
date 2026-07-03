@@ -137,50 +137,26 @@ export async function GET(request: Request) {
 
                 // ── Engagement feedback: top winners from the weekly collector ──
                 // performance_metrics is fed Saturday evenings by the music
-                // machine's collect_engagement.py (yt-dlp public stats). Take
+                // machine's collect_engagement.py (yt-dlp public stats). The
+                // get_topic_winners RPC (migration get_topic_winners_rpc) takes
                 // the latest snapshot per piece+platform from the last 10 days,
-                // aggregate per topic, rank by views. Any failure or an empty
-                // table degrades to no winners block (pre-feedback behavior).
+                // sums per topic, and returns the top 8 by views — server-side,
+                // so no PostgREST row-cap can hand us a partial slice to rank
+                // (Codex review 2026-07-02). Errors are logged loudly but
+                // degrade to no winners block (pre-feedback prompt).
                 let topWinners: TopicWinner[] = [];
                 try {
-                    const tenDaysAgo = new Date(nowMs - 10 * 24 * 60 * 60 * 1000).toISOString();
-                    const { data: perfData } = await supabase
-                        .from('performance_metrics')
-                        .select('content_piece_id, platform, views, likes, captured_at, content_pieces!inner(topic_id, topics!inner(id, title, persona_id))')
-                        .eq('content_pieces.topics.persona_id', persona.id)
-                        .gte('captured_at', tenDaysAgo);
-
-                    // Latest snapshot per (piece, platform), then sum per topic.
-                    const latest = new Map<string, { views: number; likes: number; captured_at: string; topicId: string; title: string }>();
-                    for (const row of (perfData || []) as unknown as Array<{
-                        content_piece_id: string; platform: string; views: number | null;
-                        likes: number | null; captured_at: string;
-                        content_pieces: { topic_id: string; topics: { id: string; title: string } };
-                    }>) {
-                        const key = `${row.content_piece_id}:${row.platform}`;
-                        const prev = latest.get(key);
-                        if (!prev || row.captured_at > prev.captured_at) {
-                            latest.set(key, {
-                                views: row.views ?? 0,
-                                likes: row.likes ?? 0,
-                                captured_at: row.captured_at,
-                                topicId: row.content_pieces.topics.id,
-                                title: row.content_pieces.topics.title,
-                            });
-                        }
+                    const { data: winnersData, error: winnersError } = await supabase
+                        .rpc('get_topic_winners', { p_persona_id: persona.id, p_days: 10, p_limit: 8 });
+                    if (winnersError) {
+                        console.error(`top-winners RPC failed for ${persona.name} (continuing without):`, winnersError);
+                    } else {
+                        // bigint sums arrive as strings over PostgREST — normalize.
+                        topWinners = (winnersData || [])
+                            .map(w => ({ title: w.title, views: Number(w.views) || 0, likes: Number(w.likes) || 0 }));
                     }
-                    const byTopic = new Map<string, TopicWinner>();
-                    for (const snap of latest.values()) {
-                        const agg = byTopic.get(snap.topicId) || { title: snap.title, views: 0, likes: 0 };
-                        agg.views += snap.views;
-                        agg.likes += snap.likes;
-                        byTopic.set(snap.topicId, agg);
-                    }
-                    topWinners = [...byTopic.values()]
-                        .sort((a, b) => b.views - a.views)
-                        .slice(0, 8);
                 } catch (winnersError) {
-                    console.error('top-winners aggregation failed (continuing without):', winnersError);
+                    console.error('top-winners lookup failed (continuing without):', winnersError);
                 }
 
                 const { system: topicSystem, user: topicUser } = buildTopicPrompt(persona, recentTopics, TOPICS_PER_WEEK, topWinners);

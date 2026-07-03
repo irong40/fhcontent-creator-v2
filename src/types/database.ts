@@ -908,6 +908,10 @@ export interface Database {
                 Args: { p_persona_id: string; p_title: string; p_threshold?: number };
                 Returns: { is_duplicate: boolean; similar_title: string; similarity: number }[];
             };
+            get_topic_winners: {
+                Args: { p_persona_id: string; p_days?: number; p_limit?: number };
+                Returns: { title: string; views: number; likes: number }[];
+            };
         };
         Enums: Record<string, never>;
         CompositeTypes: Record<string, never>;
