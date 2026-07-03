@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
 import { topicResponseSchema } from '@/lib/schemas';
-import { buildTopicPrompt } from '@/lib/prompts';
+import { buildTopicPrompt, type TopicWinner } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
 import { notifyError } from '@/lib/notifications';
@@ -135,7 +135,55 @@ export async function GET(request: Request) {
 
                 const recentTopics = (recentData || []).map(r => r.topic_title);
 
-                const { system: topicSystem, user: topicUser } = buildTopicPrompt(persona, recentTopics, TOPICS_PER_WEEK);
+                // ── Engagement feedback: top winners from the weekly collector ──
+                // performance_metrics is fed Saturday evenings by the music
+                // machine's collect_engagement.py (yt-dlp public stats). Take
+                // the latest snapshot per piece+platform from the last 10 days,
+                // aggregate per topic, rank by views. Any failure or an empty
+                // table degrades to no winners block (pre-feedback behavior).
+                let topWinners: TopicWinner[] = [];
+                try {
+                    const tenDaysAgo = new Date(nowMs - 10 * 24 * 60 * 60 * 1000).toISOString();
+                    const { data: perfData } = await supabase
+                        .from('performance_metrics')
+                        .select('content_piece_id, platform, views, likes, captured_at, content_pieces!inner(topic_id, topics!inner(id, title, persona_id))')
+                        .eq('content_pieces.topics.persona_id', persona.id)
+                        .gte('captured_at', tenDaysAgo);
+
+                    // Latest snapshot per (piece, platform), then sum per topic.
+                    const latest = new Map<string, { views: number; likes: number; captured_at: string; topicId: string; title: string }>();
+                    for (const row of (perfData || []) as unknown as Array<{
+                        content_piece_id: string; platform: string; views: number | null;
+                        likes: number | null; captured_at: string;
+                        content_pieces: { topic_id: string; topics: { id: string; title: string } };
+                    }>) {
+                        const key = `${row.content_piece_id}:${row.platform}`;
+                        const prev = latest.get(key);
+                        if (!prev || row.captured_at > prev.captured_at) {
+                            latest.set(key, {
+                                views: row.views ?? 0,
+                                likes: row.likes ?? 0,
+                                captured_at: row.captured_at,
+                                topicId: row.content_pieces.topics.id,
+                                title: row.content_pieces.topics.title,
+                            });
+                        }
+                    }
+                    const byTopic = new Map<string, TopicWinner>();
+                    for (const snap of latest.values()) {
+                        const agg = byTopic.get(snap.topicId) || { title: snap.title, views: 0, likes: 0 };
+                        agg.views += snap.views;
+                        agg.likes += snap.likes;
+                        byTopic.set(snap.topicId, agg);
+                    }
+                    topWinners = [...byTopic.values()]
+                        .sort((a, b) => b.views - a.views)
+                        .slice(0, 8);
+                } catch (winnersError) {
+                    console.error('top-winners aggregation failed (continuing without):', winnersError);
+                }
+
+                const { system: topicSystem, user: topicUser } = buildTopicPrompt(persona, recentTopics, TOPICS_PER_WEEK, topWinners);
                 const { text: topicText, inputTokens: tIn, outputTokens: tOut } = await claude.generateContent(
                     topicSystem,
                     topicUser,

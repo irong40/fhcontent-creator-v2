@@ -3,6 +3,17 @@ import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/databas
 export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
 
 /**
+ * A past topic that over-performed, fed back into topic generation.
+ * Sourced from performance_metrics (weekly yt-dlp collector on the music
+ * machine) aggregated per topic in the daily-topic cron.
+ */
+export interface TopicWinner {
+    title: string;
+    views: number;
+    likes: number;
+}
+
+/**
  * Build a "brand voice" block from optional persona scaffolding fields
  * (bio, voice_formula, signature_signoff, brand_voice_examples).
  * Returns "" if the persona has no extra fields configured.
@@ -124,12 +135,28 @@ export function buildTopicPrompt(
     persona: Persona,
     recentTopics: string[],
     count: number,
+    topWinners: TopicWinner[] = [],
 ): { system: string; user: string } {
     if (persona.content_format === 'quote_video') {
         return buildQuoteTopicPrompt(persona, recentTopics, count);
     }
 
     const voiceBlock = buildBrandVoiceBlock(persona);
+
+    // Engagement feedback: when the weekly collector has produced winners,
+    // dedicate 2 of the week's topics to remixing them and steer the rest
+    // toward the structural DNA the winners share. Empty winners -> no block,
+    // prompt is byte-identical to the pre-feedback version.
+    const remixCount = count >= 4 ? 2 : count >= 2 ? 1 : 0;
+    const winnersBlock = topWinners.length >= 3 && remixCount > 0
+        ? `
+PROVEN WINNERS (our highest-engagement published topics, last 30 days):
+${topWinners.map(w => `- "${w.title}" — ${w.views.toLocaleString()} views, ${w.likes.toLocaleString()} likes`).join('\n')}
+
+Of the ${count} topics, exactly ${remixCount} must be WINNER REMIXES: pick a proven winner above and tell a DIFFERENT chapter of the same story — the aftermath, one named individual's perspective, the opposition's attempt to stop it, or what the textbooks left out. A remix must stand alone as a new story for someone who never saw the original, and its title must NOT reuse the original title's wording (lead with the new angle, not the original's name).
+The remaining ${count - remixCount} topics must be fresh stories, but favor the structural DNA the winners share: a named Virginia county or town, Black economic power or institution-building, a specific suppression attempt that was overcome, and hard numbers (dollars, acres, dates, headcounts).
+`
+        : '';
 
     const system = `You are generating content topics for ${persona.name}, ${persona.brand}.
 Your voice: ${persona.voice_style}
@@ -142,7 +169,7 @@ ${persona.expertise_areas.join('\n')}
 
 TOPICS TO AVOID (already published):
 ${recentTopics.length > 0 ? recentTopics.join('\n') : 'None yet'}
-
+${winnersBlock}
 Generate exactly ${count} unique topic(s) within the expertise areas listed above for the ${persona.brand} brand.
 
 For each topic, provide:
@@ -173,7 +200,7 @@ REQUIREMENTS:
 - Each topic must be historically accurate and verifiable
 - Include specific names, dates, and places
 - Vary across the expertise areas listed above
-- Avoid topics similar to the "TOPICS TO AVOID" list`;
+- Avoid topics similar to the "TOPICS TO AVOID" list${winnersBlock ? ' (exception: WINNER REMIXES may revisit a proven winner\'s subject, but only from the new angle and with a fresh title as instructed above)' : ''}`;
 
     return { system, user };
 }

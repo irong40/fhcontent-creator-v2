@@ -28,6 +28,7 @@ const mockPersona: Persona = {
     facebook_page_ids: null,
     default_music_url: null,
     content_format: 'standard',
+    blotato_video_enabled: false,
     is_active: true,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -126,6 +127,58 @@ describe('buildTopicPrompt', () => {
     it('demands JSON-only output in system prompt', () => {
         const { system } = buildTopicPrompt(mockPersona, [], 1);
         expect(system).toContain('valid JSON only');
+    });
+
+    it('omits winners block when no winners provided', () => {
+        const { user } = buildTopicPrompt(mockPersona, [], 7);
+        expect(user).not.toContain('PROVEN WINNERS');
+        expect(user).not.toContain('WINNER REMIXES');
+    });
+
+    it('omits winners block when fewer than 3 winners', () => {
+        const winners = [
+            { title: 'Winner A', views: 1000, likes: 50 },
+            { title: 'Winner B', views: 900, likes: 40 },
+        ];
+        const { user } = buildTopicPrompt(mockPersona, [], 7, winners);
+        expect(user).not.toContain('PROVEN WINNERS');
+    });
+
+    it('includes winners block with remix instruction for weekly batch', () => {
+        const winners = [
+            { title: 'The Accomack County Oyster Queens', views: 4843, likes: 235 },
+            { title: 'The Orange County Timber Riders', views: 4356, likes: 196 },
+            { title: 'The Mecklenburg County Hog Drivers', views: 3743, likes: 184 },
+        ];
+        const { user } = buildTopicPrompt(mockPersona, [], 7, winners);
+        expect(user).toContain('PROVEN WINNERS');
+        expect(user).toContain('The Accomack County Oyster Queens');
+        expect(user).toContain('4,843 views');
+        expect(user).toContain('exactly 2 must be WINNER REMIXES');
+        expect(user).toContain('5 topics must be fresh stories');
+    });
+
+    it('scales remix count down for small batches', () => {
+        const winners = [
+            { title: 'Winner A', views: 1000, likes: 50 },
+            { title: 'Winner B', views: 900, likes: 40 },
+            { title: 'Winner C', views: 800, likes: 30 },
+        ];
+        const { user } = buildTopicPrompt(mockPersona, [], 2, winners);
+        expect(user).toContain('exactly 1 must be WINNER REMIXES');
+        const single = buildTopicPrompt(mockPersona, [], 1, winners);
+        expect(single.user).not.toContain('PROVEN WINNERS');
+    });
+
+    it('does not leak winners block into quote_video personas', () => {
+        const quotePersona = { ...mockPersona, content_format: 'quote_video' as const };
+        const winners = [
+            { title: 'Winner A', views: 1000, likes: 50 },
+            { title: 'Winner B', views: 900, likes: 40 },
+            { title: 'Winner C', views: 800, likes: 30 },
+        ];
+        const { user } = buildTopicPrompt(quotePersona, [], 7, winners);
+        expect(user).not.toContain('PROVEN WINNERS');
     });
 });
 
