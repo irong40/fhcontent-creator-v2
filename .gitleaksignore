@@ -1,0 +1,12 @@
+# Triaged gitleaks findings 2026-07-03 (COO session, Codex review era)
+# All four are in history already pushed to origin; see notes per line.
+
+# Historical n8n HMAC secret in Phase-1 planning docs; does not match any current env value (verify rotation in Supabase edge function secrets)
+ba9b788882fca0ac76be021d86c5561ca6602341:.planning/STATE.md:generic-api-key:48
+ba9b788882fca0ac76be021d86c5561ca6602341:.planning/phases/01-infrastructure-foundation/01-01-SUMMARY.md:generic-api-key:128
+
+# Supabase ANON key (public by design, RLS-protected) in an n8n HMAC test workflow
+825008085ea2e2613068b3e2e9cb4eec449f5610:n8n-workflows/hmac-test.json:jwt:31
+
+# False positive: "X-N8N-Signature" is a header NAME, not a secret
+797e6dc81fd5ddefc43bc883df1ee489577cf555:.planning/codebase/ARCHITECTURE.md:generic-api-key:201
