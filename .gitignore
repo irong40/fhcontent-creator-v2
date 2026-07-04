@@ -44,3 +44,6 @@ next-env.d.ts
 
 # Render smoke test outputs
 /tmp/
+
+# python bytecode (scripts/ollama-grade.py etc.)
+**/__pycache__/
