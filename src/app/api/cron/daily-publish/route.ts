@@ -22,6 +22,100 @@ interface PlatformResult {
  *  resolve itself. The topic settles as partially_published. */
 const MAX_PLATFORM_RETRIES = 5;
 
+/** Staleness lower bound (days) for scheduled/approved topics.
+ *
+ *  Root cause of the 2026-06-02 incident: the hourly selector had only an
+ *  UPPER bound (publish_date <= today), so when 26 stale topics were restored
+ *  to 'scheduled' with past publish_dates, the next tick selected ALL of them
+ *  and blasted every piece slot at once, tripping YouTube/TikTok platform
+ *  caps. The mitigation then was manual SQL (publish_date=NULL) — this
+ *  constant is the code guard.
+ *
+ *  A scheduled/approved topic whose publish_date is more than this many days
+ *  in the past is skipped by the selector (and surfaced in the response as
+ *  staleSkipped). To publish it anyway, re-date it to today. */
+export const MAX_SCHEDULED_AGE_DAYS = 3;
+
+/** Hard cap on topics processed in a single hourly tick.
+ *
+ *  Steady state is small: one new topic per active persona per day (~2),
+ *  plus same-day 'publishing' topics mid-stagger and 'partially_published'
+ *  retries. Anything far above that means a backlog was restored or
+ *  bulk-edited — mass-firing it in one tick is exactly the 2026-06-02
+ *  incident. Excess topics stay selectable and drain on later hourly ticks
+ *  (selection order follows query order), so nothing is lost, just spread
+ *  out. Defense-in-depth behind MAX_SCHEDULED_AGE_DAYS. */
+export const MAX_TOPICS_PER_TICK = 5;
+
+/** Minimal topic row shape the hourly selector needs. */
+export interface SelectableTopic {
+    id: string;
+    title: string;
+    status: string;
+    publish_at: string | null;
+    publish_date: string | null;
+    published_at: string | null;
+}
+
+/**
+ * Pure client-side selection filter for the hourly publish tick. Applied to
+ * BOTH the primary topic query and the post-evergreen refetch (the refetch
+ * previously bypassed these filters — review 2026-07-04).
+ *
+ * Rules:
+ *  - partially_published: only within 7 days of published_at (drain frozen
+ *    platform failures, don't hammer Blotato forever).
+ *  - publishing: only until 22 h after publish_at (last slot is +10h, so
+ *    22 h is safely past; also gates ancient rows).
+ *  - scheduled/approved: publish_at <= now when present (intra-day
+ *    staggering), AND publish_date within MAX_SCHEDULED_AGE_DAYS (staleness
+ *    lower bound — 2026-06-02 incident guard).
+ *  - Global MAX_TOPICS_PER_TICK cap after filtering.
+ *
+ * Exported for unit testing.
+ */
+export function selectPublishableTopics<T extends SelectableTopic>(
+    topicsRaw: T[],
+    now: Date = new Date(),
+): { selected: T[]; staleSkipped: T[]; capDeferred: T[] } {
+    const nowIso = now.toISOString();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const staleCutoffDate = new Date(now.getTime() - MAX_SCHEDULED_AGE_DAYS * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split('T')[0];
+
+    const staleSkipped: T[] = [];
+    const eligible = topicsRaw.filter((t) => {
+        if (t.status === 'partially_published') {
+            return Boolean(t.published_at && t.published_at > sevenDaysAgo);
+        }
+        // 'publishing' topics: keep picking up until 12 h past last slot
+        // (last slot is +10h from publish_at, so 22 h after publish_at it's
+        // safe to stop touching). Also gates against ancient rows.
+        if (t.status === 'publishing') {
+            if (!t.publish_at) return true;
+            const cutoff = new Date(new Date(t.publish_at).getTime() + 22 * 60 * 60 * 1000).toISOString();
+            return nowIso < cutoff;
+        }
+        // scheduled / approved: staleness lower bound first. Older than
+        // MAX_SCHEDULED_AGE_DAYS means this is a restored/bulk-edited
+        // backlog, not today's pipeline output — never auto-fire it.
+        if (t.publish_date && t.publish_date < staleCutoffDate) {
+            staleSkipped.push(t);
+            return false;
+        }
+        // enforce publish_at if present
+        if (t.publish_at) return t.publish_at <= nowIso;
+        return true; // legacy row, fall through publish_date check
+    });
+
+    return {
+        selected: eligible.slice(0, MAX_TOPICS_PER_TICK),
+        capDeferred: eligible.slice(MAX_TOPICS_PER_TICK),
+        staleSkipped,
+    };
+}
+
 /** Aggregate per-platform success/failure counts across every piece's
  *  published_platforms map. Used to distinguish a true total-failure topic
  *  from a partial-success topic whose current-tick retries also failed.
@@ -433,16 +527,10 @@ export async function GET(request: Request) {
         const nowIso = new Date().toISOString();
         const today = nowIso.split('T')[0];
 
-        // Find topics ready to ship. Filtering rules:
-        //  - scheduled/approved: pick up if publish_at <= now() (intra-day
-        //    staggering). Falls back to publish_date <= today for legacy
-        //    rows without publish_at set.
-        //  - partially_published: retry to drain frozen platform failures
-        //    (per-platform retry skip at line ~144 gates on status='failed',
-        //    so re-running fully-resolved pieces is a no-op). Capped to 7
-        //    days post-publish so we don't hammer Blotato forever on a
-        //    permanently-broken caption.
-        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        // Find topics ready to ship. DB query is a coarse pre-filter
+        // (status + publish_date upper bound); the precise per-status rules,
+        // the staleness lower bound (2026-06-02 incident guard), and the
+        // per-tick cap all live in selectPublishableTopics above.
         const { data: topicsRaw, error } = await supabase
             .from('topics')
             .select('id, title, status, publish_at, publish_date, published_at')
@@ -454,23 +542,6 @@ export async function GET(request: Request) {
             .not('publish_date', 'is', null)
             .lte('publish_date', today);
 
-        const topics = (topicsRaw ?? []).filter((t) => {
-            if (t.status === 'partially_published') {
-                return Boolean(t.published_at && t.published_at > sevenDaysAgo);
-            }
-            // 'publishing' topics: keep picking up until 12 h past last slot
-            // (last slot is +10h from publish_at, so 22 h after publish_at it's
-            // safe to stop touching). Also gates against ancient rows.
-            if (t.status === 'publishing') {
-                if (!t.publish_at) return true;
-                const cutoff = new Date(new Date(t.publish_at).getTime() + 22 * 60 * 60 * 1000).toISOString();
-                return nowIso < cutoff;
-            }
-            // scheduled / approved: enforce publish_at if present
-            if (t.publish_at) return t.publish_at <= nowIso;
-            return true; // legacy row, fall through publish_date check
-        });
-
         if (error) {
             return NextResponse.json(
                 { success: false, error: error.message },
@@ -478,8 +549,10 @@ export async function GET(request: Request) {
             );
         }
 
+        let selection = selectPublishableTopics(topicsRaw ?? []);
+
         // If no topics scheduled, try evergreen fallback
-        let publishableTopics = topics ?? [];
+        let publishableTopics = selection.selected;
         let evergreenFills: Awaited<ReturnType<typeof fillEvergreenGaps>> = [];
 
         if (publishableTopics.length === 0) {
@@ -492,17 +565,38 @@ export async function GET(request: Request) {
                     message: 'No scheduled topics and no evergreen content available',
                     processed: 0,
                     evergreen: evergreenFills,
+                    staleSkipped: selection.staleSkipped.length > 0 ? selection.staleSkipped.length : undefined,
                 });
             }
 
-            // Re-query now that evergreen topics have been scheduled
+            // Re-query now that evergreen topics have been scheduled, then run
+            // the refetched rows through the SAME selection filters (publish_at
+            // gate, staleness lower bound, per-tick cap) as the primary query.
+            // Previously this refetch bypassed those filters, re-amplifying
+            // the stale-backlog path (review 2026-07-04).
             const { data: refetched } = await supabase
                 .from('topics')
                 .select('id, title, status, publish_at, publish_date, published_at')
                 .eq('status', 'scheduled')
+                .not('publish_date', 'is', null)
                 .lte('publish_date', today);
 
-            publishableTopics = refetched ?? [];
+            selection = selectPublishableTopics(refetched ?? []);
+            publishableTopics = selection.selected;
+        }
+
+        if (selection.staleSkipped.length > 0) {
+            console.warn(
+                `[daily-publish] Skipped ${selection.staleSkipped.length} stale scheduled/approved topic(s) ` +
+                `older than ${MAX_SCHEDULED_AGE_DAYS} days (2026-06-02 incident guard): ` +
+                selection.staleSkipped.map((t) => `${t.id} "${t.title}" (${t.publish_date})`).join(', '),
+            );
+        }
+        if (selection.capDeferred.length > 0) {
+            console.warn(
+                `[daily-publish] Per-tick cap: processing ${MAX_TOPICS_PER_TICK}, ` +
+                `deferring ${selection.capDeferred.length} topic(s) to later ticks`,
+            );
         }
 
         const results: PublishResult[] = [];
@@ -535,6 +629,9 @@ export async function GET(request: Request) {
             results,
             errors: errors.length > 0 ? errors : undefined,
             evergreen: evergreenFills.length > 0 ? evergreenFills : undefined,
+            // Observability for the 2026-06-02 incident guards.
+            staleSkipped: selection.staleSkipped.length > 0 ? selection.staleSkipped.length : undefined,
+            capDeferred: selection.capDeferred.length > 0 ? selection.capDeferred.length : undefined,
         });
     } catch (error) {
         console.error('Daily-publish cron error:', error);

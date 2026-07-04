@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { countPlatformOutcomes, hasRetryablePlatform } from './route';
+import {
+    countPlatformOutcomes,
+    hasRetryablePlatform,
+    selectPublishableTopics,
+    MAX_SCHEDULED_AGE_DAYS,
+    MAX_TOPICS_PER_TICK,
+    type SelectableTopic,
+} from './route';
 import type { ContentPiece, PlatformStatus } from '@/types/database';
 
 /**
@@ -120,5 +127,144 @@ describe('hasRetryablePlatform', () => {
     it('ignores non-failed platforms and empty maps', () => {
         expect(hasRetryablePlatform([piece({ tiktok: { status: 'pending' } })], MAX)).toBe(false);
         expect(hasRetryablePlatform([piece({})], MAX)).toBe(false);
+    });
+});
+
+describe('selectPublishableTopics', () => {
+    // Fixed "now" for deterministic date math: 2026-07-04 15:00 UTC.
+    const NOW = new Date('2026-07-04T15:00:00.000Z');
+
+    function daysAgoDate(days: number): string {
+        return new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    }
+
+    let seq = 0;
+    function topic(overrides: Partial<SelectableTopic>): SelectableTopic {
+        seq += 1;
+        return {
+            id: `t-${seq}`,
+            title: `Topic ${seq}`,
+            status: 'scheduled',
+            publish_at: null,
+            publish_date: daysAgoDate(0),
+            published_at: null,
+            ...overrides,
+        };
+    }
+
+    it('selects a scheduled topic due today with past publish_at', () => {
+        const t = topic({ publish_at: '2026-07-04T13:00:00.000Z' });
+        const { selected, staleSkipped } = selectPublishableTopics([t], NOW);
+        expect(selected).toEqual([t]);
+        expect(staleSkipped).toEqual([]);
+    });
+
+    it('defers a scheduled topic whose publish_at is still in the future', () => {
+        const t = topic({ publish_at: '2026-07-04T18:00:00.000Z' });
+        const { selected, staleSkipped } = selectPublishableTopics([t], NOW);
+        expect(selected).toEqual([]);
+        expect(staleSkipped).toEqual([]); // not stale, just not due yet
+    });
+
+    it('selects a legacy scheduled topic (no publish_at) inside the staleness window', () => {
+        const t = topic({ publish_at: null, publish_date: daysAgoDate(1) });
+        expect(selectPublishableTopics([t], NOW).selected).toEqual([t]);
+    });
+
+    describe('staleness lower bound (2026-06-02 incident guard)', () => {
+        it('skips a scheduled topic older than MAX_SCHEDULED_AGE_DAYS', () => {
+            const stale = topic({ publish_date: daysAgoDate(MAX_SCHEDULED_AGE_DAYS + 1) });
+            const { selected, staleSkipped } = selectPublishableTopics([stale], NOW);
+            expect(selected).toEqual([]);
+            expect(staleSkipped).toEqual([stale]);
+        });
+
+        it('still selects a topic exactly at the staleness boundary', () => {
+            const boundary = topic({ publish_date: daysAgoDate(MAX_SCHEDULED_AGE_DAYS) });
+            const { selected, staleSkipped } = selectPublishableTopics([boundary], NOW);
+            expect(selected).toEqual([boundary]);
+            expect(staleSkipped).toEqual([]);
+        });
+
+        it('applies the staleness bound to approved topics too', () => {
+            const stale = topic({ status: 'approved', publish_date: daysAgoDate(30) });
+            const { selected, staleSkipped } = selectPublishableTopics([stale], NOW);
+            expect(selected).toEqual([]);
+            expect(staleSkipped).toEqual([stale]);
+        });
+
+        it('a stale topic is skipped even when its publish_at is past (restored-backlog shape)', () => {
+            // Exact 2026-06-02 shape: old scheduled rows restored with past
+            // publish_date AND past publish_at — every slot already elapsed.
+            const stale = topic({
+                publish_date: daysAgoDate(14),
+                publish_at: new Date(NOW.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString(),
+            });
+            const { selected, staleSkipped } = selectPublishableTopics([stale], NOW);
+            expect(selected).toEqual([]);
+            expect(staleSkipped).toEqual([stale]);
+        });
+
+        it('does NOT apply the scheduled-staleness bound to partially_published (7-day published_at window governs)', () => {
+            const partial = topic({
+                status: 'partially_published',
+                publish_date: daysAgoDate(6), // older than MAX_SCHEDULED_AGE_DAYS
+                published_at: new Date(NOW.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+            });
+            expect(selectPublishableTopics([partial], NOW).selected).toEqual([partial]);
+        });
+
+        it('drops partially_published topics past the 7-day window', () => {
+            const old = topic({
+                status: 'partially_published',
+                published_at: new Date(NOW.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+            });
+            const { selected, staleSkipped } = selectPublishableTopics([old], NOW);
+            expect(selected).toEqual([]);
+            expect(staleSkipped).toEqual([]); // dropped by its own window, not the stale guard
+        });
+
+        it('keeps publishing topics within 22h of publish_at and drops older ones', () => {
+            const fresh = topic({
+                status: 'publishing',
+                publish_at: new Date(NOW.getTime() - 10 * 60 * 60 * 1000).toISOString(),
+            });
+            const old = topic({
+                status: 'publishing',
+                publish_at: new Date(NOW.getTime() - 23 * 60 * 60 * 1000).toISOString(),
+            });
+            expect(selectPublishableTopics([fresh, old], NOW).selected).toEqual([fresh]);
+        });
+    });
+
+    describe('per-tick cap', () => {
+        it('regression: a 26-topic restored backlog dated today cannot mass-fire in one tick', () => {
+            // Even if a backlog is re-dated to TODAY (defeating the staleness
+            // bound), the cap keeps a single tick from blasting platform caps.
+            const backlog = Array.from({ length: 26 }, () => topic({ publish_date: daysAgoDate(0) }));
+            const { selected, capDeferred } = selectPublishableTopics(backlog, NOW);
+            expect(selected).toHaveLength(MAX_TOPICS_PER_TICK);
+            expect(capDeferred).toHaveLength(26 - MAX_TOPICS_PER_TICK);
+        });
+
+        it('does not cap normal steady-state volume', () => {
+            const normal = [
+                topic({}),
+                topic({}),
+                topic({ status: 'publishing', publish_at: new Date(NOW.getTime() - 2 * 60 * 60 * 1000).toISOString() }),
+            ];
+            const { selected, capDeferred } = selectPublishableTopics(normal, NOW);
+            expect(selected).toHaveLength(3);
+            expect(capDeferred).toEqual([]);
+        });
+
+        it('cap applies after filtering — stale topics do not consume cap slots', () => {
+            const stale = Array.from({ length: 10 }, () => topic({ publish_date: daysAgoDate(10) }));
+            const due = [topic({}), topic({})];
+            const { selected, staleSkipped, capDeferred } = selectPublishableTopics([...stale, ...due], NOW);
+            expect(selected).toEqual(due);
+            expect(staleSkipped).toHaveLength(10);
+            expect(capDeferred).toEqual([]);
+        });
     });
 });
