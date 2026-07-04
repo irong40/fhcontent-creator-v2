@@ -20,6 +20,20 @@ describe('getCarouselUrls', () => {
     it('returns empty array for empty string', () => {
         expect(getCarouselUrls({ carousel_url: '' })).toEqual([]);
     });
+
+    // Malformed-row guard (review 2026-07-04): one truncated/hand-edited
+    // carousel_url must not throw and crash every hourly tick.
+    it('returns empty array (not throw) for truncated JSON', () => {
+        expect(getCarouselUrls({ carousel_url: '[https://a.com/1.png' })).toEqual([]);
+    });
+
+    it('returns empty array (not throw) for JSON that is not an array', () => {
+        expect(getCarouselUrls({ carousel_url: '[]x' })).toEqual([]);
+    });
+
+    it('filters non-string entries out of a valid JSON array', () => {
+        expect(getCarouselUrls({ carousel_url: '["https://a.com/1.png", 42, null]' })).toEqual(['https://a.com/1.png']);
+    });
 });
 
 describe('getMediaUrl with JSON carousel', () => {
@@ -46,6 +60,15 @@ describe('getMediaUrl with JSON carousel', () => {
         const piece = {
             piece_type: 'carousel',
             carousel_url: '[]',
+            video_url: null,
+        };
+        expect(getMediaUrl(piece)).toBeNull();
+    });
+
+    it('returns null (not throw) for malformed carousel JSON — flows into the "no media URL" skip path', () => {
+        const piece = {
+            piece_type: 'carousel',
+            carousel_url: '[https://a.com/1.png',
             video_url: null,
         };
         expect(getMediaUrl(piece)).toBeNull();

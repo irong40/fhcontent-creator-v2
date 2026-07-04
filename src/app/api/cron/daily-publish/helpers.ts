@@ -46,13 +46,32 @@ export function getConfiguredTargetPlatforms(
     return all.filter((p) => Boolean(accounts[p as keyof PlatformAccounts]));
 }
 
+/**
+ * Safe parse for a JSON-array carousel_url value. Returns null on malformed
+ * JSON or a non-array payload instead of throwing — one truncated/hand-edited
+ * row must not crash publishTopic on every hourly tick forever (there is no
+ * retry budget on this path, unlike platform failures; review 2026-07-04).
+ * A null return flows into getMediaUrl's existing "no media URL — skipped"
+ * warning path, which surfaces in the alert email.
+ */
+function parseCarouselJson(raw: string): string[] | null {
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return null;
+        return parsed.filter((u): u is string => typeof u === 'string');
+    } catch {
+        console.warn(`[daily-publish] Malformed carousel_url JSON — treating as no media: ${raw.slice(0, 120)}`);
+        return null;
+    }
+}
+
 export function getMediaUrl(piece: { piece_type: string; carousel_url: string | null; video_url: string | null }): string | null {
     if (piece.piece_type === 'carousel') {
         if (!piece.carousel_url) return null;
         // If stored as JSON array, return first URL for primary media
         if (piece.carousel_url.startsWith('[')) {
-            const urls = JSON.parse(piece.carousel_url) as string[];
-            return urls[0] || null;
+            const urls = parseCarouselJson(piece.carousel_url);
+            return urls?.[0] || null;
         }
         return piece.carousel_url;
     }
@@ -62,7 +81,7 @@ export function getMediaUrl(piece: { piece_type: string; carousel_url: string | 
 export function getCarouselUrls(piece: { carousel_url: string | null }): string[] {
     if (!piece.carousel_url) return [];
     if (piece.carousel_url.startsWith('[')) {
-        return JSON.parse(piece.carousel_url) as string[];
+        return parseCarouselJson(piece.carousel_url) ?? [];
     }
     return [piece.carousel_url];
 }
