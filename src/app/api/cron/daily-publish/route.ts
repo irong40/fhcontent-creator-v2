@@ -394,6 +394,17 @@ export async function publishTopic(
             })
             .eq('id', piece.id);
 
+        // Fold this tick's outcomes back into the in-memory piece so the
+        // total-failure analysis below (countPlatformOutcomes /
+        // hasRetryablePlatform) sees CURRENT state, not the stale snapshot
+        // fetched at the top of this function. Without this, a fresh topic
+        // failing every platform on its FIRST tick (e.g. the 2026-06-28
+        // Blotato 401 outage) has zero 'failed' entries in the stale array,
+        // hasRetryablePlatform returns false, and the topic is terminally
+        // marked 'failed' after 1 attempt instead of the designed
+        // MAX_PLATFORM_RETRIES (review 2026-07-04).
+        piece.published_platforms = updatedPlatforms as PublishedPlatforms;
+
         result.piecesProcessed++;
     }
 
