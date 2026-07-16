@@ -19,6 +19,8 @@ import type { PublishedPlatforms, PlatformStatus } from '@/types/database';
  * submission is only resolved once.
  */
 
+export const maxDuration = 300;
+
 const LOOKBACK_DAYS = 60;
 /** Bound Blotato calls per run so the route stays well inside function limits. */
 const MAX_URL_RESOLUTIONS_PER_RUN = 80;
