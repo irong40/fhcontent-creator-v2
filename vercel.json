@@ -21,7 +21,7 @@
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/analytics/pull",
+      "path": "/api/cron/analytics-pull",
       "schedule": "0 15 * * *"
     },
     {
