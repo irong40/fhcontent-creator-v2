@@ -157,6 +157,36 @@ export interface BlotatoPostStatus {
     platformPostId?: string;
 }
 
+export interface BlotatoPublishedPostListItem {
+    /** Numeric published-post id — the key for GET /posts/{id}/analytics.
+     *  NOT the postSubmissionId UUID returned by POST /posts. */
+    id: string;
+    platform: Platform | 'other';
+    text: string;
+    mediaUrls: string[];
+    postTime: string;
+    state: {
+        type: 'scheduled' | 'published' | 'failed';
+        postUrl?: string;
+        errorMessage?: string;
+    };
+}
+
+export interface BlotatoPostListResponse {
+    items: BlotatoPublishedPostListItem[];
+    cursor?: string;
+}
+
+/** Subset of Blotato's analytics metrics we persist. The API returns many
+ *  more platform-specific fields; keep this loose and pick what we store. */
+export interface BlotatoPostAnalytics {
+    publishedPostId: string;
+    platform: Platform | 'other';
+    lastFetchedAt: string | null;
+    lastError: string | null;
+    metrics: Record<string, number | null | undefined> | null;
+}
+
 export interface BlotatoTemplateInfo {
     id: string;
     name: string;
@@ -413,6 +443,22 @@ class BlotatoClient {
 
     async getPostStatus(postSubmissionId: string): Promise<BlotatoPostStatus> {
         return this.request<BlotatoPostStatus>(`/posts/${postSubmissionId}`, 'GET');
+    }
+
+    /** List published posts (paginated). `since` bounds the window; walk
+     *  `cursor` until the response omits it. */
+    async listPublishedPosts(since: string, cursor?: string): Promise<BlotatoPostListResponse> {
+        const params = new URLSearchParams({ since, limit: '250' });
+        params.append('status', 'published');
+        if (cursor) params.append('cursor', cursor);
+        return this.request<BlotatoPostListResponse>(`/posts?${params.toString()}`, 'GET');
+    }
+
+    /** Engagement metrics for a published post. Takes the numeric id from
+     *  listPublishedPosts, NOT the submission UUID. `metrics` is null until
+     *  Blotato's background collector first fetches the post. */
+    async getPostAnalytics(publishedPostId: string): Promise<BlotatoPostAnalytics> {
+        return this.request<BlotatoPostAnalytics>(`/posts/${publishedPostId}/analytics`, 'GET');
     }
 
     async schedulePost(

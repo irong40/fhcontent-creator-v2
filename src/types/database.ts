@@ -949,6 +949,11 @@ export interface PlatformStatus {
     post_id?: string;
     published_at?: string;
     error?: string;
+    /** Live post URL resolved from Blotato after publish. Written lazily by
+     *  the analytics pull (getPostStatus → publicUrl) and used to join our
+     *  submission UUIDs to Blotato's numeric published-post ids, whose
+     *  analytics endpoint keys the engagement metrics. */
+    post_url?: string;
     /** Number of failed attempts on this platform. Incremented by
      *  daily-publish on each retry. Capped by MAX_PLATFORM_RETRIES — at
      *  the cap we stop retrying so the topic settles as partially_published
