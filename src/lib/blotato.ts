@@ -155,6 +155,10 @@ export interface BlotatoPostStatus {
     publishedAt?: string;
     error?: string;
     platformPostId?: string;
+    /** Live URL of the published post — present once status is 'published'.
+     *  Blotato returns it as publicUrl; some responses use postUrl. */
+    publicUrl?: string;
+    postUrl?: string;
 }
 
 export interface BlotatoPublishedPostListItem {

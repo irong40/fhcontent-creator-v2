@@ -112,6 +112,134 @@ export interface AnalyticsPullResult {
     error?: string;
 }
 
+type AdminClient = ReturnType<typeof createAdminClient>;
+
+/** Step 1: resolve and cache the live post URL for published platform entries
+ *  that lack one, bounded per run. Mutates each piece's published_platforms in
+ *  place and persists the ones that changed. */
+export async function resolvePostUrls(
+    supabase: AdminClient,
+    pieces: PieceRow[],
+): Promise<{ urlsResolved: number; urlResolutionErrors: number }> {
+    let urlsResolved = 0;
+    let urlResolutionErrors = 0;
+    let resolutionsLeft = MAX_URL_RESOLUTIONS_PER_RUN;
+
+    for (const piece of pieces) {
+        const platforms = piece.published_platforms;
+        if (!platforms) continue;
+
+        let dirty = false;
+        for (const entry of Object.values(platforms) as Array<PlatformStatus | undefined>) {
+            if (!entry || entry.status !== 'published' || !entry.post_id || entry.post_url) continue;
+            if (resolutionsLeft <= 0) break;
+            resolutionsLeft--;
+            try {
+                const status = await blotato.getPostStatus(entry.post_id);
+                const url = status.publicUrl ?? status.postUrl;
+                if (typeof url === 'string' && url.length > 0) {
+                    entry.post_url = url;
+                    dirty = true;
+                    urlsResolved++;
+                }
+            } catch {
+                urlResolutionErrors++;
+            }
+            await sleep(150);
+        }
+
+        if (dirty) {
+            await supabase
+                .from('content_pieces')
+                .update({ published_platforms: platforms })
+                .eq('id', piece.id);
+        }
+    }
+
+    return { urlsResolved, urlResolutionErrors };
+}
+
+/** Step 2: pull posts-with-metrics from GET /v2/analytics, unioned across sort
+ *  keys, and index the latest metrics by normalized post URL. No DB
+ *  dependency — pure Blotato, so it unit-tests against a mocked client. */
+export async function buildMetricsByUrl(sinceIso: string): Promise<Map<string, BlotatoMetrics>> {
+    const metricsByUrl = new Map<string, BlotatoMetrics>();
+    const seenPostIds = new Set<string>();
+
+    for (const sortBy of ANALYTICS_SORT_KEYS) {
+        let page: BlotatoAnalyticsListItem[];
+        try {
+            const res = await blotato.listTopPosts({ sortBy, since: sinceIso, limit: ANALYTICS_PAGE_LIMIT });
+            page = res.items ?? [];
+        } catch (e) {
+            // A single failing sort key shouldn't abort the run; keep going.
+            console.error(`[analytics-pull] listTopPosts(${sortBy}) failed:`, (e as Error).message);
+            continue;
+        }
+        for (const item of page) {
+            if (seenPostIds.has(item.id)) continue;
+            seenPostIds.add(item.id);
+            const key = normalizeUrl(item.postUrl);
+            const metrics = item.latestMetrics?.metrics;
+            if (key && metrics) metricsByUrl.set(key, metrics);
+        }
+        await sleep(150);
+    }
+
+    return metricsByUrl;
+}
+
+export interface SnapshotResult {
+    snapshots: number;
+    matchedNoSignal: number;
+    unmatched: number;
+    insertErrors: number;
+    sampleInsertError?: string;
+    sampleUnmatchedUrl?: string;
+}
+
+/** Step 3: match each published platform entry to its metrics and insert a
+ *  point-in-time snapshot into performance_metrics. */
+export async function snapshotMatchedMetrics(
+    supabase: AdminClient,
+    pieces: PieceRow[],
+    metricsByUrl: Map<string, BlotatoMetrics>,
+): Promise<SnapshotResult> {
+    const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0 };
+
+    for (const piece of pieces) {
+        const platforms = piece.published_platforms;
+        if (!platforms) continue;
+
+        for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
+            if (!entry || entry.status !== 'published' || !entry.post_url) continue;
+            const metrics = metricsByUrl.get(normalizeUrl(entry.post_url));
+            if (!metrics) {
+                out.unmatched++;
+                if (!out.sampleUnmatchedUrl) out.sampleUnmatchedUrl = entry.post_url;
+                continue;
+            }
+            const mapped = mapMetrics(metrics);
+            const hasSignal = mapped.views + mapped.likes + mapped.comments + mapped.shares + mapped.saves > 0;
+            if (!hasSignal) { out.matchedNoSignal++; continue; }
+
+            const { error: insertError } = await supabase.from('performance_metrics').insert({
+                content_piece_id: piece.id,
+                platform,
+                ...mapped,
+            });
+            if (insertError) {
+                out.insertErrors++;
+                if (!out.sampleInsertError) out.sampleInsertError = insertError.message;
+            } else {
+                out.snapshots++;
+            }
+        }
+    }
+
+    return out;
+}
+
 export async function runAnalyticsPull(): Promise<{ status: number; body: AnalyticsPullResult }> {
     const supabase = createAdminClient();
     const sinceIso = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -143,97 +271,25 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
         return { status: 200, body: { ...empty, message: 'No published pieces in window' } };
     }
 
-    const result: AnalyticsPullResult = { ...empty, message: 'Analytics pull complete', pieces_scanned: pieces.length };
+    const rows = pieces as PieceRow[];
+    const resolved = await resolvePostUrls(supabase, rows);
+    const metricsByUrl = await buildMetricsByUrl(sinceIso);
+    const snap = await snapshotMatchedMetrics(supabase, rows, metricsByUrl);
 
-    // -- Step 1: lazily resolve missing post_url for published platform entries
-    let resolutionsLeft = MAX_URL_RESOLUTIONS_PER_RUN;
-    for (const piece of pieces as PieceRow[]) {
-        const platforms = piece.published_platforms;
-        if (!platforms) continue;
-
-        let dirty = false;
-        for (const entry of Object.values(platforms) as Array<PlatformStatus | undefined>) {
-            if (!entry || entry.status !== 'published' || !entry.post_id || entry.post_url) continue;
-            if (resolutionsLeft <= 0) break;
-            resolutionsLeft--;
-            try {
-                const status = await blotato.getPostStatus(entry.post_id);
-                const url = (status as unknown as Record<string, unknown>).publicUrl
-                    ?? (status as unknown as Record<string, unknown>).postUrl;
-                if (typeof url === 'string' && url.length > 0) {
-                    entry.post_url = url;
-                    dirty = true;
-                    result.urlsResolved++;
-                }
-            } catch {
-                result.urlResolutionErrors++;
-            }
-            await sleep(150);
-        }
-
-        if (dirty) {
-            await supabase
-                .from('content_pieces')
-                .update({ published_platforms: platforms })
-                .eq('id', piece.id);
-        }
-    }
-
-    // -- Step 2: pull posts-with-metrics from GET /v2/analytics, unioned across
-    // sort keys, and index the latest metrics by normalized post URL.
-    const metricsByUrl = new Map<string, BlotatoMetrics>();
-    const seenPostIds = new Set<string>();
-    for (const sortBy of ANALYTICS_SORT_KEYS) {
-        let page: BlotatoAnalyticsListItem[];
-        try {
-            const res = await blotato.listTopPosts({ sortBy, since: sinceIso, limit: ANALYTICS_PAGE_LIMIT });
-            page = res.items ?? [];
-        } catch (e) {
-            // A single failing sort key shouldn't abort the run; keep going.
-            console.error(`[analytics-pull] listTopPosts(${sortBy}) failed:`, (e as Error).message);
-            continue;
-        }
-        for (const item of page) {
-            if (seenPostIds.has(item.id)) continue;
-            seenPostIds.add(item.id);
-            const key = normalizeUrl(item.postUrl);
-            const metrics = item.latestMetrics?.metrics;
-            if (key && metrics) metricsByUrl.set(key, metrics);
-        }
-        await sleep(150);
-    }
-    result.analyticsItems = metricsByUrl.size;
-
-    // -- Step 3: match each published platform entry to its metrics, snapshot.
-    for (const piece of pieces as PieceRow[]) {
-        const platforms = piece.published_platforms;
-        if (!platforms) continue;
-
-        for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
-            if (!entry || entry.status !== 'published' || !entry.post_url) continue;
-            const metrics = metricsByUrl.get(normalizeUrl(entry.post_url));
-            if (!metrics) {
-                result.unmatched++;
-                if (!result.sampleUnmatchedUrl) result.sampleUnmatchedUrl = entry.post_url;
-                continue;
-            }
-            const mapped = mapMetrics(metrics);
-            const hasSignal = mapped.views + mapped.likes + mapped.comments + mapped.shares + mapped.saves > 0;
-            if (!hasSignal) { result.matchedNoSignal++; continue; }
-
-            const { error: insertError } = await supabase.from('performance_metrics').insert({
-                content_piece_id: piece.id,
-                platform,
-                ...mapped,
-            });
-            if (insertError) {
-                result.insertErrors++;
-                if (!result.sampleInsertError) result.sampleInsertError = insertError.message;
-            } else {
-                result.snapshots++;
-            }
-        }
-    }
+    const result: AnalyticsPullResult = {
+        ...empty,
+        message: 'Analytics pull complete',
+        pieces_scanned: rows.length,
+        urlsResolved: resolved.urlsResolved,
+        urlResolutionErrors: resolved.urlResolutionErrors,
+        analyticsItems: metricsByUrl.size,
+        snapshots: snap.snapshots,
+        matchedNoSignal: snap.matchedNoSignal,
+        unmatched: snap.unmatched,
+        insertErrors: snap.insertErrors,
+        sampleInsertError: snap.sampleInsertError,
+        sampleUnmatchedUrl: snap.sampleUnmatchedUrl,
+    };
 
     // -- A zero-row "success" is invisible to failure alerts. Surface it: if we
     // scanned pieces but stored nothing, something upstream is broken.
