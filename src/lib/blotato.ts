@@ -177,6 +177,10 @@ export interface BlotatoPostListResponse {
     cursor?: string;
 }
 
+/** Blotato returns every metric value as a STRING (counts can exceed JS
+ *  number precision). Keep the value type loose; callers must coerce. */
+export type BlotatoMetrics = Record<string, number | string | null | undefined>;
+
 /** Subset of Blotato's analytics metrics we persist. The API returns many
  *  more platform-specific fields; keep this loose and pick what we store. */
 export interface BlotatoPostAnalytics {
@@ -184,8 +188,34 @@ export interface BlotatoPostAnalytics {
     platform: Platform | 'other';
     lastFetchedAt: string | null;
     lastError: string | null;
-    metrics: Record<string, number | null | undefined> | null;
+    metrics: BlotatoMetrics | null;
 }
+
+/** One entry from GET /v2/analytics — a published post WITH its latest
+ *  metrics inline. This is the endpoint that actually returns engagement
+ *  (unlike GET /posts/{id}/analytics, which returns an empty object for many
+ *  posts that clearly have metrics here). */
+export interface BlotatoAnalyticsListItem {
+    /** Numeric published-post id. */
+    id: string;
+    content: string;
+    postUrl: string | null;
+    platform: Platform | 'other';
+    createdAt: string;
+    mediaUrls: string[];
+    latestMetrics: { fetchedAt: string; metrics: BlotatoMetrics } | null;
+    metricsHistory?: Array<{ fetchedAt: string; metrics: BlotatoMetrics }>;
+}
+
+export interface BlotatoAnalyticsListResponse {
+    items: BlotatoAnalyticsListItem[];
+}
+
+export type BlotatoAnalyticsSortBy =
+    | 'views_count'
+    | 'likes_count'
+    | 'comments_count'
+    | 'reach_count';
 
 export interface BlotatoTemplateInfo {
     id: string;
@@ -456,9 +486,34 @@ class BlotatoClient {
 
     /** Engagement metrics for a published post. Takes the numeric id from
      *  listPublishedPosts, NOT the submission UUID. `metrics` is null until
-     *  Blotato's background collector first fetches the post. */
+     *  Blotato's background collector first fetches the post.
+     *
+     *  NOTE: this endpoint frequently returns an empty `metrics: {}` (or 404)
+     *  even for posts that DO have metrics — read them via listTopPosts
+     *  instead. Kept for completeness / single-post lookups. */
     async getPostAnalytics(publishedPostId: string): Promise<BlotatoPostAnalytics> {
         return this.request<BlotatoPostAnalytics>(`/posts/${publishedPostId}/analytics`, 'GET');
+    }
+
+    /** GET /v2/analytics — published posts WITH their latest metrics inline,
+     *  ranked by `sortBy`. This is the reliable engagement source. Omitting
+     *  `platform` returns every platform (including tiktok/youtube, which the
+     *  platform filter itself does not accept). Capped at `limit` (max 100);
+     *  there is no cursor, so widen coverage by unioning several sort keys. */
+    async listTopPosts(opts: {
+        sortBy?: BlotatoAnalyticsSortBy;
+        since?: string;
+        until?: string;
+        limit?: number;
+        platform?: Platform;
+    } = {}): Promise<BlotatoAnalyticsListResponse> {
+        const params = new URLSearchParams();
+        params.append('sortBy', opts.sortBy ?? 'views_count');
+        if (opts.since) params.append('since', opts.since);
+        if (opts.until) params.append('until', opts.until);
+        params.append('limit', String(opts.limit ?? 100));
+        if (opts.platform) params.append('platform', opts.platform);
+        return this.request<BlotatoAnalyticsListResponse>(`/analytics?${params.toString()}`, 'GET');
     }
 
     async schedulePost(
