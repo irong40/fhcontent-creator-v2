@@ -57,9 +57,8 @@ const COMMIT = args.includes('--commit');
 // Default start = tomorrow (UTC date), so nothing fires the same day it's staged.
 const START = argVal('--start', new Date(Date.now() + 864e5).toISOString().split('T')[0]);
 
-/** UTC publish_at for the Nth scheduled item, filling PER_DAY slots per day
- *  starting at START. Returns { date, at, time }. */
-function slotFor(index: number): { date: string; at: string; timeET: string } {
+/** UTC publish_at for the Nth grid position (PER_DAY slots per day from START). */
+function slotAt(index: number): { date: string; at: string; timeET: string } {
     const day = Math.floor(index / PER_DAY);
     const slot = SLOTS[index % PER_DAY];
     const base = new Date(`${START}T00:00:00Z`);
@@ -67,6 +66,21 @@ function slotFor(index: number): { date: string; at: string; timeET: string } {
     const date = base.toISOString().split('T')[0];
     const at = `${date}T${slot.utc}:00Z`;
     return { date, at, timeET: slot.et };
+}
+
+/** Slot allocator that skips slots already occupied by existing topics for the
+ *  persona. Without this, a partial rerun re-issued day-one slots to the
+ *  remaining questions and stacked 6 posts on one day (Codex review
+ *  2026-07-18, Major 5). */
+function makeSlotAllocator(occupiedAt: Set<string>) {
+    let index = 0;
+    return () => {
+        for (;;) {
+            const slot = slotAt(index++);
+            const key = new Date(slot.at).toISOString();
+            if (!occupiedAt.has(key)) return slot;
+        }
+    };
 }
 
 async function main() {
@@ -90,39 +104,53 @@ async function main() {
     console.log(`\n${COMMIT ? '=== COMMIT ===' : '=== DRY RUN (no writes) ==='}`);
     console.log(`Module ${MODULE}, template ${TEMPLATE}, ${eligible.length} eligible, ${PER_DAY}/day from ${START}\n`);
 
-    let scheduleIndex = 0;
-    let created = 0, skipped = 0;
+    // Slots already taken by ANY existing topic for this persona (previous
+    // runs, other modules) — new items fill the gaps instead of colliding.
+    const { data: existingTopics } = await sb
+        .from('topics')
+        .select('publish_at')
+        .eq('persona_id', SAI_PERSONA_ID)
+        .not('publish_at', 'is', null);
+    const occupiedAt = new Set(
+        (existingTopics ?? []).map((t: { publish_at: string }) => new Date(t.publish_at).toISOString()),
+    );
+    const nextSlot = makeSlotAllocator(occupiedAt);
+
+    let created = 0, skipped = 0, repaired = 0;
 
     for (const q of eligible) {
         const topicHash = `quiz-${q.id}`;
         const { data: existing } = await sb.from('topics').select('id').eq('topic_hash', topicHash).maybeSingle();
         if (existing) {
-            console.log(`↷ skip (already ingested): ${q.id}`);
-            skipped++;
+            // Repair path (Codex review 2026-07-18, Major 4): a prior run may
+            // have created the topic but died before the content piece. Such a
+            // topic will be marked failed by daily-publish ("no content
+            // pieces") — recreate the missing piece instead of skipping.
+            const { data: piece } = await sb
+                .from('content_pieces').select('id').eq('topic_id', existing.id).limit(1).maybeSingle();
+            if (piece) {
+                console.log(`↷ skip (already ingested): ${q.id}`);
+                skipped++;
+                continue;
+            }
+            console.log(`⚠ ${q.id}: topic exists but piece missing — repairing`);
+            if (COMMIT) {
+                const ok = await uploadAndInsertPiece(sb, q, existing.id);
+                if (ok) repaired++;
+            }
             continue;
         }
 
-        const slot = slotFor(scheduleIndex);
-        scheduleIndex++;
-
-        const localFile = path.join(QUIZ_DIR, `${q.id}-${TEMPLATE}.mp4`);
-        const storagePath = `quiz/${q.id}-${TEMPLATE}.mp4`;
-        const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL!.trim()}/storage/v1/object/public/media/${storagePath}`;
+        const slot = nextSlot();
 
         console.log(`• ${q.id} → ${slot.date} ${slot.timeET} ET`);
         console.log(`    title: ${q.seo.title.slice(0, 70)}`);
 
         if (!COMMIT) continue;
 
-        // 1. Upload the rendered MP4 to public storage.
-        const bytes = readFileSync(localFile);
-        const { error: upErr } = await sb.storage.from('media').upload(storagePath, bytes, {
-            contentType: 'video/mp4',
-            upsert: true,
-        });
-        if (upErr) { console.error(`    ✗ upload failed: ${upErr.message}`); continue; }
-
-        // 2. Topic (Field Ops persona), scheduled at its slot.
+        // 1. Topic (Field Ops persona), scheduled at its slot. Created first so
+        //    a mid-run death leaves a repairable orphan (rerun recreates the
+        //    piece) rather than an orphaned storage object.
         const { data: topic, error: tErr } = await sb.from('topics').insert({
             persona_id: SAI_PERSONA_ID,
             title: q.seo.title,
@@ -137,24 +165,48 @@ async function main() {
         }).select('id').single();
         if (tErr || !topic) { console.error(`    ✗ topic insert failed: ${tErr?.message}`); continue; }
 
-        // 3. Single content piece carrying the pre-rendered video.
-        const { error: pErr } = await sb.from('content_pieces').insert({
-            topic_id: topic.id,
-            piece_type: 'short_1',
-            piece_order: 1,
-            video_url: publicUrl,
-            caption_long: q.seo.description,
-            caption_short: q.hook,
-            status: 'ready',
-        });
-        if (pErr) { console.error(`    ✗ piece insert failed: ${pErr.message}`); continue; }
+        // 2. Upload the MP4 + insert the content piece.
+        const ok = await uploadAndInsertPiece(sb, q, topic.id);
+        if (!ok) continue;
 
         console.log(`    ✓ scheduled`);
         created++;
     }
 
-    console.log(`\n${COMMIT ? 'Created' : 'Would create'} ${COMMIT ? created : eligible.length - skipped}, skipped ${skipped}.`);
+    console.log(`\n${COMMIT ? 'Created' : 'Would create'} ${COMMIT ? created : eligible.length - skipped}, skipped ${skipped}, repaired ${repaired}.`);
     if (!COMMIT) console.log('Re-run with --commit to upload + schedule.');
+}
+
+/** Upload the question's rendered MP4 to public storage and attach the single
+ *  content piece to `topicId`. Shared by the create and repair paths so a
+ *  partially-ingested question always converges to the same final state. */
+async function uploadAndInsertPiece(
+    sb: ReturnType<typeof createClient>,
+    q: QuizQuestion,
+    topicId: string,
+): Promise<boolean> {
+    const localFile = path.join(QUIZ_DIR, `${q.id}-${TEMPLATE}.mp4`);
+    const storagePath = `quiz/${q.id}-${TEMPLATE}.mp4`;
+    const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL!.trim()}/storage/v1/object/public/media/${storagePath}`;
+
+    const bytes = readFileSync(localFile);
+    const { error: upErr } = await sb.storage.from('media').upload(storagePath, bytes, {
+        contentType: 'video/mp4',
+        upsert: true,
+    });
+    if (upErr) { console.error(`    ✗ upload failed: ${upErr.message}`); return false; }
+
+    const { error: pErr } = await sb.from('content_pieces').insert({
+        topic_id: topicId,
+        piece_type: 'short_1',
+        piece_order: 1,
+        video_url: publicUrl,
+        caption_long: q.seo.description,
+        caption_short: q.hook,
+        status: 'ready',
+    });
+    if (pErr) { console.error(`    ✗ piece insert failed: ${pErr.message}`); return false; }
+    return true;
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

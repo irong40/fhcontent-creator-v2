@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { publishTopicSchema } from '@/lib/schemas';
 import { publishTopic } from '@/app/api/cron/daily-publish/route';
+import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 
 export async function POST(
     request: NextRequest,
@@ -45,13 +46,27 @@ export async function POST(
             );
         }
 
-        const result = await publishTopic(id);
+        // Same workflow lock as the hourly cron. Without it, a manual publish
+        // racing a cron tick double-reads the pre-submission platform state and
+        // submits the same video twice (Codex review 2026-07-18, Major 2).
+        const lockToken = await acquireLock('daily-publish');
+        if (!lockToken) {
+            return NextResponse.json(
+                { success: false, error: 'A publish run is already in progress — retry in a minute' },
+                { status: 409 },
+            );
+        }
 
-        return NextResponse.json({
-            success: true,
-            ...result,
-            hasWarnings: result.warnings.length > 0,
-        });
+        try {
+            const result = await publishTopic(id);
+            return NextResponse.json({
+                success: true,
+                ...result,
+                hasWarnings: result.warnings.length > 0,
+            });
+        } finally {
+            await releaseLock('daily-publish', lockToken);
+        }
     } catch (error) {
         console.error('Manual publish error:', error);
         return NextResponse.json(

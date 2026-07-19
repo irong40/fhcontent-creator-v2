@@ -48,10 +48,12 @@ export function resolveFacebookPageId(
     accounts: PlatformAccounts | null | undefined,
     facebookPageIds: string[] | null | undefined,
 ): string | null {
-    if (facebookPageIds && facebookPageIds.length > 0 && facebookPageIds[0]) {
-        return facebookPageIds[0];
-    }
-    return accounts?.facebook_page ?? null;
+    // Normalize both sources: a whitespace-only or empty id must resolve to
+    // null (not reach Blotato as pageId: "") — Codex review 2026-07-18, Minor 1.
+    const fromArray = facebookPageIds?.[0]?.trim();
+    if (fromArray) return fromArray;
+    const legacy = accounts?.facebook_page?.trim();
+    return legacy || null;
 }
 
 /**

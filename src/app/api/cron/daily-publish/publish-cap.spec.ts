@@ -26,16 +26,20 @@ import { PLATFORM_DAILY_CAP } from '@/lib/publish-limits';
 
 interface Recorded { topicUpdates: Array<Record<string, unknown>>; pieceUpdates: Array<Record<string, unknown>>; }
 
-/** Supabase stub whose rpc returns a caller-supplied per-platform count. */
+/** Supabase stub whose rpc returns a caller-supplied per-platform count.
+ *  Pass `rpcError: true` to simulate the counter RPC failing. */
 function makeSupabaseMock(
     topicRow: Record<string, unknown>,
     piecesRows: Array<Record<string, unknown>>,
     calls: Recorded,
     rpcCounts: Record<string, number>,
+    rpcError = false,
 ) {
     return {
         rpc: (_fn: string, args: { p_platform: string }) =>
-            Promise.resolve({ data: rpcCounts[args.p_platform] ?? 0, error: null }),
+            rpcError
+                ? Promise.resolve({ data: null, error: { message: 'function does not exist' } })
+                : Promise.resolve({ data: rpcCounts[args.p_platform] ?? 0, error: null }),
         from(table: string) {
             if (table === 'topics') {
                 return {
@@ -110,6 +114,21 @@ describe('publishTopic 24h cap guard', () => {
         expect(result.deferred).toBe(true);
         expect(notifyError).not.toHaveBeenCalled();
         // Topic must NOT be marked failed for a pure deferral.
+        expect(calls.topicUpdates.every((u) => u.status !== 'failed')).toBe(true);
+    });
+
+    // Codex review 2026-07-18, Major 6: an accounting failure must never become
+    // "usage is zero" — capped platforms FAIL CLOSED (defer) when the counter
+    // RPC errors, instead of publishing blind past the provider cap.
+    it('fails closed (defers capped platforms) when the counter RPC errors', async () => {
+        const supabase = makeSupabaseMock(topic(), [piece()], calls, {}, /* rpcError */ true);
+        (createAdminClient as ReturnType<typeof vi.fn>).mockReturnValue(supabase);
+
+        const result = await publishTopic('topic-1');
+
+        // Both capped platforms (youtube, tiktok) deferred; nothing submitted.
+        expect(blotato.publishPost).not.toHaveBeenCalled();
+        expect(result.capDeferrals?.length).toBe(2);
         expect(calls.topicUpdates.every((u) => u.status !== 'failed')).toBe(true);
     });
 });

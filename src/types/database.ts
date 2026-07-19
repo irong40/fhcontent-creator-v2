@@ -975,6 +975,12 @@ export interface PlatformStatus {
     status: 'pending' | 'published' | 'failed';
     post_id?: string;
     published_at?: string;
+    /** When we submitted this post to Blotato. The cap counter's primary
+     *  timestamp: a pending submission must count against the rolling-24h
+     *  window from SUBMISSION time — falling back to the piece's created_at
+     *  undercounts old backlog pieces submitted today (Codex review 2026-07-18,
+     *  Major 1: exactly the catch-up-storm scenario the cap guards against). */
+    submitted_at?: string;
     error?: string;
     /** Live post URL resolved from Blotato after publish. Written lazily by
      *  the analytics pull (getPostStatus → publicUrl) and used to join our
@@ -997,6 +1003,7 @@ export interface PublishedPlatforms {
     twitter?: PlatformStatus;
     bluesky?: PlatformStatus;
     linkedin?: PlatformStatus;
+    facebook?: PlatformStatus;
 }
 
 export type TopicStatus =

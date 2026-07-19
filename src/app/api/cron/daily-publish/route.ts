@@ -225,7 +225,14 @@ async function publishPieceToPlatform(
     });
 
     return {
-        platformStatus: { status: 'pending', post_id: response.postSubmissionId },
+        platformStatus: {
+            status: 'pending',
+            post_id: response.postSubmissionId,
+            // Cap accounting anchor: the rolling-24h window counts from
+            // submission, not piece creation (old backlog pieces submitted
+            // today must count toward today's provider quota).
+            submitted_at: new Date().toISOString(),
+        },
         result: { status: 'pending', postId: response.postSubmissionId },
     };
 }
@@ -293,12 +300,22 @@ export async function publishTopic(
     for (const platform of Object.keys(PLATFORM_DAILY_CAP)) {
         const accountId = accounts?.[platform as keyof PlatformAccounts];
         if (!accountId) continue;
-        const { data: cnt } = await supabase.rpc('count_recent_account_posts', {
+        const { data: cnt, error: cntError } = await supabase.rpc('count_recent_account_posts', {
             p_platform: platform,
             p_account_id: accountId,
             p_hours: DAILY_CAP_WINDOW_HOURS,
         });
-        accountUsage.set(platform, typeof cnt === 'number' ? cnt : 0);
+        if (cntError || typeof cnt !== 'number') {
+            // FAIL CLOSED (Codex review 2026-07-18, Major 6): if the counter is
+            // unavailable, we cannot prove we're under the provider cap — treat
+            // the account as AT cap so the platform defers to a later tick
+            // rather than publishing blind. An accounting failure must never
+            // become "usage is zero".
+            console.error(`[daily-publish] cap counter failed for ${platform}:${accountId} — deferring platform (fail closed): ${cntError?.message ?? 'non-numeric result'}`);
+            accountUsage.set(platform, PLATFORM_DAILY_CAP[platform]);
+            continue;
+        }
+        accountUsage.set(platform, cnt);
     }
 
     for (const piece of pieces as ContentPiece[]) {
@@ -517,7 +534,12 @@ export async function publishTopic(
                 (ps) => ps?.status !== 'failed' || isTransientPublishError(ps.error),
             );
         });
-        if (allFailuresTransient) {
+        // Transient-ness keeps a topic retryable ONLY while some platform still
+        // has retry budget — otherwise this early return would bypass the
+        // MAX_PLATFORM_RETRIES ceiling and the topic would silently loop until
+        // the 3-day staleness guard drops it with no terminal alert (Codex
+        // review 2026-07-18, Major 3).
+        if (allFailuresTransient && hasRetryablePlatform(pieces as ContentPiece[], MAX_PLATFORM_RETRIES)) {
             await supabase
                 .from('topics')
                 .update({ status: 'scheduled', error_message: 'Provider rate/quota limit — will retry when the 24h window clears' })
