@@ -1,34 +1,34 @@
 # Session Handoff
-**Date:** 2026-07-18
-**Branch:** master
+**Date:** 2026-07-19 (session spanned 7/18 evening)
+**Branch:** master (HEAD 70db1ad, deployed prod READY)
 
 ## Accomplished
-- Diagnosed why social metrics stopped: `performance_metrics` had no rows since 7/10; every `analytics-pull` cron run stored ZERO snapshots (verified by invoking prod cron: `pieces_scanned:227, snapshots:0, insertErrors:234`).
-- Root cause (two independent defects, both confirmed against live Blotato):
-  1. Collector read `GET /posts/{id}/analytics`, which returns empty `metrics:{}` / 404 even for posts with real metrics. Real engagement is inline on `GET /v2/analytics`.
-  2. Blotato returns metrics as STRINGS ("1049"); `mapMetrics` used a `typeof==='number'` guard → mapped everything to 0.
-- Ruled OUT RLS/service-role (daily-publish uses the same admin client and writes fine in prod).
-- Fixed & shipped (commit `b310849`, pushed, deployed prod `dpl_Am5Wgv...` READY):
-  - `blotato.ts`: added `listTopPosts()` on `GET /v2/analytics`; string-tolerant metrics type.
-  - `analytics-pull.ts`: reads inline metrics unioned across sort keys, string coercion, URL-normalized join, split counters + sample errors, `notifyError` on zero-snapshot runs.
-  - `supabase/server.ts`: `.trim()` on admin env values.
-  - `analytics-pull.spec.ts`: new tests (8/8 pass). Lint + tsc clean.
-- **Verified in prod**: cron run wrote 75 snapshots, `insertErrors:0` (YouTube 58/812 views, Twitter 14/69, TikTok 3/9). Rows confirmed in DB.
+- **/admin/social account-first dashboard + recommendations panel** (migs 018/019): per-@handle performance via `blotato_accounts` registry + `get_account_performance`; winners ranked by weighted engagement; cross-account recommendations (scale/resonates/rethink/fix/blindspot). Live-verified in browser.
+- **Publish failures root-caused & fixed** (072d7c5, mig 020): Blotato failures come back as `errorMessage` (we read `.error` → all masked as "Publishing failed"); real causes were provider quota walls (YT 10/24h, TikTok OpenAPI) from the 7/15 catch-up storm. Added rolling-24h per-account cap guard in `publish-limits.ts` — defers at cap, transient errors stay retryable.
+- **Facebook publishing capability** (acf0f1b, mig 021): FB Reels target w/ pageId, per-persona `facebook_enabled` opt-in (default off). SAI Field Ops persona wired: FB page 899526466587385 + IG 59689; NE Corner IG 59691 → Tate/Avery (mig 022).
+- **M2 quiz staged multi-platform** via new `src/scripts/ingest-quiz.ts`: 20 videos (rendered template B in sai-training) → Supabase Storage → scheduled topics, 3/day **7/21→7/27** to SAI YT+FB+IG. Shifted +1 day after routing audit found an external Blotato queue (M1→SAI FB 7/19-20, M1→SAI TikTok 7/19-23) colliding at identical timestamps.
+- **Codex cross-model audit** (gpt-5.5, both repos): 12 findings, 11 fixed (70db1ad + mig 023): `submitted_at` cap anchoring, workflow lock on manual publish route, transient-retry ceiling, ingest orphan repair + DB-derived slot allocator, fail-closed counter, FB pageId trim, `facebook` in PublishedPlatforms; sai-training render exit codes + tmp/rename race + selector precedence.
+- 370 tests green, tsc + lint clean on changed files, all 4 deploys verified READY on Vercel.
 
 ## Next Steps
-- Let the daily 15:00 UTC cron backfill: `unmatched:281` shrinks as Step 1 resolves post URLs (capped 80/run) over the next few days. Optionally bump the cap or re-run the cron to accelerate.
-- Build the `/admin/social` dashboard (separate, larger task) on top of the now-flowing data — mirror the `BdIntelligence` Recharts pattern, leading indicators (retention, engagement rate, shares/saves).
-- `social_post_metrics` table is still 0 rows / no writer — decide if it's still wanted or drop it.
+- **Mon 7/21 ~9:05 AM ET: verify the first app-driven SAI publish** (YT+FB+IG) — check `/admin/social` + `published_platforms` facebook/instagram rows. First-ever FB/IG publish through this app.
+- Adam decision: external M1→TikTok 51302 queue posts during the account's warm-up window (his 7/16 rule) — keep or cancel via `blotato_delete_schedule`.
+- ~7/23: check whether Blotato collects metrics for the new IG accounts once posts exist; if not and IG numbers matter → scope IG Graph API.
+- M3–M6 quiz: write questions (`/part107-quiz`) → `render-quiz.js --module N --template B` → `ingest-quiz.ts --module N --commit`. A/B verdict ~7/20 may switch template.
+- Deferred from Codex review: DST hardcode in ingest slot times (fix before any post-November scheduling).
 
 ## Known Issues
-- `@sentinelaerialinspector` Part 107 high-view posts won't match here — they publish via the separate quiz-shorts pipeline, not this app's `content_pieces`.
-- Blotato coverage: only ~111 posts had metrics this run; grows as Blotato's background collector widens.
-- Pre-existing tsc errors in `src/lib/prompts.spec.ts` (regex flag, unrelated).
+- IG/Threads/FB engagement blind upstream (Blotato collects none) — publish health only.
+- Both new IG accounts are day-old taking 3 API reels/day; pause lever = remove `instagram` from persona.
+- Dormant legacy personas (Holloway/Ashford/Dr. Adam Pierce) point at F&H channels + dead config keys (`youtube_2`, `facebook_page`) — clean before reactivating.
+- Pre-existing tsc errors in `src/lib/prompts.spec.ts` (es2018 regex flag) and lint errors in `src/scripts/*` (unrelated).
+- Local Next build impossible on D: (exFAT junction failure) — Vercel build is the gate.
 
 ## Key Decisions
-- Use `GET /v2/analytics` (top posts, inline metrics) as the engagement source, not the per-post analytics endpoint.
-- Union 4 sort keys (views/likes/comments/reach) to widen coverage past the 100-item, no-cursor cap.
-- Alert (via `notifyError`) whenever pieces are scanned but zero snapshots stored.
+- In-pipeline hard cap (fail closed) instead of a monitoring agent for over-posting.
+- FB publishing gated per-persona (`facebook_enabled`) so capability ≠ auto-posting for Masonic pages.
+- Skip M1 FB backfill; M2-first (template B — loop views don't count as engaged since 2025).
+- Quiz content routed through the app (not a standalone publisher) to inherit cap guard + dashboard.
 
 ## Uncommitted Changes
-- None in source — all analytics changes committed (`b310849`) and pushed. Only `.claude/` state files updated by this qend.
+- None in this repo — all work committed & pushed (b310849…70db1ad). sai-training has pre-existing modified narration audio files (not from this session; render-script changes are committed).
