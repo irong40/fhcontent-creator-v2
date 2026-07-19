@@ -175,6 +175,7 @@ async function publishPieceToPlatform(
     topicTitle: string,
     mediaUrl: string,
     pageId?: string,
+    hasBakedAudio?: boolean,
 ): Promise<{ platformStatus: PlatformStatus; result: PlatformResult }> {
     // For carousel pieces on Instagram, upload all slides
     const mediaUrls: string[] = [];
@@ -209,9 +210,9 @@ async function publishPieceToPlatform(
     const target = buildTarget(platform, {
         title: platformTitle,
         isAiGenerated: true,
-        // quote_video carries its own ACE-Step music loop — TikTok must not
-        // auto-add a library track on top of it.
-        autoAddMusic: piece.piece_type !== 'quote_video',
+        // Pieces with a baked-in music bed (quote_video loops, pre-rendered
+        // quiz shorts) must not have TikTok lay a library track on top.
+        autoAddMusic: piece.piece_type !== 'quote_video' && !hasBakedAudio,
         // Facebook only: the Page to publish the Reel to.
         pageId,
     });
@@ -423,10 +424,14 @@ export async function publishTopic(
                 ? resolveFacebookPageId(accounts, persona.facebook_page_ids) ?? undefined
                 : undefined;
 
+            // Pre-rendered quiz shorts (ingest-quiz.ts sets this sentinel
+            // voice_id) ship with their own music bed baked in.
+            const hasBakedAudio = topic.voice_id === 'quiz-prerendered';
+
             pieceAttempted = true;
             try {
                 const { platformStatus, result: platformResult } =
-                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl, pageId);
+                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl, pageId, hasBakedAudio);
                 updatedPlatforms[platform] = platformStatus;
                 result.platformResults[key] = platformResult;
                 anySuccess = true;
