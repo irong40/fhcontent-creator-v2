@@ -14,9 +14,11 @@ import { blotato } from '@/lib/blotato';
 import {
     mapMetrics,
     normalizeUrl,
+    handleFromUrl,
     resolvePostUrls,
-    buildMetricsByUrl,
+    buildAnalyticsIndex,
     snapshotMatchedMetrics,
+    snapshotUnmatchedAccounts,
 } from './analytics-pull';
 
 const listTopPosts = vi.mocked(blotato.listTopPosts);
@@ -75,8 +77,21 @@ describe('normalizeUrl', () => {
     });
 });
 
-describe('buildMetricsByUrl', () => {
-    it('indexes latest metrics by normalized url and dedups across sort keys', async () => {
+describe('handleFromUrl', () => {
+    it('extracts the @handle from tiktok/threads/twitter urls, normalized', () => {
+        expect(handleFromUrl('https://www.tiktok.com/@SentinelAerialInspector/video/1')).toBe('@sentinelaerialinspector');
+        expect(handleFromUrl('https://www.threads.net/@faithharmony4045/post/2')).toBe('@faithharmony4045');
+        expect(handleFromUrl('https://x.com/APiercea45/status/3')).toBe('@apiercea45');
+    });
+    it('is null for handle-less platforms', () => {
+        expect(handleFromUrl('https://www.youtube.com/watch?v=abc')).toBeNull();
+        expect(handleFromUrl('https://facebook.com/reel/999')).toBeNull();
+        expect(handleFromUrl(null)).toBeNull();
+    });
+});
+
+describe('buildAnalyticsIndex', () => {
+    it('indexes metrics + platform + id + url by normalized url, dedup across sort keys', async () => {
         listTopPosts.mockResolvedValue({
             items: [{
                 id: 'a', content: '', platform: 'tiktok', createdAt: '', mediaUrls: [],
@@ -85,16 +100,17 @@ describe('buildMetricsByUrl', () => {
             }],
         });
 
-        const map = await buildMetricsByUrl('2026-01-01T00:00:00Z');
+        const index = await buildAnalyticsIndex('2026-01-01T00:00:00Z');
 
-        // Same item returned for all 4 sort keys → one entry, keyed normalized.
-        expect(map.size).toBe(1);
-        expect(map.get('tiktok.com/@x/video/1')).toEqual({ viewsCount: '5' });
+        expect(index.size).toBe(1);
+        expect(index.get('tiktok.com/@x/video/1')).toEqual({
+            metrics: { viewsCount: '5' }, platform: 'tiktok', id: 'a', url: 'https://www.tiktok.com/@x/video/1',
+        });
     });
 
     it('keeps going when one sort key throws', async () => {
         listTopPosts
-            .mockRejectedValueOnce(new Error('boom'))            // views_count fails
+            .mockRejectedValueOnce(new Error('boom'))
             .mockResolvedValue({
                 items: [{
                     id: 'b', content: '', platform: 'twitter', createdAt: '', mediaUrls: [],
@@ -103,8 +119,8 @@ describe('buildMetricsByUrl', () => {
                 }],
             });
 
-        const map = await buildMetricsByUrl('2026-01-01T00:00:00Z');
-        expect(map.get('twitter.com/x/status/2')).toEqual({ impressionsCount: '9' });
+        const index = await buildAnalyticsIndex('2026-01-01T00:00:00Z');
+        expect(index.get('twitter.com/x/status/2')?.metrics).toEqual({ impressionsCount: '9' });
     });
 });
 
@@ -157,7 +173,14 @@ describe('snapshotMatchedMetrics', () => {
         return { supabase: supabase as never, inserts };
     }
 
-    it('inserts a snapshot for matched posts, and buckets no-signal and unmatched', async () => {
+    function idx(entries: Array<[string, Record<string, string>, string, string]>) {
+        // [url, metrics, platform, blotatoId]
+        return new Map(entries.map(([url, metrics, platform, id]) => [
+            normalizeUrl(url), { metrics, platform, id, url },
+        ])) as never;
+    }
+
+    it('inserts a snapshot (with blotato id) for matched posts, buckets no-signal/unmatched, tracks matched urls', async () => {
         const pieces = [{
             id: 'p1',
             published_platforms: {
@@ -166,20 +189,21 @@ describe('snapshotMatchedMetrics', () => {
                 youtube: { status: 'published', post_url: 'https://youtube.com/watch?v=zzz' },    // unmatched
             },
         }] as never[];
-        const metricsByUrl = new Map<string, Record<string, string>>([
-            [normalizeUrl('https://www.tiktok.com/@x/video/1'), { viewsCount: '100', likesCount: '4' }],
-            [normalizeUrl('https://twitter.com/x/status/2'), { viewsCount: '0', likesCount: '0' }],
+        const index = idx([
+            ['https://www.tiktok.com/@x/video/1', { viewsCount: '100', likesCount: '4' }, 'tiktok', '901'],
+            ['https://twitter.com/x/status/2', { viewsCount: '0', likesCount: '0' }, 'twitter', '902'],
         ]);
         const { supabase, inserts } = fakeClient();
 
-        const res = await snapshotMatchedMetrics(supabase, pieces, metricsByUrl as never);
+        const res = await snapshotMatchedMetrics(supabase, pieces, index);
 
         expect(res.snapshots).toBe(1);
         expect(res.matchedNoSignal).toBe(1);
         expect(res.unmatched).toBe(1);
         expect(res.sampleUnmatchedUrl).toBe('https://youtube.com/watch?v=zzz');
+        expect(res.matchedUrls.has('tiktok.com/@x/video/1')).toBe(true);
         expect(inserts).toEqual([
-            { content_piece_id: 'p1', platform: 'tiktok', views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'tiktok', blotato_post_id: '901', views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
         ]);
     });
 
@@ -188,14 +212,45 @@ describe('snapshotMatchedMetrics', () => {
             id: 'p1',
             published_platforms: { tiktok: { status: 'published', post_url: 'https://www.tiktok.com/@x/video/1' } },
         }] as never[];
-        const metricsByUrl = new Map([[normalizeUrl('https://www.tiktok.com/@x/video/1'), { viewsCount: '100' }]]);
+        const index = idx([['https://www.tiktok.com/@x/video/1', { viewsCount: '100' }, 'tiktok', '901']]);
         const supabase = {
             from: () => ({ insert: () => Promise.resolve({ error: { message: 'permission denied' } }) }),
         } as never;
 
-        const res = await snapshotMatchedMetrics(supabase, pieces, metricsByUrl as never);
+        const res = await snapshotMatchedMetrics(supabase, pieces, index);
         expect(res.snapshots).toBe(0);
         expect(res.insertErrors).toBe(1);
         expect(res.sampleInsertError).toBe('permission denied');
+    });
+});
+
+describe('snapshotUnmatchedAccounts', () => {
+    it('captures handle-bearing unmatched posts (Sentinel), skips matched, handle-less and no-signal', async () => {
+        const inserts: Array<Record<string, unknown>> = [];
+        const supabase = {
+            from: () => ({ insert: (row: Record<string, unknown>) => { inserts.push(row); return Promise.resolve({ error: null }); } }),
+        } as never;
+        const index = new Map<string, { metrics: Record<string, string>; platform: string; id: string; url: string }>([
+            // Sentinel TikTok, unmatched, has signal → captured
+            [normalizeUrl('https://www.tiktok.com/@sentinelaerialinspector/video/9'),
+             { metrics: { viewsCount: '1049', likesCount: '3' }, platform: 'tiktok', id: '5410406', url: 'https://www.tiktok.com/@sentinelaerialinspector/video/9' }],
+            // already matched to a content_piece → skipped
+            [normalizeUrl('https://www.tiktok.com/@x/video/1'),
+             { metrics: { viewsCount: '100' }, platform: 'tiktok', id: '901', url: 'https://www.tiktok.com/@x/video/1' }],
+            // youtube, no handle in url → skipped
+            [normalizeUrl('https://www.youtube.com/watch?v=abc'),
+             { metrics: { viewsCount: '832' }, platform: 'youtube', id: '5277545', url: 'https://www.youtube.com/watch?v=abc' }],
+            // handle but zero signal → skipped
+            [normalizeUrl('https://www.tiktok.com/@x/video/5'),
+             { metrics: { viewsCount: '0' }, platform: 'tiktok', id: '905', url: 'https://www.tiktok.com/@x/video/5' }],
+        ]) as never;
+        const matched = new Set(['tiktok.com/@x/video/1']);
+
+        const res = await snapshotUnmatchedAccounts(supabase, index, matched);
+
+        expect(res).toEqual({ capturedAccounts: 1, insertErrors: 0 });
+        expect(inserts).toEqual([
+            { content_piece_id: null, platform: 'tiktok', handle: '@sentinelaerialinspector', blotato_post_id: '5410406', views: 1049, likes: 3, comments: 0, shares: 0, saves: 0 },
+        ]);
     });
 });

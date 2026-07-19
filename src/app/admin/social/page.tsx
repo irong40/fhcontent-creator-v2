@@ -7,12 +7,10 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 
 interface AccountPerf {
-    key: string;
-    label: string;
+    handle: string;
     brand: string;
     purpose: string;
     platform: string;
-    handle: string | null;
     posts: number;
     views: number;
     likes: number;
@@ -21,8 +19,6 @@ interface AccountPerf {
     saves: number;
     engagementRate: number;
     lastPostedAt: string | null;
-    topTitle: string | null;
-    topViews: number;
 }
 
 interface PlatformHealth {
@@ -41,7 +37,6 @@ interface SocialStatus {
     health: PlatformHealth[];
     accounts: AccountPerf[];
     hasMetrics: boolean;
-    youtubeCombined: boolean;
     blotatoError?: string;
 }
 
@@ -116,20 +111,19 @@ export default function SocialDashboardPage() {
                         {!data.hasMetrics ? (
                             <Card>
                                 <CardContent className="py-8 text-center text-muted-foreground">
-                                    No per-account metrics available yet from Blotato.
+                                    No per-account metrics stored yet. The daily analytics pull populates this.
                                 </CardContent>
                             </Card>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                                 {data.accounts.map((a) => (
-                                    <Card key={a.key}>
+                                    <Card key={`${a.platform}:${a.handle}`}>
                                         <CardHeader className="pb-2">
                                             <div className="flex items-start justify-between gap-2">
                                                 <div className="min-w-0">
-                                                    <CardTitle className="text-base truncate">{a.brand}</CardTitle>
+                                                    <CardTitle className="text-base truncate">{a.brand || a.handle}</CardTitle>
                                                     <p className="text-xs text-muted-foreground truncate">
-                                                        {a.handle ? `@${a.handle}` : 'all channels'}
-                                                        {a.purpose ? ` · ${a.purpose}` : ''}
+                                                        {a.handle}{a.purpose ? ` · ${a.purpose}` : ''}
                                                     </p>
                                                 </div>
                                                 <Badge variant="outline" className="capitalize shrink-0">
@@ -151,21 +145,10 @@ export default function SocialDashboardPage() {
                                                 <span>{fmt(a.comments)} comments</span>
                                                 <span>last post {relative(a.lastPostedAt)}</span>
                                             </div>
-                                            {a.topTitle && (
-                                                <p className="text-xs text-muted-foreground pt-1 border-t border-border/50">
-                                                    Top: {a.topTitle} — {fmt(a.topViews)} views
-                                                </p>
-                                            )}
                                         </CardContent>
                                     </Card>
                                 ))}
                             </div>
-                        )}
-                        {data.youtubeCombined && (
-                            <p className="text-xs text-muted-foreground">
-                                YouTube is shown as one combined line — its post URLs carry no channel, so per-channel
-                                split needs the YouTube Data API.
-                            </p>
                         )}
                     </section>
 

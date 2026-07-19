@@ -808,7 +808,7 @@ export interface Database {
             performance_metrics: {
                 Row: {
                     id: string;
-                    content_piece_id: string;
+                    content_piece_id: string | null;
                     platform: string;
                     views: number;
                     likes: number;
@@ -816,10 +816,12 @@ export interface Database {
                     saves: number;
                     comments: number;
                     captured_at: string;
+                    handle: string | null;
+                    blotato_post_id: string | null;
                 };
                 Insert: {
                     id?: string;
-                    content_piece_id: string;
+                    content_piece_id?: string | null;
                     platform: string;
                     views?: number;
                     likes?: number;
@@ -827,6 +829,8 @@ export interface Database {
                     saves?: number;
                     comments?: number;
                     captured_at?: string;
+                    handle?: string | null;
+                    blotato_post_id?: string | null;
                 };
                 Update: {
                     id?: string;
@@ -911,6 +915,18 @@ export interface Database {
             get_topic_winners: {
                 Args: { p_persona_id: string; p_days?: number; p_limit?: number };
                 Returns: { title: string; views: number; likes: number }[];
+            };
+            get_account_performance: {
+                Args: { p_days?: number };
+                Returns: {
+                    handle: string; brand: string; purpose: string; platform: string;
+                    posts: number; views: number; likes: number; comments: number;
+                    shares: number; saves: number; last_post: string;
+                }[];
+            };
+            backfill_metric_handles: {
+                Args: Record<string, never>;
+                Returns: number;
             };
         };
         Enums: Record<string, never>;

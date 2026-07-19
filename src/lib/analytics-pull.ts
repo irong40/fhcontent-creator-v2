@@ -67,6 +67,18 @@ export function normalizeUrl(raw: string | null | undefined): string {
     }
 }
 
+/** Pull the account @handle out of a post URL, normalized to match the
+ *  blotato_accounts registry (leading @, lowercase). Only handle-bearing
+ *  platforms (tiktok/threads/twitter) — YouTube/IG/FB URLs carry no handle. */
+export function handleFromUrl(url: string | null | undefined): string | null {
+    if (!url) return null;
+    const at = url.match(/(?:tiktok\.com|threads\.net)\/@([^/?#]+)/i);
+    if (at) return `@${at[1].toLowerCase()}`;
+    const tw = url.match(/(?:twitter\.com|x\.com)\/([^/?#]+)\/status/i);
+    if (tw) return `@${tw[1].toLowerCase()}`;
+    return null;
+}
+
 /** Collapse Blotato's wide metric set onto our performance_metrics columns.
  *  Values arrive as STRINGS (e.g. "1049"); coerce every one. Views may arrive
  *  as viewsCount (YT/TT), playsCount (IG reels) or impressionsCount
@@ -103,6 +115,7 @@ export interface AnalyticsPullResult {
     urlResolutionErrors: number;
     analyticsItems: number;
     snapshots: number;
+    capturedAccounts: number;
     matchedNoSignal: number;
     unmatched: number;
     insertErrors: number;
@@ -159,11 +172,19 @@ export async function resolvePostUrls(
     return { urlsResolved, urlResolutionErrors };
 }
 
+export interface AnalyticsIndexEntry {
+    metrics: BlotatoMetrics;
+    platform: string;
+    id: string;       // Blotato numeric published-post id
+    url: string;      // raw post URL (carries the @handle for some platforms)
+}
+
 /** Step 2: pull posts-with-metrics from GET /v2/analytics, unioned across sort
- *  keys, and index the latest metrics by normalized post URL. No DB
- *  dependency — pure Blotato, so it unit-tests against a mocked client. */
-export async function buildMetricsByUrl(sinceIso: string): Promise<Map<string, BlotatoMetrics>> {
-    const metricsByUrl = new Map<string, BlotatoMetrics>();
+ *  keys, indexed by normalized post URL — keeping platform, Blotato id and the
+ *  raw URL so unmatched posts (the separate Sentinel pipeline) can still be
+ *  attributed by handle. No DB dependency — unit-tests against a mocked client. */
+export async function buildAnalyticsIndex(sinceIso: string): Promise<Map<string, AnalyticsIndexEntry>> {
+    const index = new Map<string, AnalyticsIndexEntry>();
     const seenPostIds = new Set<string>();
 
     for (const sortBy of ANALYTICS_SORT_KEYS) {
@@ -181,12 +202,12 @@ export async function buildMetricsByUrl(sinceIso: string): Promise<Map<string, B
             seenPostIds.add(item.id);
             const key = normalizeUrl(item.postUrl);
             const metrics = item.latestMetrics?.metrics;
-            if (key && metrics) metricsByUrl.set(key, metrics);
+            if (key && metrics) index.set(key, { metrics, platform: item.platform, id: item.id, url: item.postUrl ?? '' });
         }
         await sleep(150);
     }
 
-    return metricsByUrl;
+    return index;
 }
 
 export interface SnapshotResult {
@@ -194,18 +215,24 @@ export interface SnapshotResult {
     matchedNoSignal: number;
     unmatched: number;
     insertErrors: number;
+    matchedUrls: Set<string>;
     sampleInsertError?: string;
     sampleUnmatchedUrl?: string;
 }
 
+function hasSignal(m: ReturnType<typeof mapMetrics>): boolean {
+    return m.views + m.likes + m.comments + m.shares + m.saves > 0;
+}
+
 /** Step 3: match each published platform entry to its metrics and insert a
- *  point-in-time snapshot into performance_metrics. */
+ *  point-in-time snapshot (tagged with the Blotato post id). Returns the set of
+ *  matched URLs so unmatched analytics items can be captured separately. */
 export async function snapshotMatchedMetrics(
     supabase: AdminClient,
     pieces: PieceRow[],
-    metricsByUrl: Map<string, BlotatoMetrics>,
+    index: Map<string, AnalyticsIndexEntry>,
 ): Promise<SnapshotResult> {
-    const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0 };
+    const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0, matchedUrls: new Set() };
 
     for (const piece of pieces) {
         const platforms = piece.published_platforms;
@@ -213,19 +240,21 @@ export async function snapshotMatchedMetrics(
 
         for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
             if (!entry || entry.status !== 'published' || !entry.post_url) continue;
-            const metrics = metricsByUrl.get(normalizeUrl(entry.post_url));
-            if (!metrics) {
+            const key = normalizeUrl(entry.post_url);
+            const hit = index.get(key);
+            if (!hit) {
                 out.unmatched++;
                 if (!out.sampleUnmatchedUrl) out.sampleUnmatchedUrl = entry.post_url;
                 continue;
             }
-            const mapped = mapMetrics(metrics);
-            const hasSignal = mapped.views + mapped.likes + mapped.comments + mapped.shares + mapped.saves > 0;
-            if (!hasSignal) { out.matchedNoSignal++; continue; }
+            out.matchedUrls.add(key);
+            const mapped = mapMetrics(hit.metrics);
+            if (!hasSignal(mapped)) { out.matchedNoSignal++; continue; }
 
             const { error: insertError } = await supabase.from('performance_metrics').insert({
                 content_piece_id: piece.id,
                 platform,
+                blotato_post_id: hit.id,
                 ...mapped,
             });
             if (insertError) {
@@ -240,6 +269,38 @@ export async function snapshotMatchedMetrics(
     return out;
 }
 
+/** Step 4: snapshot analytics items that matched no content_piece — the
+ *  separate-pipeline accounts (e.g. Sentinel's Part 107 TikTok). Attributed by
+ *  the @handle in the URL; handle-less platforms (YouTube/IG/FB) are skipped. */
+export async function snapshotUnmatchedAccounts(
+    supabase: AdminClient,
+    index: Map<string, AnalyticsIndexEntry>,
+    matchedUrls: Set<string>,
+): Promise<{ capturedAccounts: number; insertErrors: number }> {
+    let capturedAccounts = 0;
+    let insertErrors = 0;
+
+    for (const [key, hit] of index) {
+        if (matchedUrls.has(key)) continue;
+        const handle = handleFromUrl(hit.url);
+        if (!handle) continue;
+        const mapped = mapMetrics(hit.metrics);
+        if (!hasSignal(mapped)) continue;
+
+        const { error } = await supabase.from('performance_metrics').insert({
+            content_piece_id: null,
+            platform: hit.platform,
+            handle,
+            blotato_post_id: hit.id,
+            ...mapped,
+        });
+        if (error) insertErrors++;
+        else capturedAccounts++;
+    }
+
+    return { capturedAccounts, insertErrors };
+}
+
 export async function runAnalyticsPull(): Promise<{ status: number; body: AnalyticsPullResult }> {
     const supabase = createAdminClient();
     const sinceIso = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -252,6 +313,7 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
         urlResolutionErrors: 0,
         analyticsItems: 0,
         snapshots: 0,
+        capturedAccounts: 0,
         matchedNoSignal: 0,
         unmatched: 0,
         insertErrors: 0,
@@ -273,8 +335,17 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
 
     const rows = pieces as PieceRow[];
     const resolved = await resolvePostUrls(supabase, rows);
-    const metricsByUrl = await buildMetricsByUrl(sinceIso);
-    const snap = await snapshotMatchedMetrics(supabase, rows, metricsByUrl);
+    const index = await buildAnalyticsIndex(sinceIso);
+    const snap = await snapshotMatchedMetrics(supabase, rows, index);
+    const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls);
+
+    // Attribute the just-inserted content_piece snapshots to their account
+    // (via persona → platform_accounts → blotato_accounts). Non-fatal.
+    try {
+        await supabase.rpc('backfill_metric_handles');
+    } catch (e) {
+        console.error('[analytics-pull] backfill_metric_handles failed:', (e as Error).message);
+    }
 
     const result: AnalyticsPullResult = {
         ...empty,
@@ -282,18 +353,19 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
         pieces_scanned: rows.length,
         urlsResolved: resolved.urlsResolved,
         urlResolutionErrors: resolved.urlResolutionErrors,
-        analyticsItems: metricsByUrl.size,
+        analyticsItems: index.size,
         snapshots: snap.snapshots,
+        capturedAccounts: extra.capturedAccounts,
         matchedNoSignal: snap.matchedNoSignal,
         unmatched: snap.unmatched,
-        insertErrors: snap.insertErrors,
+        insertErrors: snap.insertErrors + extra.insertErrors,
         sampleInsertError: snap.sampleInsertError,
         sampleUnmatchedUrl: snap.sampleUnmatchedUrl,
     };
 
     // -- A zero-row "success" is invisible to failure alerts. Surface it: if we
     // scanned pieces but stored nothing, something upstream is broken.
-    if (result.pieces_scanned > 0 && result.snapshots === 0) {
+    if (result.pieces_scanned > 0 && result.snapshots === 0 && result.capturedAccounts === 0) {
         result.alerted = true;
         const detail =
             `scanned ${result.pieces_scanned}, analyticsItems ${result.analyticsItems}, ` +
