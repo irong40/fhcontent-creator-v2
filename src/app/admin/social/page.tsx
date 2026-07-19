@@ -36,8 +36,15 @@ interface SocialStatus {
     publishWindowDays: number;
     health: PlatformHealth[];
     accounts: AccountPerf[];
+    recommendations: Recommendation[];
     hasMetrics: boolean;
     blotatoError?: string;
+}
+
+interface Recommendation {
+    kind: 'scale' | 'resonates' | 'fix' | 'blindspot' | 'rethink';
+    severity: 'good' | 'warn' | 'bad';
+    text: string;
 }
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -46,6 +53,15 @@ const PLATFORM_LABEL: Record<string, string> = {
 };
 
 const fmt = (n: number) => n.toLocaleString();
+
+function recIcon(kind: Recommendation['kind']): string {
+    return { scale: '📈', resonates: '✨', fix: '🔧', blindspot: '🔍', rethink: '⚠️' }[kind] ?? '•';
+}
+function recBorder(sev: Recommendation['severity']): string {
+    if (sev === 'bad') return 'border-red-500/40';
+    if (sev === 'warn') return 'border-yellow-500/40';
+    return 'border-green-500/40';
+}
 
 function relative(iso: string | null): string {
     if (!iso) return 'never';
@@ -103,6 +119,23 @@ export default function SocialDashboardPage() {
                                 Account data couldn&apos;t be loaded from Blotato ({data.blotatoError}).
                             </CardContent>
                         </Card>
+                    )}
+
+                    {/* What's working / what to do — the feedback layer */}
+                    {data.recommendations && data.recommendations.length > 0 && (
+                        <section className="space-y-3">
+                            <h2 className="text-lg font-semibold">What&apos;s working &amp; what to do</h2>
+                            <div className="space-y-2">
+                                {data.recommendations.map((r, i) => (
+                                    <Card key={i} className={recBorder(r.severity)}>
+                                        <CardContent className="py-3 flex items-start gap-3 text-sm">
+                                            <span className="shrink-0">{recIcon(r.kind)}</span>
+                                            <span>{r.text}</span>
+                                        </CardContent>
+                                    </Card>
+                                ))}
+                            </div>
+                        </section>
                     )}
 
                     {/* Per-account performance — the main view */}

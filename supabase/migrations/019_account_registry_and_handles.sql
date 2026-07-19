@@ -22,7 +22,7 @@ insert into public.blotato_accounts (account_id, platform, handle, brand, purpos
   ('1182','youtube','Adam Pierce','Cybersecurity','Cyber'),
   ('4346','instagram','@faithharmony4045','Faith & Harmony','Black history + music'),
   ('1506','threads','@faithharmony4045','Faith & Harmony','Black history + music'),
-  ('1478','twitter','@APiercea45','Faith & Harmony','Cyber / history'),
+  ('1478','twitter','@apiercea45','Faith & Harmony','Cyber / history'),  -- @-handles lowercased to match URL-derived handles
   ('3684','facebook','Adam Pierce (pages)','Multi','Mixed')
 on conflict (account_id) do update set
   handle = excluded.handle, brand = excluded.brand, purpose = excluded.purpose, platform = excluded.platform;
