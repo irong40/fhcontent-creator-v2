@@ -2,15 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, pieceSlotTime, PIECE_SLOT_OFFSET_HOURS } from './helpers';
 
 describe('getTargetPlatforms', () => {
-    it('returns tiktok, instagram, youtube for long video', () => {
-        expect(getTargetPlatforms('long')).toEqual(['tiktok', 'instagram', 'youtube']);
+    it('returns tiktok, instagram, youtube, facebook for long video', () => {
+        expect(getTargetPlatforms('long')).toEqual(['tiktok', 'instagram', 'youtube', 'facebook']);
     });
 
     it.each([
         'short_1', 'short_2', 'short_3', 'short_4',
-    ] as const)('returns 5 platforms for %s (bluesky disabled 2026-05-10)', (pieceType) => {
+    ] as const)('returns 6 platforms for %s (bluesky disabled 2026-05-10; facebook added 2026-07-18)', (pieceType) => {
         const result = getTargetPlatforms(pieceType);
-        expect(result).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter']);
+        expect(result).toEqual(['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'facebook']);
         expect(result).not.toContain('bluesky');
     });
 

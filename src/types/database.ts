@@ -33,6 +33,7 @@ export interface Database {
                     content_guardrail: string | null;
                     guardrail_notebook_ids: string[] | null;
                     facebook_page_ids: string[] | null;
+                    facebook_enabled: boolean;
                     default_music_url: string | null;
                     content_format: ContentFormat;
                     blotato_video_enabled: boolean;
@@ -63,6 +64,7 @@ export interface Database {
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
+                    facebook_enabled?: boolean;
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
                     blotato_video_enabled?: boolean;
@@ -93,6 +95,7 @@ export interface Database {
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
+                    facebook_enabled?: boolean;
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
                     blotato_video_enabled?: boolean;
@@ -948,6 +951,10 @@ export interface PlatformAccounts {
     bluesky?: string;
     linkedin?: string;
     facebook?: string;
+    /** Legacy single-page convention (Holloway/Ashford personas): a Facebook
+     *  Page id stored directly on platform_accounts. Prefer persona.facebook_page_ids;
+     *  this is a resolver fallback. */
+    facebook_page?: string;
     fanbase?: string;
 }
 

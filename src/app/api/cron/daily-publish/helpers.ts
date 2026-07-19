@@ -3,9 +3,15 @@ import type { Platform } from '@/lib/blotato';
 
 /**
  * Platform distribution matrix:
- * - long video  → tiktok, instagram, youtube
- * - short 1-4   → tiktok, instagram, youtube, threads, twitter
+ * - long video  → tiktok, instagram, youtube, facebook
+ * - short 1-4   → tiktok, instagram, youtube, threads, twitter, facebook
  * - carousel    → instagram
+ *
+ * Facebook (Reels) is in the video lists but is gated in
+ * getConfiguredTargetPlatforms behind a per-persona opt-in (facebook_enabled)
+ * so it stays off for the personas configured with FB pages but not yet
+ * cleared to auto-post — only opted-in personas (e.g. Sentinel Aerial) publish
+ * to FB.
  *
  * NOTE: Bluesky disabled 2026-05-10 per Adam — no accounts wired up, was
  * generating spurious 'No account configured' failure rows. Re-add to the
@@ -14,21 +20,38 @@ import type { Platform } from '@/lib/blotato';
 export function getTargetPlatforms(pieceType: PieceType): Platform[] {
     switch (pieceType) {
         case 'long':
-            return ['tiktok', 'instagram', 'youtube'];
+            return ['tiktok', 'instagram', 'youtube', 'facebook'];
         case 'short_1':
         case 'short_2':
         case 'short_3':
         case 'short_4':
-            return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter'];
+            return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'facebook'];
         case 'carousel':
             return ['instagram'];
         case 'quote_video':
             // Looping quote card (<5s video, 10s+ read time). Video platforms
             // only — the loop-replay view mechanic doesn't exist on text feeds.
-            return ['tiktok', 'instagram', 'youtube'];
+            return ['tiktok', 'instagram', 'youtube', 'facebook'];
         default:
             return [];
     }
+}
+
+/**
+ * The Facebook Page id to publish a persona's video to. Prefers the persona's
+ * facebook_page_ids array (first entry — single-page for now; multi-page is a
+ * later change), falling back to the legacy platform_accounts.facebook_page.
+ * Returns null when no page is configured, which keeps FB out of the target
+ * list rather than submitting a page-less (and rejected) FB post.
+ */
+export function resolveFacebookPageId(
+    accounts: PlatformAccounts | null | undefined,
+    facebookPageIds: string[] | null | undefined,
+): string | null {
+    if (facebookPageIds && facebookPageIds.length > 0 && facebookPageIds[0]) {
+        return facebookPageIds[0];
+    }
+    return accounts?.facebook_page ?? null;
 }
 
 /**
@@ -36,14 +59,27 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
  * actually have an account_id on the persona. Avoids spurious "No account
  * configured" failure rows when a persona simply hasn't connected a given
  * network yet (e.g. Dr. Carter has no Bluesky).
+ *
+ * Facebook is special: it requires the persona to be explicitly opted in
+ * (fb.enabled), to have a connected FB account (accounts.facebook), AND to have
+ * a resolvable Page id. This keeps FB posting off for personas that carry FB
+ * config but haven't been cleared to auto-post to their pages.
  */
 export function getConfiguredTargetPlatforms(
     pieceType: PieceType,
     accounts: PlatformAccounts | null | undefined,
+    fb?: { enabled?: boolean | null; pageIds?: string[] | null },
 ): Platform[] {
     const all = getTargetPlatforms(pieceType);
     if (!accounts) return [];
-    return all.filter((p) => Boolean(accounts[p as keyof PlatformAccounts]));
+    return all.filter((p) => {
+        if (p === 'facebook') {
+            return Boolean(fb?.enabled)
+                && Boolean(accounts.facebook)
+                && resolveFacebookPageId(accounts, fb?.pageIds) !== null;
+        }
+        return Boolean(accounts[p as keyof PlatformAccounts]);
+    });
 }
 
 /**

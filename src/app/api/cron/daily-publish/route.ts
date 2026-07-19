@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId } from './helpers';
 import { PLATFORM_DAILY_CAP, DAILY_CAP_WINDOW_HOURS, isAccountAtDailyCap, isTransientPublishError } from '@/lib/publish-limits';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
@@ -174,6 +174,7 @@ async function publishPieceToPlatform(
     accountId: string,
     topicTitle: string,
     mediaUrl: string,
+    pageId?: string,
 ): Promise<{ platformStatus: PlatformStatus; result: PlatformResult }> {
     // For carousel pieces on Instagram, upload all slides
     const mediaUrls: string[] = [];
@@ -211,6 +212,8 @@ async function publishPieceToPlatform(
         // quote_video carries its own ACE-Step music loop — TikTok must not
         // auto-add a library track on top of it.
         autoAddMusic: piece.piece_type !== 'quote_video',
+        // Facebook only: the Page to publish the Reel to.
+        pageId,
     });
 
     const response = await blotato.publishPost({
@@ -333,7 +336,10 @@ export async function publishTopic(
         }
 
         const existingPlatforms = (piece.published_platforms || {}) as PublishedPlatforms;
-        const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts);
+        const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts, {
+            enabled: persona.facebook_enabled,
+            pageIds: persona.facebook_page_ids,
+        });
 
         // Misconfiguration: piece type has zero target platforms (no account set
         // on the persona for any platform that accepts this piece type). Without
@@ -393,10 +399,17 @@ export async function publishTopic(
 
             const key = `${piece.piece_type}:${platform}`;
 
+            // Facebook needs a Page id on the target; resolve it here so a
+            // page-less FB post is never submitted (getConfiguredTargetPlatforms
+            // already guarantees one exists for facebook).
+            const pageId = platform === 'facebook'
+                ? resolveFacebookPageId(accounts, persona.facebook_page_ids) ?? undefined
+                : undefined;
+
             pieceAttempted = true;
             try {
                 const { platformStatus, result: platformResult } =
-                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl);
+                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl, pageId);
                 updatedPlatforms[platform] = platformStatus;
                 result.platformResults[key] = platformResult;
                 anySuccess = true;

@@ -269,6 +269,12 @@ export function buildTarget(platform: Platform, options: {
      * music bed (quote_video) — otherwise TikTok lays its own track over ours.
      */
     autoAddMusic?: boolean;
+    /**
+     * Facebook only. The Blotato Page id to publish to (a subaccount of the
+     * connected FB account). REQUIRED by the FB target — a facebook post with
+     * no pageId is rejected. Resolved from the persona's facebook page config.
+     */
+    pageId?: string;
 } = {}): BlotatoTarget {
     switch (platform) {
         case 'tiktok':
@@ -297,6 +303,15 @@ export function buildTarget(platform: Platform, options: {
                 shouldNotifySubscribers: true,
                 isMadeForKids: false,
                 containsSyntheticMedia: true,
+            };
+        case 'facebook':
+            // Video quiz shorts / reels publish as FB Reels. pageId is required;
+            // an empty string here means the caller failed to resolve a page and
+            // the submission should not have been attempted.
+            return {
+                targetType: 'facebook',
+                pageId: options.pageId ?? '',
+                mediaType: 'reel',
             };
         case 'twitter':
             return { targetType: 'twitter' };
