@@ -928,6 +928,10 @@ export interface Database {
                 Args: Record<string, never>;
                 Returns: number;
             };
+            count_recent_account_posts: {
+                Args: { p_platform: string; p_account_id: string; p_hours?: number };
+                Returns: number;
+            };
         };
         Enums: Record<string, never>;
         CompositeTypes: Record<string, never>;

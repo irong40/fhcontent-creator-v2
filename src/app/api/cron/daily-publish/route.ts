@@ -6,6 +6,7 @@ import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
 import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady } from './helpers';
+import { PLATFORM_DAILY_CAP, DAILY_CAP_WINDOW_HOURS, isAccountAtDailyCap, isTransientPublishError } from '@/lib/publish-limits';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -160,6 +161,11 @@ interface PublishResult {
     deferred?: boolean;
     /** Number of pieces deferred this tick because their slot hasn't arrived. */
     piecesDeferred?: number;
+    /** Platform submissions skipped this tick because the account was already at
+     *  its rolling-24h provider cap (YouTube/TikTok). Not failures — they retry
+     *  on a later tick once the window drains. Kept out of `warnings` so they
+     *  don't trip the failure alert. */
+    capDeferrals?: string[];
 }
 
 async function publishPieceToPlatform(
@@ -274,6 +280,24 @@ export async function publishTopic(
 
     let anySuccess = false;
 
+    // Rolling-24h submission count per capped account, seeded once from the DB
+    // and incremented locally as we submit this run. This is the guard against
+    // the 2026-07-15/16 root cause: a catch-up storm blowing past YouTube's
+    // 10-uploads/24h/account and TikTok's OpenAPI limit, whose rejections then
+    // showed up as (masked) "Publishing failed" rows. Only capped platforms are
+    // queried. Counts are per-account, so shared accounts are counted correctly.
+    const accountUsage = new Map<string, number>();
+    for (const platform of Object.keys(PLATFORM_DAILY_CAP)) {
+        const accountId = accounts?.[platform as keyof PlatformAccounts];
+        if (!accountId) continue;
+        const { data: cnt } = await supabase.rpc('count_recent_account_posts', {
+            p_platform: platform,
+            p_account_id: accountId,
+            p_hours: DAILY_CAP_WINDOW_HOURS,
+        });
+        accountUsage.set(platform, typeof cnt === 'number' ? cnt : 0);
+    }
+
     for (const piece of pieces as ContentPiece[]) {
         // Piece-level slot gating: pieces fire at staggered times across the
         // day (long → 7 PM ET, shorts spread morning-to-evening, carousel at
@@ -355,6 +379,18 @@ export async function publishTopic(
                 continue;
             }
 
+            // Rolling-24h provider cap guard. If this account is already at its
+            // window cap, DEFER this platform (skip the submit, leave it
+            // unresolved so a later tick / the next day retries) rather than
+            // firing a doomed submission the provider rejects with a quota
+            // error. A deferral is not a failure: no failed row, no alert.
+            if (isAccountAtDailyCap(platform, accountUsage.get(platform) ?? 0)) {
+                const note = `${piece.piece_type}: ${platform} deferred — account at ${accountUsage.get(platform)}/${PLATFORM_DAILY_CAP[platform]} 24h cap`;
+                (result.capDeferrals ??= []).push(note);
+                console.log(`[daily-publish] piece ${piece.id} ${platform} deferred — 24h account cap reached`);
+                continue;
+            }
+
             const key = `${piece.piece_type}:${platform}`;
 
             pieceAttempted = true;
@@ -364,6 +400,9 @@ export async function publishTopic(
                 updatedPlatforms[platform] = platformStatus;
                 result.platformResults[key] = platformResult;
                 anySuccess = true;
+                // Count this submission toward the account's rolling-24h budget
+                // so later pieces in the same run also respect the cap.
+                accountUsage.set(platform, (accountUsage.get(platform) ?? 0) + 1);
             } catch (e) {
                 const errorMsg = e instanceof Error ? e.message : 'Unknown error';
                 console.error(`Failed to publish piece ${piece.id} to ${platform}:`, errorMsg);
@@ -421,7 +460,8 @@ export async function publishTopic(
             // Mark this run as "deferred" if every piece was slot-gated (vs.
             // genuinely broken — missing media / config / no targets, which
             // would have populated result.warnings).
-            if ((result.piecesDeferred ?? 0) > 0 && result.warnings.length === 0) {
+            if (((result.piecesDeferred ?? 0) > 0 || (result.capDeferrals?.length ?? 0) > 0)
+                && result.warnings.length === 0) {
                 result.deferred = true;
             }
             return result;
@@ -452,6 +492,26 @@ export async function publishTopic(
         // selector, so the topic never retried even after the key was fixed.
         // Only give up once every failed platform has exhausted its
         // per-platform retry budget (MAX_PLATFORM_RETRIES).
+        // Before giving up: if every failed platform failed with a transient
+        // rate/quota limit (not a broken token/caption), keep the topic
+        // retryable and DON'T alert — it clears when the provider's rolling
+        // window drains. The cap guard should prevent reaching here, but
+        // cross-pipeline bursts on shared accounts can still trip a provider
+        // limit mid-run. Staleness (MAX_SCHEDULED_AGE_DAYS) bounds the retries.
+        const allFailuresTransient = (pieces as ContentPiece[]).every((p) => {
+            const platforms = (p.published_platforms ?? {}) as Record<string, PlatformStatus>;
+            return Object.values(platforms).every(
+                (ps) => ps?.status !== 'failed' || isTransientPublishError(ps.error),
+            );
+        });
+        if (allFailuresTransient) {
+            await supabase
+                .from('topics')
+                .update({ status: 'scheduled', error_message: 'Provider rate/quota limit — will retry when the 24h window clears' })
+                .eq('id', topicId);
+            return result;
+        }
+
         const anyRetryable = hasRetryablePlatform(pieces as ContentPiece[], MAX_PLATFORM_RETRIES);
         if (anyRetryable) {
             // Leave the topic 'scheduled' so the next hourly tick retries the
@@ -631,12 +691,14 @@ export async function GET(request: Request) {
 
         const topicsDeferred = results.filter((r) => r.deferred).length;
         const topicsShipped = results.filter((r) => r.piecesProcessed > 0).length;
+        const capDeferrals = results.flatMap((r) => r.capDeferrals ?? []);
 
         return NextResponse.json({
             success: true,
             processed: results.length,
             topicsShipped,
             topicsDeferred,
+            capDeferrals: capDeferrals.length > 0 ? capDeferrals : undefined,
             results,
             errors: errors.length > 0 ? errors : undefined,
             evergreen: evergreenFills.length > 0 ? evergreenFills : undefined,

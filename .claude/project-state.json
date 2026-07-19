@@ -1,13 +1,11 @@
 {
-  "lastSession": "2026-07-02",
-  "branch": "feat/ollama-grade",
-  "phase": "content skills suite + local grading pre-filter",
+  "lastSession": "2026-07-18",
+  "branch": "master",
+  "phase": "Analytics capture fixed & deployed — performance_metrics flowing again (75 snapshots/run, was 0 since 7/10)",
   "workItems": [
-    "Merge feat/ollama-grade into master",
-    "Write brand-brief.md per brand (F&H + SAI)",
-    "Wire ollama-grade.py into n8n/cron as publish gate",
-    "Fix YAML frontmatter on ~30 skills in ~/.agents/skills for Codex",
-    "Refresh stale ~/.claude/shared-context.md"
+    "Let daily 15:00 UTC cron backfill unmatched (281) — resolves 80 URLs/run over a few days",
+    "Build /admin/social dashboard on the now-flowing data (BdIntelligence Recharts pattern)",
+    "Decide fate of empty social_post_metrics table (0 rows, no writer)"
   ],
   "blockers": []
 }

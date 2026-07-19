@@ -153,6 +153,11 @@ export interface BlotatoPostStatus {
     status: 'pending' | 'processing' | 'published' | 'failed';
     createdAt: string;
     publishedAt?: string;
+    /** Blotato's failure detail. The live API returns it as `errorMessage`
+     *  (see GET /posts/{id}); `error` is kept for older/alternate shapes.
+     *  Reading only `error` was the bug that masked every quota failure as a
+     *  generic "Publishing failed" (2026-07-18). */
+    errorMessage?: string;
     error?: string;
     platformPostId?: string;
     /** Live URL of the published post — present once status is 'published'.
