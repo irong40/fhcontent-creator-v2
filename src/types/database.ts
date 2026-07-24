@@ -37,6 +37,7 @@ export interface Database {
                     default_music_url: string | null;
                     content_format: ContentFormat;
                     blotato_video_enabled: boolean;
+                    style_brief: string | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -68,6 +69,7 @@ export interface Database {
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
                     blotato_video_enabled?: boolean;
+                    style_brief?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -99,6 +101,7 @@ export interface Database {
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
                     blotato_video_enabled?: boolean;
+                    style_brief?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -894,6 +897,62 @@ export interface Database {
                     }
                 ];
             };
+            reference_packs: {
+                Row: {
+                    id: string;
+                    persona_id: string;
+                    source_video_id: string;
+                    source_channel: string | null;
+                    source_url: string;
+                    title: string;
+                    view_count: number | null;
+                    duration_seconds: number | null;
+                    transcript_excerpt: string | null;
+                    thumbnail_url: string | null;
+                    thumbnail_style_notes: string | null;
+                    metadata: Json;
+                    created_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    persona_id: string;
+                    source_video_id: string;
+                    source_channel?: string | null;
+                    source_url: string;
+                    title: string;
+                    view_count?: number | null;
+                    duration_seconds?: number | null;
+                    transcript_excerpt?: string | null;
+                    thumbnail_url?: string | null;
+                    thumbnail_style_notes?: string | null;
+                    metadata?: Json;
+                    created_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    persona_id?: string;
+                    source_video_id?: string;
+                    source_channel?: string | null;
+                    source_url?: string;
+                    title?: string;
+                    view_count?: number | null;
+                    duration_seconds?: number | null;
+                    transcript_excerpt?: string | null;
+                    thumbnail_url?: string | null;
+                    thumbnail_style_notes?: string | null;
+                    metadata?: Json;
+                    created_at?: string;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "reference_packs_persona_id_fkey";
+                        columns: ["persona_id"];
+                        isOneToOne: false;
+                        referencedRelation: "personas";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
         };
         Views: {
             cost_summary: {
@@ -1053,6 +1112,7 @@ export type PodcastEpisode = Database['public']['Tables']['podcast_episodes']['R
 export type WorkflowLock = Database['public']['Tables']['workflow_locks']['Row'];
 export type PerformanceMetric = Database['public']['Tables']['performance_metrics']['Row'];
 export type ContentIdea = Database['public']['Tables']['content_ideas']['Row'];
+export type ReferencePack = Database['public']['Tables']['reference_packs']['Row'];
 
 // Insert types
 export type PersonaInsert = Database['public']['Tables']['personas']['Insert'];

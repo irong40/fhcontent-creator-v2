@@ -217,6 +217,19 @@ export const voicePreviewSchema = z.object({
     voiceId: z.string().min(1),
 });
 
+// --- Reference pack schemas (competitor style-brief distillation) ---
+
+/**
+ * Distilled niche style brief produced by src/scripts/build-reference-pack.ts
+ * and stored in personas.style_brief. Hard-capped at 1500 chars (the prompt
+ * injection caps again as defense in depth).
+ */
+export const referencePackBriefSchema = z.object({
+    brief: z.string().min(1).max(1500),
+});
+
+export type ReferencePackBrief = z.infer<typeof referencePackBriefSchema>;
+
 // --- Quick post schema ---
 
 export const quickPostSchema = z.object({

@@ -68,6 +68,24 @@ function buildBrandVoiceBlock(persona: Persona): string {
     return parts.join('\n\n');
 }
 
+const STYLE_BRIEF_MAX_CHARS = 1500;
+
+/**
+ * Build the niche style-brief block from personas.style_brief (migration 024,
+ * populated by src/scripts/build-reference-pack.ts). Returns "" when the
+ * persona has no brief so every prompt stays byte-identical to today.
+ */
+function buildStyleBriefBlock(persona: Persona): string {
+    // Bracket access: DB types may lag migrations (same rationale as buildBrandVoiceBlock)
+    const p = persona as unknown as Record<string, unknown>;
+    const raw = typeof p['style_brief'] === 'string' ? (p['style_brief'] as string).trim() : '';
+    if (!raw) return '';
+    // Sanitize: straight double quotes coach the model into breaking the JSON-only output contract
+    const safe = raw.replace(/"/g, "'").slice(0, STYLE_BRIEF_MAX_CHARS);
+    return `NICHE STYLE BRIEF (distilled from top-performing videos in this niche — follow the PATTERNS, never copy wording; if this conflicts with PROVEN WINNERS above, PROVEN WINNERS take precedence):
+${safe}`;
+}
+
 /**
  * Topic prompt for quote_video personas (see migration 016). Emits the SAME
  * JSON shape as the standard topic prompt (title, hook, 4 historicalPoints)
@@ -83,11 +101,12 @@ function buildQuoteTopicPrompt(
     count: number,
 ): { system: string; user: string } {
     const voiceBlock = buildBrandVoiceBlock(persona);
+    const styleBlock = buildStyleBriefBlock(persona);
 
     const system = `You are curating historical quotes for ${persona.name}, ${persona.brand}.
 Your voice: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-${voiceBlock ? `\n${voiceBlock}\n` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `EXPERTISE AREAS:
@@ -142,6 +161,7 @@ export function buildTopicPrompt(
     }
 
     const voiceBlock = buildBrandVoiceBlock(persona);
+    const styleBlock = buildStyleBriefBlock(persona);
 
     // Engagement feedback: when the weekly collector has produced winners,
     // dedicate 2 of the week's topics to remixing them and steer the rest
@@ -161,7 +181,7 @@ The remaining ${count - remixCount} topics must be fresh stories, but favor the 
     const system = `You are generating content topics for ${persona.name}, ${persona.brand}.
 Your voice: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-${voiceBlock ? `\n${voiceBlock}\n` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `EXPERTISE AREAS:
@@ -214,6 +234,7 @@ function buildQuoteContentPrompt(
     persona: Persona,
     topic: Topic,
 ): { system: string; user: string } {
+    // No style-brief injection here (deliberate): the live cron discards this system prompt (captionsSystem substitution) and quote scripts are verbatim quotes assembled in code — a style brief must never touch them.
     const points = topic.historical_points as HistoricalPoint[];
     const quote = points[0];
     const contextFacts = points.slice(1);
@@ -265,10 +286,11 @@ export function buildContentPrompt(
     }
 
     const points = topic.historical_points as HistoricalPoint[];
+    const styleBlock = buildStyleBriefBlock(persona);
 
     const system = `You are a content writer creating scripts for ${persona.brand}.
 Voice style: ${persona.voice_style}
-${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
@@ -518,11 +540,12 @@ export function buildRemixPrompt(
 ): { system: string; user: string; maxTokens: number } {
     const points = topic.historical_points as HistoricalPoint[];
     const voiceBlock = buildBrandVoiceBlock(persona);
+    const styleBlock = buildStyleBriefBlock(persona);
 
     const system = `You are a content writer creating scripts for ${persona.brand}.
 Voice style: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-${voiceBlock ? `\n${voiceBlock}\n` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
 - NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.

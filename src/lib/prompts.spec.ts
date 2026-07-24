@@ -26,9 +26,11 @@ const mockPersona: Persona = {
     content_guardrail: null,
     guardrail_notebook_ids: null,
     facebook_page_ids: null,
+    facebook_enabled: false,
     default_music_url: null,
     content_format: 'standard',
     blotato_video_enabled: false,
+    style_brief: null,
     is_active: true,
     created_at: '2025-01-01T00:00:00Z',
     updated_at: '2025-01-01T00:00:00Z',
@@ -311,5 +313,98 @@ describe('buildRemixPrompt', () => {
         const noGuidelines = { ...mockPersona, content_guidelines: null };
         const { system } = buildRemixPrompt(noGuidelines, mockTopic, pieceType, 'script', currentValue);
         expect(system).not.toContain('Guidelines:');
+    });
+});
+
+describe('style brief injection', () => {
+    const BRIEF_HEADER = 'NICHE STYLE BRIEF';
+    const brief = 'TITLES: pose a question with a hard number. HOOKS: open cold on the stakes.';
+
+    describe('absence invariant', () => {
+        it('produces no brief block for a persona without style_brief', () => {
+            const topic = buildTopicPrompt(mockPersona, [], 7);
+            const content = buildContentPrompt(mockPersona, mockTopic);
+            const remix = buildRemixPrompt(mockPersona, mockTopic, 'long', 'script', 'v');
+            for (const out of [topic.system, topic.user, content.system, content.user, remix.system, remix.user]) {
+                expect(out).not.toContain(BRIEF_HEADER);
+            }
+        });
+
+        it('produces byte-identical prompts for null vs absent style_brief', () => {
+            const nullPersona = { ...mockPersona, style_brief: null };
+            expect(buildTopicPrompt(nullPersona, [], 7)).toEqual(buildTopicPrompt(mockPersona, [], 7));
+            expect(buildContentPrompt(nullPersona, mockTopic)).toEqual(buildContentPrompt(mockPersona, mockTopic));
+            expect(buildRemixPrompt(nullPersona, mockTopic, 'long', 'script', 'v'))
+                .toEqual(buildRemixPrompt(mockPersona, mockTopic, 'long', 'script', 'v'));
+        });
+
+        it('produces byte-identical prompts for empty-string style_brief', () => {
+            const emptyPersona = { ...mockPersona, style_brief: '' };
+            expect(buildTopicPrompt(emptyPersona, [], 7)).toEqual(buildTopicPrompt(mockPersona, [], 7));
+            expect(buildContentPrompt(emptyPersona, mockTopic)).toEqual(buildContentPrompt(mockPersona, mockTopic));
+        });
+    });
+
+    describe('presence', () => {
+        it('injects the brief into buildTopicPrompt system prompt', () => {
+            const { system } = buildTopicPrompt({ ...mockPersona, style_brief: brief }, [], 7);
+            expect(system).toContain(BRIEF_HEADER);
+            expect(system).toContain(brief);
+        });
+
+        it('injects the brief into the quote topic prompt for quote_video personas', () => {
+            const quotePersona = { ...mockPersona, content_format: 'quote_video' as const, style_brief: brief };
+            const { system } = buildTopicPrompt(quotePersona, [], 7);
+            expect(system).toContain(BRIEF_HEADER);
+            expect(system).toContain(brief);
+        });
+
+        it('injects the brief into buildContentPrompt system prompt (not user)', () => {
+            const { system, user } = buildContentPrompt({ ...mockPersona, style_brief: brief }, mockTopic);
+            expect(system).toContain(BRIEF_HEADER);
+            expect(system).toContain(brief);
+            expect(user).not.toContain(BRIEF_HEADER);
+        });
+
+        it('injects the brief into buildRemixPrompt system prompt', () => {
+            const { system } = buildRemixPrompt({ ...mockPersona, style_brief: brief }, mockTopic, 'long', 'script', 'v');
+            expect(system).toContain(BRIEF_HEADER);
+            expect(system).toContain(brief);
+        });
+    });
+
+    describe('sanitization', () => {
+        it('replaces straight double quotes with single quotes', () => {
+            const p = { ...mockPersona, style_brief: 'Titles pose "questions" often' };
+            const { system } = buildTopicPrompt(p, [], 7);
+            expect(system).toContain("Titles pose 'questions' often");
+            expect(system).not.toContain('"questions"');
+        });
+
+        it('truncates briefs longer than 1500 chars', () => {
+            const p = { ...mockPersona, style_brief: 'a'.repeat(2000) };
+            const { system } = buildTopicPrompt(p, [], 7);
+            expect(system).toContain('a'.repeat(1500));
+            expect(system).not.toContain('a'.repeat(1501));
+        });
+    });
+
+    describe('whitespace-only brief', () => {
+        it('treats a whitespace-only brief as absent (byte-identical prompts)', () => {
+            const p = { ...mockPersona, style_brief: '   \n\t  ' };
+            expect(buildTopicPrompt(p, [], 7)).toEqual(buildTopicPrompt(mockPersona, [], 7));
+            expect(buildContentPrompt(p, mockTopic)).toEqual(buildContentPrompt(mockPersona, mockTopic));
+            expect(buildRemixPrompt(p, mockTopic, 'long', 'script', 'v'))
+                .toEqual(buildRemixPrompt(mockPersona, mockTopic, 'long', 'script', 'v'));
+        });
+    });
+
+    describe('quote content no-op', () => {
+        it('never injects the brief into quote_video content prompts', () => {
+            const quotePersona = { ...mockPersona, content_format: 'quote_video' as const, style_brief: brief };
+            const { system, user } = buildContentPrompt(quotePersona, mockTopic);
+            expect(system).not.toContain(BRIEF_HEADER);
+            expect(user).not.toContain(BRIEF_HEADER);
+        });
     });
 });
