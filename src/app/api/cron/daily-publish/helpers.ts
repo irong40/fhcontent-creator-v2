@@ -2,6 +2,53 @@ import type { PieceType, PlatformAccounts } from '@/types/database';
 import type { Platform } from '@/lib/blotato';
 
 /**
+ * Publisher reach constants.
+ *
+ * These three values define how long daily-publish will keep picking a topic
+ * up, and how many times it will retry one platform. They live in this pure
+ * helpers module — not in daily-publish/route.ts — because check-status's
+ * settlement rules (check-status/settle.ts) MUST use the same numbers: a
+ * settlement pass that condemns a piece while the publisher would still fire
+ * it loses content, and one that waits longer than the publisher ever looks
+ * re-creates the 2026-07-21 freeze. Two copies of "22" in two files is exactly
+ * how those sides drift apart, so there is only one copy.
+ */
+
+/** A 'publishing' topic stops being selected this many hours after publish_at.
+ *  The last piece slot is +10 h (PIECE_SLOT_OFFSET_HOURS.long), so 22 h is
+ *  safely past every slot; it also gates ancient rows. */
+export const PUBLISHING_SELECTOR_CUTOFF_HOURS = 22;
+
+/** A 'partially_published' topic stays selectable this many days after
+ *  published_at, so frozen per-platform failures drain without hammering
+ *  Blotato forever. */
+export const PARTIAL_DRAIN_WINDOW_DAYS = 7;
+
+/** Stop retrying a platform after this many failed attempts. ~5 hourly retries
+ *  spans most of a publish day; beyond that it's almost always a permanent
+ *  issue (revoked token, deleted account, malformed caption) that won't
+ *  resolve itself. The topic settles as partially_published. */
+export const MAX_PLATFORM_RETRIES = 5;
+
+/** Staleness lower bound (days) for scheduled/approved topics.
+ *
+ *  Root cause of the 2026-06-02 incident: the hourly selector had only an
+ *  UPPER bound (publish_date <= today), so when 26 stale topics were restored
+ *  to 'scheduled' with past publish_dates, the next tick selected ALL of them
+ *  and blasted every piece slot at once, tripping YouTube/TikTok platform
+ *  caps. The mitigation then was manual SQL (publish_date=NULL) — this
+ *  constant is the code guard.
+ *
+ *  A scheduled/approved topic whose publish_date is more than this many days
+ *  in the past is skipped by the selector (and surfaced in the response as
+ *  staleSkipped). To publish it anyway, re-date it to today.
+ *
+ *  Lives here with the other reach constants because check-status's settlement
+ *  pass needs it too: handing a topic back to 'scheduled' is only a real
+ *  retry if the selector will still pick it up (see settle.ts). */
+export const MAX_SCHEDULED_AGE_DAYS = 3;
+
+/**
  * Platform distribution matrix:
  * - long video  → tiktok, instagram, youtube, facebook
  * - short 1-4   → tiktok, instagram, youtube, threads, twitter, facebook

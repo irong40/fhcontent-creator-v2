@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId, MAX_PLATFORM_RETRIES, PUBLISHING_SELECTOR_CUTOFF_HOURS, PARTIAL_DRAIN_WINDOW_DAYS, MAX_SCHEDULED_AGE_DAYS } from './helpers';
 import { PLATFORM_DAILY_CAP, DAILY_CAP_WINDOW_HOURS, isAccountAtDailyCap, isTransientPublishError } from '@/lib/publish-limits';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
@@ -17,25 +17,12 @@ interface PlatformResult {
     error?: string;
 }
 
-/** Stop retrying a platform after this many failed attempts. ~5 hourly retries
- *  spans most of a publish day; beyond that it's almost always a permanent
- *  issue (revoked token, deleted account, malformed caption) that won't
- *  resolve itself. The topic settles as partially_published. */
-const MAX_PLATFORM_RETRIES = 5;
-
-/** Staleness lower bound (days) for scheduled/approved topics.
- *
- *  Root cause of the 2026-06-02 incident: the hourly selector had only an
- *  UPPER bound (publish_date <= today), so when 26 stale topics were restored
- *  to 'scheduled' with past publish_dates, the next tick selected ALL of them
- *  and blasted every piece slot at once, tripping YouTube/TikTok platform
- *  caps. The mitigation then was manual SQL (publish_date=NULL) — this
- *  constant is the code guard.
- *
- *  A scheduled/approved topic whose publish_date is more than this many days
- *  in the past is skipped by the selector (and surfaced in the response as
- *  staleSkipped). To publish it anyway, re-date it to today. */
-export const MAX_SCHEDULED_AGE_DAYS = 3;
+// MAX_PLATFORM_RETRIES, PUBLISHING_SELECTOR_CUTOFF_HOURS,
+// PARTIAL_DRAIN_WINDOW_DAYS and MAX_SCHEDULED_AGE_DAYS moved to ./helpers (same
+// values) so check-status's settlement rules can import the publisher's own
+// reach instead of re-deriving it. Re-exported here because this module is
+// their historical home.
+export { MAX_PLATFORM_RETRIES, PUBLISHING_SELECTOR_CUTOFF_HOURS, PARTIAL_DRAIN_WINDOW_DAYS, MAX_SCHEDULED_AGE_DAYS };
 
 /** Hard cap on topics processed in a single hourly tick.
  *
@@ -80,7 +67,7 @@ export function selectPublishableTopics<T extends SelectableTopic>(
     now: Date = new Date(),
 ): { selected: T[]; staleSkipped: T[]; capDeferred: T[] } {
     const nowIso = now.toISOString();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const sevenDaysAgo = new Date(now.getTime() - PARTIAL_DRAIN_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const staleCutoffDate = new Date(now.getTime() - MAX_SCHEDULED_AGE_DAYS * 24 * 60 * 60 * 1000)
         .toISOString()
         .split('T')[0];
@@ -95,7 +82,7 @@ export function selectPublishableTopics<T extends SelectableTopic>(
         // safe to stop touching). Also gates against ancient rows.
         if (t.status === 'publishing') {
             if (!t.publish_at) return true;
-            const cutoff = new Date(new Date(t.publish_at).getTime() + 22 * 60 * 60 * 1000).toISOString();
+            const cutoff = new Date(new Date(t.publish_at).getTime() + PUBLISHING_SELECTOR_CUTOFF_HOURS * 60 * 60 * 1000).toISOString();
             return nowIso < cutoff;
         }
         // scheduled / approved: staleness lower bound first. Older than
@@ -320,6 +307,35 @@ export async function publishTopic(
     }
 
     for (const piece of pieces as ContentPiece[]) {
+        // Terminally dead piece: marked 'failed' with nothing ever submitted.
+        // Written by daily-media (0-slide carousel), the Blotato render poller
+        // (MAX_RETRIES), or check-status's settlement pass (a piece condemned
+        // as "never fired" once the topic left this cron's reach).
+        //
+        // The skip is what makes that condemnation MEAN something. Without it
+        // the marker is inert — this loop never reads piece.status — so a
+        // settlement that marks a piece failed, alerts the operator that it
+        // "could never publish", and then writes topics.published_at (which
+        // puts a partially_published topic back inside selectPublishableTopics
+        // for the drain window) would have this cron publish that very piece on
+        // the next tick: days-stale content, posted after an alert saying it
+        // never could be (2026-07-26 review).
+        //
+        // Nothing publishable is lost: a dead piece has no media (carousel /
+        // render failures) or has already been reported as a content gap. The
+        // recovery paths clear the marker rather than bypassing it — the
+        // Blotato render poller sets status='produced' when a late render
+        // lands, /api/content/[id]/regenerate sets 'ready', and a manual
+        // POST /api/topics/[id]/publish un-condemns never-fired pieces before
+        // re-running this function.
+        const everFired = Object.keys((piece.published_platforms ?? {}) as PublishedPlatforms).length > 0;
+        if (piece.status === 'failed' && !everFired) {
+            // console.log, NOT result.warnings: a permanently dead piece must
+            // not re-send the warnings alert email on every hourly tick.
+            console.log(`[daily-publish] piece ${piece.id} (${piece.piece_type}) is terminally failed and never fired — skipping`);
+            continue;
+        }
+
         // Piece-level slot gating: pieces fire at staggered times across the
         // day (long → 7 PM ET, shorts spread morning-to-evening, carousel at
         // 3 PM ET). See PIECE_SLOT_OFFSET_HOURS in helpers.ts. If a piece's
@@ -513,6 +529,18 @@ export async function publishTopic(
                 .update({
                     status: 'partially_published',
                     error_message: `${totals.published} succeeded, ${totals.failed} failed (this tick's retries also failed)`,
+                    // published_at MUST be set with this status. selectPublishableTopics
+                    // gates 'partially_published' on `published_at && published_at >
+                    // sevenDaysAgo`, so writing the status without the timestamp drops
+                    // the topic out of this cron's own selector immediately — mid
+                    // publish-day, with later piece slots (carousel +6h, short_4 +8h,
+                    // long +10h) still unfired. Those pieces then never publish, and
+                    // check-status reads the same row as "already unreachable" and
+                    // condemns them. Anchor on publish_at (the topic's own publish
+                    // instant) so the 7-day drain window is measured from the publish
+                    // day, not from whichever retry tick happened to fail; never
+                    // overwrite an existing value (2026-07-26 review).
+                    published_at: topic.published_at ?? topic.publish_at ?? new Date().toISOString(),
                 })
                 .eq('id', topicId);
             // No alert — partially_published is the system working, not failing.

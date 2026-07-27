@@ -306,13 +306,13 @@ export default function ReviewPage() {
         }
     }
 
-    async function publishNow() {
+    async function publishNow(force = false) {
         setPublishing(true);
         try {
             const res = await fetch(`/api/topics/${topicId}/publish`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ force: false }),
+                body: JSON.stringify({ force }),
             });
             if (!res.ok) { toast.error(`Publishing failed (${res.status})`); return; }
             const data = await res.json();
@@ -891,7 +891,7 @@ export default function ReviewPage() {
                                     </p>
                                     <Button
                                         size="sm"
-                                        onClick={publishNow}
+                                        onClick={() => publishNow()}
                                         disabled={publishing}
                                     >
                                         {publishing ? 'Publishing...' : 'Publish Now'}
@@ -911,7 +911,26 @@ export default function ReviewPage() {
                                 {pieces.map(piece => {
                                     const platforms = (piece.published_platforms || {}) as Record<string, { status: string; error?: string }>;
                                     const entries = Object.entries(platforms);
-                                    if (entries.length === 0) return null;
+                                    // A piece with no platform entries never went out at all.
+                                    // Hiding it is what left an operator staring at five green
+                                    // pieces and a spinner during the 2026-07-21 freeze, with no
+                                    // hint which piece was stuck — and it hid the same gap again
+                                    // on topics that settle 'published' with a piece that never
+                                    // fired. Show it, with why.
+                                    if (entries.length === 0) {
+                                        return (
+                                            <div key={piece.id} className="space-y-1">
+                                                <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
+                                                <Badge
+                                                    variant="outline"
+                                                    className="bg-amber-600/20 text-amber-400"
+                                                    title={piece.error_message || 'No platform submission recorded for this piece'}
+                                                >
+                                                    {piece.status === 'failed' ? 'never published' : 'not published yet'}
+                                                </Badge>
+                                            </div>
+                                        );
+                                    }
                                     return (
                                         <div key={piece.id} className="space-y-1">
                                             <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
@@ -946,7 +965,7 @@ export default function ReviewPage() {
                                     </p>
                                     <Button
                                         size="sm"
-                                        onClick={publishNow}
+                                        onClick={() => publishNow()}
                                         disabled={publishing}
                                     >
                                         {publishing ? 'Retrying...' : 'Retry Failed'}
@@ -955,7 +974,26 @@ export default function ReviewPage() {
                                 {pieces.map(piece => {
                                     const platforms = (piece.published_platforms || {}) as Record<string, { status: string; error?: string }>;
                                     const entries = Object.entries(platforms);
-                                    if (entries.length === 0) return null;
+                                    // A piece with no platform entries never went out at all.
+                                    // Hiding it is what left an operator staring at five green
+                                    // pieces and a spinner during the 2026-07-21 freeze, with no
+                                    // hint which piece was stuck — and it hid the same gap again
+                                    // on topics that settle 'published' with a piece that never
+                                    // fired. Show it, with why.
+                                    if (entries.length === 0) {
+                                        return (
+                                            <div key={piece.id} className="space-y-1">
+                                                <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
+                                                <Badge
+                                                    variant="outline"
+                                                    className="bg-amber-600/20 text-amber-400"
+                                                    title={piece.error_message || 'No platform submission recorded for this piece'}
+                                                >
+                                                    {piece.status === 'failed' ? 'never published' : 'not published yet'}
+                                                </Badge>
+                                            </div>
+                                        );
+                                    }
                                     return (
                                         <div key={piece.id} className="space-y-1">
                                             <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
@@ -990,7 +1028,7 @@ export default function ReviewPage() {
                                     </p>
                                     <Button
                                         size="sm"
-                                        onClick={publishNow}
+                                        onClick={() => publishNow()}
                                         disabled={publishing}
                                     >
                                         {publishing ? 'Retrying...' : 'Retry Publish'}
@@ -1007,10 +1045,57 @@ export default function ReviewPage() {
                                         Published {topic.published_at ? new Date(topic.published_at).toLocaleDateString() : ''}
                                     </p>
                                 </div>
+                                {/* A topic settles 'published' when every platform it submitted
+                                    succeeded — which can be true while a rendered, fully targeted
+                                    piece never went out (late render, drained 24h cap). 'published'
+                                    is terminal for the cron, so this button is the only path that
+                                    can still ship it. publishTopic skips pieces whose platforms are
+                                    all published or pending, so it can only send what is missing. */}
+                                {pieces.some(p =>
+                                    Object.keys((p.published_platforms || {}) as Record<string, unknown>).length === 0
+                                    // Only offer the retry for a piece that could actually ship:
+                                    // a carousel that rendered 0 slides or a video whose render
+                                    // never landed has nothing to send.
+                                    && Boolean(p.video_url || p.carousel_url),
+                                ) && (
+                                    <div className="flex items-center gap-3 rounded-md border border-amber-600/40 bg-amber-600/10 p-3">
+                                        <p className="text-sm text-amber-300">
+                                            {topic.error_message
+                                                || 'Some pieces of this topic never reached any platform.'}
+                                        </p>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => publishNow(true)}
+                                            disabled={publishing}
+                                        >
+                                            {publishing ? 'Publishing...' : 'Publish missing pieces'}
+                                        </Button>
+                                    </div>
+                                )}
                                 {pieces.map(piece => {
                                     const platforms = (piece.published_platforms || {}) as Record<string, { status: string; error?: string }>;
                                     const entries = Object.entries(platforms);
-                                    if (entries.length === 0) return null;
+                                    // A piece with no platform entries never went out at all.
+                                    // Hiding it is what left an operator staring at five green
+                                    // pieces and a spinner during the 2026-07-21 freeze, with no
+                                    // hint which piece was stuck — and it hid the same gap again
+                                    // on topics that settle 'published' with a piece that never
+                                    // fired. Show it, with why.
+                                    if (entries.length === 0) {
+                                        return (
+                                            <div key={piece.id} className="space-y-1">
+                                                <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
+                                                <Badge
+                                                    variant="outline"
+                                                    className="bg-amber-600/20 text-amber-400"
+                                                    title={piece.error_message || 'No platform submission recorded for this piece'}
+                                                >
+                                                    {piece.status === 'failed' ? 'never published' : 'not published yet'}
+                                                </Badge>
+                                            </div>
+                                        );
+                                    }
                                     return (
                                         <div key={piece.id} className="space-y-1">
                                             <p className="text-xs font-medium text-muted-foreground">{TAB_LABELS[piece.piece_type] || piece.piece_type}</p>
