@@ -71,6 +71,23 @@ describe('normalizeUrl', () => {
             .toBe('facebook.com/reel/964325996639054');
     });
 
+    // Regression (2026-07-26): stripping the query collapsed every YouTube watch
+    // URL onto the key `youtube.com/watch`. The analytics index is a Map, so one
+    // arbitrary post won that key and its metrics were attributed to every
+    // YouTube piece — all 11 SAI shorts stored post 5321272's 3 views.
+    it('keys distinct YouTube watch urls distinctly', () => {
+        expect(normalizeUrl('https://www.youtube.com/watch?v=MqrJb0TPh78'))
+            .not.toBe(normalizeUrl('https://www.youtube.com/watch?v=DV4H8v2d6nU'));
+    });
+
+    it('joins every YouTube url form on the video id', () => {
+        const key = 'youtube.com/video/MqrJb0TPh78';
+        expect(normalizeUrl('https://www.youtube.com/watch?v=MqrJb0TPh78')).toBe(key);
+        expect(normalizeUrl('https://youtu.be/MqrJb0TPh78')).toBe(key);
+        expect(normalizeUrl('https://www.youtube.com/shorts/MqrJb0TPh78')).toBe(key);
+        expect(normalizeUrl('https://m.youtube.com/watch?v=MqrJb0TPh78&feature=share')).toBe(key);
+    });
+
     it('is empty for null/undefined', () => {
         expect(normalizeUrl(null)).toBe('');
         expect(normalizeUrl(undefined)).toBe('');
@@ -186,7 +203,7 @@ describe('snapshotMatchedMetrics', () => {
             published_platforms: {
                 tiktok: { status: 'published', post_url: 'https://www.tiktok.com/@x/video/1' },  // matched, has signal
                 twitter: { status: 'published', post_url: 'https://twitter.com/x/status/2' },     // matched, zero signal
-                youtube: { status: 'published', post_url: 'https://youtube.com/watch?v=zzz' },    // unmatched
+                instagram: { status: 'published', post_url: 'https://instagram.com/reel/zzz' },   // unmatched
             },
         }] as never[];
         const index = idx([
@@ -200,11 +217,38 @@ describe('snapshotMatchedMetrics', () => {
         expect(res.snapshots).toBe(1);
         expect(res.matchedNoSignal).toBe(1);
         expect(res.unmatched).toBe(1);
-        expect(res.sampleUnmatchedUrl).toBe('https://youtube.com/watch?v=zzz');
+        expect(res.sampleUnmatchedUrl).toBe('https://instagram.com/reel/zzz');
         expect(res.matchedUrls.has('tiktok.com/@x/video/1')).toBe(true);
         expect(inserts).toEqual([
             { content_piece_id: 'p1', platform: 'tiktok', blotato_post_id: '901', views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
         ]);
+    });
+
+    // Regression (2026-07-26): YouTube belongs to the yt-dlp collector. While
+    // Blotato also wrote YouTube rows, its 15:00 UTC cron landed a
+    // (platform,content_piece_id) row first and the collector's same-day dedupe
+    // then suppressed that video's real 16:30 ET snapshot every single day.
+    it('never writes YouTube rows — that platform is owned by the yt-dlp collector', async () => {
+        const pieces = [{
+            id: 'p1',
+            published_platforms: {
+                youtube: { status: 'published', post_url: 'https://www.youtube.com/watch?v=MqrJb0TPh78' },
+                tiktok: { status: 'published', post_url: 'https://www.tiktok.com/@x/video/1' },
+            },
+        }] as never[];
+        // Index deliberately CONTAINS the YouTube post — a match would still be a bug.
+        const index = idx([
+            ['https://www.youtube.com/watch?v=MqrJb0TPh78', { viewsCount: '3' }, 'youtube', '5321272'],
+            ['https://www.tiktok.com/@x/video/1', { viewsCount: '100' }, 'tiktok', '901'],
+        ]);
+        const { supabase, inserts } = fakeClient();
+
+        const res = await snapshotMatchedMetrics(supabase, pieces, index);
+
+        expect(res.youtubeSkipped).toBe(1);
+        expect(res.unmatched).toBe(0);
+        expect(inserts).toHaveLength(1);
+        expect(inserts[0]).toMatchObject({ platform: 'tiktok' });
     });
 
     it('records insert failures with a sample message', async () => {

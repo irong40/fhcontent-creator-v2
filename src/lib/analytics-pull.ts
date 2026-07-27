@@ -48,13 +48,42 @@ function sleep(ms: number) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
+const YT_VIDEO_ID = /^[A-Za-z0-9_-]{6,20}$/;
+
+/** YouTube is the one platform that keeps its post identity in the QUERY STRING
+ *  (watch?v=<id>), which the generic path-only normalization below discards —
+ *  collapsing every watch URL onto the single key `youtube.com/watch`. That is
+ *  not a near-miss: the analytics index is a Map, so one arbitrary YouTube post
+ *  won the key and its metrics were then attributed to EVERY YouTube piece in
+ *  the run (on 2026-07-26 all 11 SAI shorts stored Blotato post 5321272's
+ *  3 views). Canonicalise YouTube to its video id so each video keys uniquely.
+ *
+ *  Twin of extractVideoId() in src/scripts/pull-youtube-metrics.ts — kept
+ *  separate on purpose: that script is yt-dlp-bound and must never be importable
+ *  from src/lib (Vercel would bundle it). Keep the two in sync. */
+export function youtubeVideoKey(host: string, u: URL): string | null {
+    if (host === 'youtu.be') {
+        const id = u.pathname.split('/').filter(Boolean)[0] ?? '';
+        return YT_VIDEO_ID.test(id) ? id : null;
+    }
+    if (host !== 'youtube.com' && host !== 'm.youtube.com') return null;
+    const v = u.searchParams.get('v');
+    if (v && YT_VIDEO_ID.test(v)) return v;
+    const m = u.pathname.match(/^\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{6,20})(?:\/|$)/);
+    return m ? m[1] : null;
+}
+
 /** Canonicalise a post URL so the two id spaces join reliably: drop protocol,
- *  a leading www., any query/hash, and a trailing slash; lowercase the host. */
+ *  a leading www., any query/hash, and a trailing slash; lowercase the host.
+ *  YouTube is special-cased to its video id (see youtubeVideoKey) because its
+ *  identity lives in the query string this otherwise throws away. */
 export function normalizeUrl(raw: string | null | undefined): string {
     if (!raw) return '';
     try {
         const u = new URL(raw);
         const host = u.host.replace(/^www\./, '').toLowerCase();
+        const ytId = youtubeVideoKey(host, u);
+        if (ytId) return `youtube.com/video/${ytId}`;
         const path = u.pathname.replace(/\/+$/, '');
         return `${host}${path}`;
     } catch {
@@ -119,6 +148,8 @@ export interface AnalyticsPullResult {
     matchedNoSignal: number;
     unmatched: number;
     insertErrors: number;
+    /** YouTube entries deliberately left to the yt-dlp collector. */
+    youtubeSkipped: number;
     alerted: boolean;
     sampleInsertError?: string;
     sampleUnmatchedUrl?: string;
@@ -215,10 +246,30 @@ export interface SnapshotResult {
     matchedNoSignal: number;
     unmatched: number;
     insertErrors: number;
+    youtubeSkipped: number;
     matchedUrls: Set<string>;
     sampleInsertError?: string;
     sampleUnmatchedUrl?: string;
 }
+
+/** YouTube is owned by the keyless yt-dlp collector
+ *  (src/scripts/pull-youtube-metrics.ts), NOT by Blotato. Two reasons this must
+ *  be a hard skip rather than a preference:
+ *
+ *  1. Coverage — Blotato reports only posts it published, under a ~100-post cap,
+ *     and only 2 of the 4 registered YouTube channels ever appear. yt-dlp walks
+ *     each channel's /videos + /shorts tabs (41 videos/day vs Blotato's 11).
+ *  2. Ownership conflict — the collector's same-day dedupe treats an existing
+ *     (platform='youtube', content_piece_id) row as "already captured today".
+ *     Blotato's Vercel cron runs 15:00 UTC, ahead of the collector's 16:30 ET
+ *     slot, so every Blotato YouTube row SUPPRESSED that video's real yt-dlp
+ *     snapshot. Net effect through 2026-07-26: real per-video numbers were
+ *     discarded daily and only piece-less orphan rows survived.
+ *
+ *  Leaving YouTube out here lets the collector match its videos to pieces and
+ *  heal the historic orphans. Do not re-enable without also reworking that
+ *  dedupe — see the header of pull-youtube-metrics.ts. */
+const BLOTATO_EXCLUDED_PLATFORMS = new Set(['youtube']);
 
 function hasSignal(m: ReturnType<typeof mapMetrics>): boolean {
     return m.views + m.likes + m.comments + m.shares + m.saves > 0;
@@ -232,7 +283,7 @@ export async function snapshotMatchedMetrics(
     pieces: PieceRow[],
     index: Map<string, AnalyticsIndexEntry>,
 ): Promise<SnapshotResult> {
-    const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0, matchedUrls: new Set() };
+    const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0, youtubeSkipped: 0, matchedUrls: new Set() };
 
     for (const piece of pieces) {
         const platforms = piece.published_platforms;
@@ -240,6 +291,7 @@ export async function snapshotMatchedMetrics(
 
         for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
             if (!entry || entry.status !== 'published' || !entry.post_url) continue;
+            if (BLOTATO_EXCLUDED_PLATFORMS.has(platform)) { out.youtubeSkipped++; continue; }
             const key = normalizeUrl(entry.post_url);
             const hit = index.get(key);
             if (!hit) {
@@ -317,6 +369,7 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
         matchedNoSignal: 0,
         unmatched: 0,
         insertErrors: 0,
+        youtubeSkipped: 0,
         alerted: false,
     };
 
@@ -358,6 +411,7 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
         capturedAccounts: extra.capturedAccounts,
         matchedNoSignal: snap.matchedNoSignal,
         unmatched: snap.unmatched,
+        youtubeSkipped: snap.youtubeSkipped,
         insertErrors: snap.insertErrors + extra.insertErrors,
         sampleInsertError: snap.sampleInsertError,
         sampleUnmatchedUrl: snap.sampleUnmatchedUrl,
@@ -365,11 +419,20 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
 
     // -- A zero-row "success" is invisible to failure alerts. Surface it: if we
     // scanned pieces but stored nothing, something upstream is broken.
-    if (result.pieces_scanned > 0 && result.snapshots === 0 && result.capturedAccounts === 0) {
+    // YouTube-only windows are NOT a fault — that platform is deliberately left
+    // to the yt-dlp collector, so gate on non-YouTube entries actually seen.
+    const nonYoutubeConsidered = snap.snapshots + snap.matchedNoSignal + snap.unmatched;
+    if (
+        result.pieces_scanned > 0 &&
+        result.snapshots === 0 &&
+        result.capturedAccounts === 0 &&
+        nonYoutubeConsidered > 0
+    ) {
         result.alerted = true;
         const detail =
             `scanned ${result.pieces_scanned}, analyticsItems ${result.analyticsItems}, ` +
             `unmatched ${result.unmatched}, matchedNoSignal ${result.matchedNoSignal}, ` +
+            `youtubeSkipped ${result.youtubeSkipped}, ` +
             `insertErrors ${result.insertErrors}` +
             (result.sampleInsertError ? ` | insert: ${result.sampleInsertError}` : '') +
             (result.sampleUnmatchedUrl ? ` | unmatched url: ${result.sampleUnmatchedUrl}` : '');

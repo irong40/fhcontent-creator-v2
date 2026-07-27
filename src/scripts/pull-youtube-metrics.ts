@@ -729,15 +729,18 @@ async function main() {
                 views, likes, comments,
             });
 
-            if (!hasSignal(row)) { s.noSignal++; continue; }
-            if (isDupToday(row, piecesToday, videoKeysToday)) {
-                s.dupSkipped++;
-                continue;
-            }
-
             // Re-attribution: this video has historic piece-less snapshots and
             // now matches a piece — heal the old rows so the video keeps ONE
             // aggregation key in get_account_performance.
+            //
+            // This MUST run BEFORE the same-day dedupe gate. Healing concerns
+            // historic rows, not today's snapshot, but while it sat after the
+            // gate any video already captured today `continue`d straight past
+            // it — so a video snapshotted piece-less in the morning and matched
+            // to a piece later the same day stayed orphaned permanently. That
+            // is how the 2026-07-24..26 orphan rows accumulated. The update
+            // filters on `content_piece_id is null`, so it is idempotent and
+            // safe to attempt on every pass.
             if (pieceId && orphanVideoIds.has(entry.id)) {
                 if (commit) {
                     const { error: healErr } = await sb
@@ -752,6 +755,12 @@ async function main() {
                     s.healed++; // would-heal in dry run
                 }
                 orphanVideoIds.delete(entry.id);
+            }
+
+            if (!hasSignal(row)) { s.noSignal++; continue; }
+            if (isDupToday(row, piecesToday, videoKeysToday)) {
+                s.dupSkipped++;
+                continue;
             }
 
             if (commit) {
