@@ -1,41 +1,41 @@
 /**
- * Photoreal image generation — audit-driven provider retry ladder.
+ * Slide/thumbnail image production — audit-driven provider ladder.
  *
- * Used for THUMBNAILS / photoreal slides (images that legitimately depict
- * people and must pass the HUVA subject audit). Each image is produced by an
- * explicit, bounded retry ladder:
- *   1. Imagen 4 (primary)   → audit. Pass ⇒ use it.
- *   2. Imagen 4 (retry)     → re-audit (constraint-strengthened prompt).
- *   3. gpt-image-1 (secondary) → audit.
- *   4. gpt-image-1 (retry)  → re-audit (final strengthened retry).
- *   5. HUVA satori text template (non-photographic, no people — always passes).
+ * Every image is produced by an explicit, bounded ladder:
+ *   1. Archival    → real public-domain LOC photograph  → audit. Pass ⇒ use it.
+ *   2. gpt-image-1 → generated photoreal                → audit.
+ *   3. gpt-image-1 → retry with a strengthened prompt   → audit.
+ *   4. HUVA satori text template (no people) — always passes, $0, never fails.
  *
- * Attempt budget is bounded per image (PRIMARY_ATTEMPTS Imagen + SECONDARY_ATTEMPTS
- * gpt-image-1), so there is no runaway image-API spend and no infinite loop. The
- * template fallback is $0 and always succeeds, so an image only fails if even the
- * template renderer throws.
+ * ── Why there is no Imagen rung ─────────────────────────────────────────────
+ * Imagen 4 was the primary provider until 2026-07-28. It is dead on this key:
+ * `imagen-4.0-generate-001` (and the -fast/-ultra siblings) return HTTP 404
+ * "no longer available to new users", and every Gemini image model returns 429.
+ * Live telemetry showed 382 Imagen attempts and 382 errors since 2026-06-02 —
+ * every image silently cost two wasted round-trips before falling through. The
+ * rung is removed rather than retried.
  *
- * NOTE ON CAROUSELS: HUVA carousel *slides* are text-over-background with NO
- * people, so they are rendered TEMPLATE-FIRST (satori) directly by the caller and
- * do NOT go through this generative ladder. This ladder is for photoreal images.
+ * ── Audit discipline ────────────────────────────────────────────────────────
+ * Both photographic rungs are audited against the persona subject constraint.
+ * Archival images are NOT exempt: a period photograph of a strike or a factory
+ * floor may well contain white bystanders, and the catalog holds caricature
+ * material that a naive subject check would wave through. Only the
+ * non-photographic template bypasses the audit, and it does so legitimately
+ * because it renders zero human figures.
  *
- * IMPORTANT: this module does NOT weaken the subject-constraint audit. Every
- * photographic attempt (primary or secondary) must still pass `auditImageSubjects`.
- * Only the non-photographic template fallback bypasses the audit — and it does so
- * legitimately, because it renders zero human figures.
- *
- * The orchestrator takes all I/O as injected dependencies (providers, audit,
- * template renderer) so it is fully unit-testable without live API calls.
+ * The orchestrator takes all I/O as injected dependencies so it is fully
+ * unit-testable without live API calls.
  */
 
 import type { CarouselSlide } from '@/types/database';
 
-/** Max primary-provider (Imagen 4) attempts before falling through to the secondary. */
-export const PRIMARY_ATTEMPTS = 2;
-/** Max secondary-provider (gpt-image-1) attempts before falling through to the template. */
-export const SECONDARY_ATTEMPTS = 2;
+/** Max gpt-image-1 attempts before falling through to the template. */
+export const PHOTO_ATTEMPTS = 2;
 
-export type SlideProvider = 'imagen' | 'openai' | 'template';
+export type SlideProvider = 'archival' | 'openai' | 'template';
+
+/** Credit shown on slides built from a generated image rather than a record. */
+export const AI_IMAGE_CREDIT = 'Illustration · AI-generated';
 
 export interface SlideAttemptLog {
     provider: SlideProvider;
@@ -45,12 +45,27 @@ export interface SlideAttemptLog {
     detail?: string;
 }
 
+/** A real archival photograph plus the attribution that must travel with it. */
+export interface ArchivalPick {
+    bytes: ArrayBuffer;
+    credit: string;
+    title?: string;
+    sourceUrl?: string;
+}
+
 export interface SlideResult {
     slide: number;
-    /** The image bytes that won (photographic or rendered template). */
+    /** Image bytes that won: a photograph, or the pre-rendered template card. */
     imageBuffer: ArrayBuffer;
     /** Which provider produced the winning image. */
     source: SlideProvider;
+    /**
+     * Attribution for the winning image, when one applies. Callers compositing
+     * a photograph into a slide MUST render this. Absent for the template rung.
+     */
+    credit?: string;
+    /** Catalog provenance, present only for the archival rung. */
+    sourceUrl?: string;
     /** Per-attempt trace for logging / observability. */
     attempts: SlideAttemptLog[];
 }
@@ -61,20 +76,39 @@ export interface AuditResult {
 }
 
 /**
- * Injected I/O for the slide ladder. All functions return ArrayBuffers of PNG
- * bytes (template included) and may throw on provider error.
+ * Flatten the attempt trace into plain JSON for the `visual_assets.metadata`
+ * column. The interface has no index signature, so it is not assignable to the
+ * generated `Json` type directly.
  */
+export function serializeAttempts(attempts: SlideAttemptLog[]): Record<string, string | number>[] {
+    return attempts.map(a => ({
+        provider: a.provider,
+        attempt: a.attempt,
+        outcome: a.outcome,
+        ...(a.detail ? { detail: a.detail } : {}),
+    }));
+}
+
+/** Injected I/O for the slide ladder. */
 export interface SlideLadderDeps {
-    /** Generate a photographic image with the primary provider (Imagen 4). Returns PNG bytes. */
-    generatePrimary: (prompt: string) => Promise<ArrayBuffer>;
-    /** Generate a photographic image with the secondary provider (gpt-image-1). Returns PNG bytes. */
-    generateSecondary: (prompt: string) => Promise<ArrayBuffer>;
-    /** Audit a photographic image against the persona subject constraint. */
+    /**
+     * Supply a rights-cleared archival photograph for this slide, or null when
+     * the catalog has nothing. Omit the dep entirely for non-archival personas.
+     */
+    generateArchival?: (slide: CarouselSlide) => Promise<ArchivalPick | null>;
+    /** Generate a photoreal image with gpt-image-1. Returns PNG/JPEG bytes. */
+    generatePhoto: (prompt: string) => Promise<ArrayBuffer>;
+    /** Audit an image against the persona subject constraint. */
     audit: (image: ArrayBuffer, constraint: string) => Promise<AuditResult>;
-    /** Render the non-photographic HUVA text template for this slide. Returns PNG bytes. */
+    /** Render the non-photographic HUVA text template. Returns PNG bytes. */
     renderTemplate: (slide: CarouselSlide) => Promise<ArrayBuffer>;
-    /** Apply the persona subject guardrail to a base prompt (no-op when no constraint). */
+    /** Apply the persona subject guardrail to a base prompt (no-op when unset). */
     applyGuardrail: (prompt: string, constraint: string | null | undefined) => string;
+    /**
+     * Extra audit language for archival images (caricature / off-subject /
+     * degrading material). Appended to the persona constraint on rung 1 only.
+     */
+    archivalAuditRules?: string;
     /** Optional structured logger; defaults to console. */
     log?: (msg: string) => void;
 }
@@ -94,14 +128,14 @@ function strengthenPrompt(guardedPrompt: string, retryIndex: number): string {
 }
 
 /**
- * Run the audit-driven retry ladder for a single photoreal image.
+ * Run the audit-driven ladder for a single image.
  *
- * When `constraint` is null/empty the audit is skipped (unconstrained persona):
- * the first successful photographic provider wins. When a constraint is set,
- * every photographic image must pass `audit` before it is accepted.
+ * When `constraint` is null/empty the audit is skipped (unconstrained persona)
+ * and the first successful provider wins. When a constraint is set, every
+ * photographic image — archival included — must pass `audit` before acceptance.
  *
- * Always resolves with a usable image (template fallback is last resort) unless
- * the template renderer itself throws — in which case it throws so the caller can
+ * Always resolves with a usable image (the template is the last resort) unless
+ * the template renderer itself throws, in which case it throws so the caller can
  * mark just that image failed.
  */
 export async function generateSlideWithLadder(
@@ -111,64 +145,74 @@ export async function generateSlideWithLadder(
 ): Promise<SlideResult> {
     const log = deps.log ?? ((m: string) => console.log(m));
     const attempts: SlideAttemptLog[] = [];
-    const basePrompt = deps.applyGuardrail(slide.imagePrompt, constraint);
 
-    const tryPhotographic = async (
-        provider: 'imagen' | 'openai',
-        attempt: number,
-        prompt: string,
-    ): Promise<ArrayBuffer | null> => {
-        let image: ArrayBuffer;
+    // ── Rung 1: real archival photography ──
+    if (deps.generateArchival) {
         try {
-            image = provider === 'imagen'
-                ? await deps.generatePrimary(prompt)
-                : await deps.generateSecondary(prompt);
+            const pick = await deps.generateArchival(slide);
+            if (pick) {
+                let verdict: AuditResult = { pass: true };
+                if (constraint) {
+                    // Archival material needs the caricature / off-subject rules
+                    // on top of the persona's own subject constraint.
+                    const archivalConstraint = deps.archivalAuditRules
+                        ? `${constraint}\n\n${deps.archivalAuditRules}`
+                        : constraint;
+                    verdict = await deps.audit(pick.bytes, archivalConstraint);
+                }
+                if (verdict.pass) {
+                    attempts.push({ provider: 'archival', attempt: 1, outcome: 'used' });
+                    log(`[image] slide ${slide.slide}: archival — ${pick.credit}`);
+                    return {
+                        slide: slide.slide,
+                        imageBuffer: pick.bytes,
+                        source: 'archival',
+                        credit: pick.credit,
+                        sourceUrl: pick.sourceUrl,
+                        attempts,
+                    };
+                }
+                attempts.push({ provider: 'archival', attempt: 1, outcome: 'rejected', detail: verdict.reason });
+                log(`[image] slide ${slide.slide}: archival audit-rejected: ${verdict.reason ?? 'unspecified'}`);
+            }
         } catch (e) {
             const detail = e instanceof Error ? e.message : String(e);
-            attempts.push({ provider, attempt, outcome: 'error', detail: detail.slice(0, 200) });
-            log(`[image] slide ${slide.slide}: ${provider} attempt ${attempt} error: ${detail.slice(0, 120)}`);
-            return null;
+            attempts.push({ provider: 'archival', attempt: 1, outcome: 'error', detail: detail.slice(0, 200) });
+            log(`[image] slide ${slide.slide}: archival error: ${detail.slice(0, 120)}`);
+        }
+    }
+
+    // ── Rung 2: gpt-image-1 (bounded attempts, constraint-strengthened) ──
+    const basePrompt = deps.applyGuardrail(slide.imagePrompt, constraint);
+    for (let i = 0; i < PHOTO_ATTEMPTS; i++) {
+        const prompt = strengthenPrompt(basePrompt, i);
+        let image: ArrayBuffer;
+        try {
+            image = await deps.generatePhoto(prompt);
+        } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e);
+            attempts.push({ provider: 'openai', attempt: i + 1, outcome: 'error', detail: detail.slice(0, 200) });
+            log(`[image] slide ${slide.slide}: openai attempt ${i + 1} error: ${detail.slice(0, 120)}`);
+            continue;
         }
 
-        // No constraint ⇒ first successful render wins (audit not applicable).
         if (!constraint) {
-            attempts.push({ provider, attempt, outcome: 'used' });
-            return image;
+            attempts.push({ provider: 'openai', attempt: i + 1, outcome: 'used' });
+            log(`[image] slide ${slide.slide}: produced by openai (attempt ${i + 1})`);
+            return { slide: slide.slide, imageBuffer: image, source: 'openai', credit: AI_IMAGE_CREDIT, attempts };
         }
 
         const verdict = await deps.audit(image, constraint);
         if (verdict.pass) {
-            attempts.push({ provider, attempt, outcome: 'used' });
-            return image;
-        }
-        attempts.push({ provider, attempt, outcome: 'rejected', detail: verdict.reason });
-        log(`[image] slide ${slide.slide}: ${provider} attempt ${attempt} audit-rejected: ${verdict.reason ?? 'unspecified'}`);
-        return null;
-    };
-
-    // ── Rung 1: Imagen 4 primary (bounded attempts) ──
-    for (let i = 0; i < PRIMARY_ATTEMPTS; i++) {
-        const prompt = strengthenPrompt(basePrompt, i);
-        const image = await tryPhotographic('imagen', i + 1, prompt);
-        if (image) {
-            log(`[image] slide ${slide.slide}: produced by imagen (attempt ${i + 1})`);
-            return { slide: slide.slide, imageBuffer: image, source: 'imagen', attempts };
-        }
-    }
-
-    // ── Rung 2: gpt-image-1 secondary (bounded attempts, constraint-strengthened) ──
-    for (let i = 0; i < SECONDARY_ATTEMPTS; i++) {
-        // Continue strengthening past the primary attempts so each retry is harder.
-        const prompt = strengthenPrompt(basePrompt, PRIMARY_ATTEMPTS + i);
-        const image = await tryPhotographic('openai', i + 1, prompt);
-        if (image) {
+            attempts.push({ provider: 'openai', attempt: i + 1, outcome: 'used' });
             log(`[image] slide ${slide.slide}: produced by openai (attempt ${i + 1})`);
-            return { slide: slide.slide, imageBuffer: image, source: 'openai', attempts };
+            return { slide: slide.slide, imageBuffer: image, source: 'openai', credit: AI_IMAGE_CREDIT, attempts };
         }
+        attempts.push({ provider: 'openai', attempt: i + 1, outcome: 'rejected', detail: verdict.reason });
+        log(`[image] slide ${slide.slide}: openai attempt ${i + 1} audit-rejected: ${verdict.reason ?? 'unspecified'}`);
     }
 
     // ── Rung 3: HUVA satori text template (non-photographic, no people) ──
-    // Always compliant by construction, so it bypasses the audit legitimately.
     const templateImage = await deps.renderTemplate(slide);
     attempts.push({ provider: 'template', attempt: 1, outcome: 'used' });
     log(`[image] slide ${slide.slide}: produced by template fallback`);

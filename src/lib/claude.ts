@@ -4,6 +4,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { sniffImageMime } from '@/lib/utils';
 
 class ClaudeClient {
     private client: Anthropic;
@@ -97,13 +98,21 @@ class ClaudeClient {
      *
      * On API error or ambiguous response, defaults to `{ pass: false }` so the
      * piece is held for manual review rather than auto-publishing a violation.
+     *
+     * The media type is sniffed from the bytes rather than trusted from the
+     * caller. Ladder rungs mix formats — gpt-image-1 returns PNG, Library of
+     * Congress derivatives are JPEG — and a mismatch makes the API 400, which
+     * this method would swallow as a *rejection*. That failure mode is silent
+     * and total: every image of the mislabelled format would be dropped and
+     * quietly replaced by the fallback rung.
      */
     async auditImageSubjects(
         imageBuffer: ArrayBuffer,
         constraint: string,
-        mediaType: 'image/png' | 'image/jpeg' = 'image/png',
+        mediaType?: 'image/png' | 'image/jpeg',
     ): Promise<{ pass: boolean; reason?: string }> {
         try {
+            const sniffed = mediaType ?? sniffImageMime(imageBuffer);
             const base64 = Buffer.from(imageBuffer).toString('base64');
             const response = await this.client.messages.create({
                 model: 'claude-haiku-4-5-20251001',
@@ -118,7 +127,7 @@ class ClaudeClient {
                         content: [
                             {
                                 type: 'image',
-                                source: { type: 'base64', media_type: mediaType, data: base64 },
+                                source: { type: 'base64', media_type: sniffed, data: base64 },
                             },
                             {
                                 type: 'text',

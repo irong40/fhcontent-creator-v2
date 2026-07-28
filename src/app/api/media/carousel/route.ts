@@ -1,15 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
+import { openai } from '@/lib/openai';
 import { uploadImage } from '@/lib/storage';
-import { estimateClaudeCost } from '@/lib/utils';
+import { estimateClaudeCost, estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { carouselGenerateSchema, carouselSlidesResponseSchema } from '@/lib/schemas';
 import { buildCarouselSlidesPrompt } from '@/lib/prompts';
+import { generateSlideWithLadder, serializeAttempts, type SlideLadderDeps } from '@/lib/carousel-slide';
+import { buildArchivalQueries, findArchivalImages, ARCHIVAL_AUDIT_RULES } from '@/lib/archival';
 import { renderHuvaSlide } from '@/lib/huva-template';
 import type { CarouselSlide, HistoricalPoint, Topic } from '@/types/database';
 
 // satori + resvg-js (native addon) require the Node.js serverless runtime.
 export const runtime = 'nodejs';
+
+/**
+ * Belt-and-suspenders subject guardrail prepended to every photoreal prompt when
+ * the persona has an image_subject_constraint. Mirrors daily-media's directive.
+ */
+function applySubjectGuardrail(prompt: string, constraint: string | null | undefined): string {
+    if (!constraint) return prompt;
+    const directive =
+        'HARD CONSTRAINT — read before rendering: ' + constraint + ' ' +
+        'Render ZERO background figures, ZERO crowds, ZERO incidental people. ' +
+        'If the prompt below describes people, render a TIGHT CLOSE-UP of ONE individual only, with dark brown skin clearly and unambiguously visible — never silhouette, never wide shot. ' +
+        'If the prompt below mentions maps, "scenes", "community", or groups, omit all human figures entirely and render only objects, documents, architecture, or landscape. ' +
+        'Prompt follows:\n\n';
+    return directive + prompt;
+}
 
 export async function POST(request: NextRequest) {
     try {
@@ -112,24 +130,67 @@ export async function POST(request: NextRequest) {
             tokens_output: claudeResult.outputTokens,
         });
 
-        // Step 2: Render each slide via the satori HUVA template (template-first).
-        // Carousel slides are text-over-background with NO people, so they are
-        // rendered deterministically on the node runtime ($0, never fails, no audit).
+        // Step 2: Produce each slide PHOTO-FIRST — a rights-cleared Library of
+        // Congress photograph where one exists, gpt-image-1 where it doesn't, and
+        // the typographic card only as a last resort. Mirrors the daily-media
+        // cron, which is the path that runs in production.
         const carouselSlides: CarouselSlide[] = [];
         const imageUrls: string[] = [];
         let imagesGenerated = 0;
         const slideTotal = generatedSlides.length;
 
-        for (const slide of generatedSlides) {
-            const slideEntry: CarouselSlide = {
-                slide: slide.slide_number,
-                text: slide.body,
-                imagePrompt: slide.image_prompt,
-            };
+        const slideEntries: CarouselSlide[] = generatedSlides.map(slide => ({
+            slide: slide.slide_number,
+            text: slide.body,
+            imagePrompt: slide.image_prompt,
+        }));
+
+        // One archival search per carousel, dealt out across the slides.
+        const archivalPool = imageSubjectConstraint
+            ? await findArchivalImages(
+                buildArchivalQueries(topic.title, slideEntries.map(s => s.text).join(' ')),
+                slideTotal,
+                { log: (m) => console.log(m) },
+            )
+            : [];
+
+        const ladderDeps: SlideLadderDeps = {
+            generateArchival: async () => {
+                const next = archivalPool.shift();
+                return next
+                    ? { bytes: next.bytes, credit: next.credit, title: next.title, sourceUrl: next.sourceUrl }
+                    : null;
+            },
+            generatePhoto: async (prompt) => {
+                const result = await openai.generateImage(prompt);
+                return base64ToArrayBuffer(result.imageData);
+            },
+            audit: (image, constraint) => claude.auditImageSubjects(image, constraint),
+            renderTemplate: (s) => renderHuvaSlide(s, slideTotal),
+            applyGuardrail: applySubjectGuardrail,
+            archivalAuditRules: ARCHIVAL_AUDIT_RULES,
+            log: (m) => console.log(m),
+        };
+
+        for (const slideEntry of slideEntries) {
+            const source = generatedSlides.find(s => s.slide_number === slideEntry.slide);
 
             try {
-                const imageBuffer = await renderHuvaSlide(slideEntry, slideTotal);
-                const storagePath = `${topic.id}/carousel_slide_${slide.slide_number}.png`;
+                const result = await generateSlideWithLadder(
+                    slideEntry,
+                    imageSubjectConstraint,
+                    ladderDeps,
+                );
+
+                // A photograph is composited behind the slide typography with its
+                // credit; the template rung already returns a finished card.
+                const imageBuffer = result.source === 'template'
+                    ? result.imageBuffer
+                    : await renderHuvaSlide(slideEntry, slideTotal, {
+                        photo: { bytes: result.imageBuffer, credit: result.credit ?? '' },
+                    });
+
+                const storagePath = `${topic.id}/carousel_slide_${slideEntry.slide}.png`;
                 const slideImageUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
 
                 imageUrls.push(slideImageUrl);
@@ -139,17 +200,30 @@ export async function POST(request: NextRequest) {
                 await supabase.from('visual_assets').insert({
                     content_piece_id: contentPieceId,
                     asset_type: 'carousel_image',
-                    source_service: 'template',
+                    source_service: result.source,
                     asset_url: slideImageUrl,
                     metadata: {
-                        slide: slide.slide_number,
-                        title: slide.title,
-                        prompt: slide.image_prompt,
+                        slide: slideEntry.slide,
+                        title: source?.title,
+                        prompt: slideEntry.imagePrompt,
+                        ...(result.credit ? { credit: result.credit } : {}),
+                        ...(result.sourceUrl ? { archival_source: result.sourceUrl } : {}),
+                        attempts: serializeAttempts(result.attempts),
                     },
                     status: 'ready',
                 });
+
+                if (result.source === 'openai') {
+                    await supabase.from('cost_tracking').insert({
+                        service: 'openai',
+                        operation: 'gpt_image_carousel_slide',
+                        topic_id: topic.id,
+                        content_piece_id: contentPieceId,
+                        cost_usd: estimateDalleCost(1),
+                    });
+                }
             } catch (e) {
-                console.warn(`Failed to render image for slide ${slide.slide_number}:`, e);
+                console.warn(`Failed to render image for slide ${slideEntry.slide}:`, e);
             }
 
             carouselSlides.push(slideEntry);

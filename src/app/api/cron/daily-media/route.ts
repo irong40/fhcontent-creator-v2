@@ -9,7 +9,8 @@ import { estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
-import { generateSlideWithLadder, type SlideLadderDeps } from '@/lib/carousel-slide';
+import { generateSlideWithLadder, serializeAttempts, type SlideLadderDeps } from '@/lib/carousel-slide';
+import { buildArchivalQueries, findArchivalImages, ARCHIVAL_AUDIT_RULES } from '@/lib/archival';
 import { renderHuvaSlide } from '@/lib/huva-template';
 import { renderQuoteCard } from '@/lib/quote-template';
 import type { ContentPiece, TopicWithBrand, PieceType, CarouselSlide } from '@/types/database';
@@ -248,15 +249,16 @@ export async function GET(request: Request) {
                 const subjectConstraint = persona.image_subject_constraint;
 
                 // Photoreal-image ladder deps (shared by thumbnails below).
-                // Imagen 4 primary → gpt-image-1 secondary → satori template fallback.
-                // Every photographic rung is audited against the persona subject
-                // constraint; the template fallback (no people) bypasses it legitimately.
+                // gpt-image-1 → satori template fallback. Every photographic rung
+                // is audited against the persona subject constraint; the template
+                // fallback (no people) bypasses it legitimately.
+                //
+                // The Imagen rung was removed 2026-07-28: imagen-4.0-* returns 404
+                // "no longer available to new users" on this key and every Gemini
+                // image model returns 429, so it burned two wasted round-trips per
+                // image (382 attempts, 382 errors) before falling through.
                 const imageLadderDeps: SlideLadderDeps = {
-                    generatePrimary: async (prompt) => {
-                        const result = await gemini.generateImage(prompt, { aspectRatio: '1:1' });
-                        return base64ToArrayBuffer(result.imageData);
-                    },
-                    generateSecondary: async (prompt) => {
+                    generatePhoto: async (prompt) => {
                         const result = await openai.generateImage(prompt);
                         return base64ToArrayBuffer(result.imageData);
                     },
@@ -279,7 +281,7 @@ export async function GET(request: Request) {
                             imageLadderDeps,
                         );
                         const imageBuffer = result.imageBuffer;
-                        const sourceService = result.source === 'imagen' ? 'gemini' : result.source;
+                        const sourceService = result.source;
 
                         const storagePath = `${topic.id}/${piece.piece_type}_thumbnail.png`;
                         const thumbnailUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
@@ -296,12 +298,7 @@ export async function GET(request: Request) {
                             asset_url: thumbnailUrl,
                             metadata: {
                                 prompt: piece.thumbnail_prompt,
-                                attempts: result.attempts.map(a => ({
-                                    provider: a.provider,
-                                    attempt: a.attempt,
-                                    outcome: a.outcome,
-                                    ...(a.detail ? { detail: a.detail } : {}),
-                                })),
+                                attempts: serializeAttempts(result.attempts),
                             },
                             status: 'ready',
                         });
@@ -324,12 +321,17 @@ export async function GET(request: Request) {
                     }
                 }
 
-                // ── Stage 3: Carousel slides (TEMPLATE-FIRST, satori-rendered) ──
+                // ── Stage 3: Carousel slides (PHOTO-FIRST) ──
                 // Canva path removed 2026-05-02 — Adam canceled Canva subscription.
-                // HUVA carousel slides are text-over-background with NO people, so they
-                // are rendered deterministically with satori (+ resvg) on the node
-                // serverless runtime: $0, never fails, no subject audit needed. This is
-                // the PRIMARY and only path for carousel slides — no generative models.
+                // Text-only satori slides ran from 2026-06-02 to 2026-07-28 and drew
+                // no measurable engagement across 29 published carousels, so slides
+                // are photographic again: a real rights-cleared Library of Congress
+                // photograph where one exists, gpt-image-1 where it doesn't, and the
+                // typographic card only as a last resort.
+                //
+                // Archival images are fetched ONCE per carousel (not per slide) and
+                // dealt out across the slides — one search, bounded latency, and
+                // visual variety instead of the same photograph seven times.
                 const carouselPiece = (allPieces as ContentPiece[]).find(p => p.piece_type === 'carousel');
                 if (carouselPiece && !carouselPiece.carousel_url) {
                     const slides = carouselPiece.carousel_slides as CarouselSlide[] | null;
@@ -338,11 +340,42 @@ export async function GET(request: Request) {
                             const imageUrls: string[] = [];
                             const renderable = slides.filter(s => s.imagePrompt || s.text);
                             const slideTotal = renderable.length;
-                            console.log(`[daily-media] Rendering ${slideTotal} carousel slides via satori template...`);
+
+                            // Only personas with a subject constraint (HUVA) draw on the
+                            // archival catalog; it is scoped to a Black-history subject facet.
+                            const archivalPool = subjectConstraint
+                                ? await findArchivalImages(
+                                    buildArchivalQueries(topic.title, renderable.map(s => s.text).join(' ')),
+                                    slideTotal,
+                                    { log: (m) => console.log(m) },
+                                )
+                                : [];
+                            console.log(
+                                `[daily-media] Rendering ${slideTotal} carousel slides — ${archivalPool.length} archival photographs available`,
+                            );
 
                             for (const slide of renderable) {
                                 try {
-                                    const imageBuffer = await renderHuvaSlide(slide, slideTotal);
+                                    const result = await generateSlideWithLadder(slide, subjectConstraint, {
+                                        ...imageLadderDeps,
+                                        generateArchival: async () => {
+                                            const next = archivalPool.shift();
+                                            return next
+                                                ? { bytes: next.bytes, credit: next.credit, title: next.title, sourceUrl: next.sourceUrl }
+                                                : null;
+                                        },
+                                        archivalAuditRules: ARCHIVAL_AUDIT_RULES,
+                                        renderTemplate: (s) => renderHuvaSlide(s, slideTotal),
+                                    });
+
+                                    // A photograph is composited behind the slide
+                                    // typography with its credit; the template rung
+                                    // already returns a finished card.
+                                    const imageBuffer = result.source === 'template'
+                                        ? result.imageBuffer
+                                        : await renderHuvaSlide(slide, slideTotal, {
+                                            photo: { bytes: result.imageBuffer, credit: result.credit ?? '' },
+                                        });
 
                                     const storagePath = `${topic.id}/carousel_slide_${slide.slide}.png`;
                                     const slideUrl = await uploadImage(storagePath, imageBuffer, 'image/png');
@@ -351,17 +384,29 @@ export async function GET(request: Request) {
                                     await supabase.from('visual_assets').insert({
                                         content_piece_id: carouselPiece.id,
                                         asset_type: 'carousel_image',
-                                        source_service: 'template',
+                                        source_service: result.source,
                                         asset_url: slideUrl,
                                         metadata: {
                                             slide: slide.slide,
                                             prompt: slide.imagePrompt,
-                                            attempts: [{ provider: 'template', attempt: 1, outcome: 'used' }],
+                                            ...(result.credit ? { credit: result.credit } : {}),
+                                            ...(result.sourceUrl ? { archival_source: result.sourceUrl } : {}),
+                                            attempts: serializeAttempts(result.attempts),
                                         },
                                         status: 'ready',
                                     });
 
-                                    console.log(`[daily-media] Slide ${slide.slide}: done via template`);
+                                    if (result.source === 'openai') {
+                                        await supabase.from('cost_tracking').insert({
+                                            service: 'openai',
+                                            operation: 'gpt_image_carousel_slide',
+                                            topic_id: topic.id,
+                                            content_piece_id: carouselPiece.id,
+                                            cost_usd: estimateDalleCost(1),
+                                        });
+                                    }
+
+                                    console.log(`[daily-media] Slide ${slide.slide}: done via ${result.source}`);
                                 } catch (e) {
                                     // Only reachable if the satori renderer itself throws.
                                     console.error(`[daily-media] Carousel slide ${slide.slide} failed entirely:`, e);

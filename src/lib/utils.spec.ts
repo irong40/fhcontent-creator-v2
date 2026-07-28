@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateClaudeCost, wordCount, estimateDuration, estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer } from './utils';
+import { estimateClaudeCost, wordCount, estimateDuration, estimateElevenLabsCost, estimateDalleCost, base64ToArrayBuffer, sniffImageMime } from './utils';
 
 describe('estimateClaudeCost', () => {
     it('returns 0 for zero tokens', () => {
@@ -176,5 +176,26 @@ describe('base64ToArrayBuffer', () => {
         const decoded = base64ToArrayBuffer(encoded);
         const text = String.fromCharCode(...new Uint8Array(decoded));
         expect(text).toBe(original);
+    });
+});
+
+describe('sniffImageMime', () => {
+    const withHeader = (bytes: number[]): ArrayBuffer => {
+        const b = new Uint8Array([...bytes, ...new Array(16).fill(0)]);
+        return b.buffer.slice(0, b.length) as ArrayBuffer;
+    };
+
+    it('detects JPEG from its magic bytes (Library of Congress derivatives)', () => {
+        expect(sniffImageMime(withHeader([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg');
+    });
+
+    it('detects PNG from its magic bytes (gpt-image-1 output)', () => {
+        expect(sniffImageMime(withHeader([0x89, 0x50, 0x4e, 0x47]))).toBe('image/png');
+    });
+
+    it('defaults to PNG for an unrecognised container', () => {
+        // satori tolerates a mislabelled PNG far better than a mislabelled JPEG,
+        // where it throws a RangeError instead of degrading.
+        expect(sniffImageMime(withHeader([0x00, 0x01, 0x02, 0x03]))).toBe('image/png');
     });
 });
