@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, pieceSlotTime, PIECE_SLOT_OFFSET_HOURS } from './helpers';
+import { getTargetPlatforms, getConfiguredTargetPlatforms, getMediaUrl, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, pieceSlotTime, PIECE_SLOT_OFFSET_HOURS, pieceTitle, teaseLine, shouldTeaseLongform } from './helpers';
 
 describe('getTargetPlatforms', () => {
     it('returns tiktok, instagram, youtube, facebook for long video', () => {
@@ -237,6 +237,114 @@ describe('pieceSlotTime', () => {
         const base = '2026-05-12T13:00:00Z';
         const out = pieceSlotTime('short_1', base);
         expect(out?.toISOString()).toBe('2026-05-12T13:00:00.000Z');
+    });
+});
+
+describe('pieceTitle', () => {
+    // Real caption_short values from the Fredericksburg Silk Cooperative topic.
+    const topic = "The Fredericksburg Silk Cooperative: When 200 Black Women Built Virginia's Only Textile Mill (1897-1908)";
+
+    it('keeps the topic title for long — that piece IS the story', () => {
+        expect(pieceTitle({ piece_type: 'long', caption_short: 'Some caption here.' }, topic)).toBe(topic);
+    });
+
+    it('keeps the topic title for lecture', () => {
+        expect(pieceTitle({ piece_type: 'lecture', caption_short: 'Some caption here.' }, topic)).toBe(topic);
+    });
+
+    it('prefers a crafted title when present', () => {
+        const out = pieceTitle({
+            piece_type: 'short_2',
+            title: 'They Paid Triple the Going Wage',
+            caption_short: '1898: They bought a condemned warehouse. Then installed looms.',
+        }, topic);
+        expect(out).toBe('They Paid Triple the Going Wage');
+    });
+
+    it('falls back to the first sentence of caption_short', () => {
+        const out = pieceTitle({
+            piece_type: 'short_2',
+            caption_short: '1898: They bought a condemned warehouse for $1,200. Then installed twelve silk looms.',
+        }, topic);
+        expect(out).toBe('1898: They bought a condemned warehouse for $1,200.');
+    });
+
+    it('uses the whole caption when it has no sentence terminator', () => {
+        const out = pieceTitle({
+            piece_type: 'short_1',
+            caption_short: '196 women bought $5 shares door to door',
+        }, topic);
+        expect(out).toBe('196 women bought $5 shares door to door');
+    });
+
+    it('gives four different titles to the four shorts of one topic', () => {
+        const captions = [
+            '1897: 196 Black women bought $5 shares door-to-door.',
+            '1898: They paid Black women 75 cents a day, triple the going wage.',
+            '1903: White department stores bought their silk on quality alone.',
+            '1908: Fire and mechanised competition ended it after eleven years.',
+        ];
+        const titles = captions.map((c, i) =>
+            pieceTitle({ piece_type: `short_${i + 1}` as never, caption_short: c }, topic));
+        expect(new Set(titles).size).toBe(4);
+        expect(titles.every(t => t !== topic)).toBe(true);
+    });
+
+    it('falls back to the topic title when caption_short is null', () => {
+        expect(pieceTitle({ piece_type: 'short_3', caption_short: null }, topic)).toBe(topic);
+    });
+
+    it('rejects a stub first sentence rather than shipping "1897:"', () => {
+        expect(pieceTitle({ piece_type: 'short_1', caption_short: '1897: And more text follows.' }, topic))
+            .toBe('1897: And more text follows.');
+        expect(pieceTitle({ piece_type: 'short_1', caption_short: '1897. Rest.' }, topic)).toBe(topic);
+    });
+
+    it('does not cap length — the platform truncators own that', () => {
+        const long = 'A'.repeat(300);
+        expect(pieceTitle({ piece_type: 'short_1', title: long }, topic)).toHaveLength(300);
+    });
+});
+
+describe('shouldTeaseLongform', () => {
+    it('teases on all four shorts', () => {
+        expect(['short_1', 'short_2', 'short_3', 'short_4']
+            .every(p => shouldTeaseLongform(p as never))).toBe(true);
+    });
+
+    it('never teases on the long-form itself, the carousel, or a quote video', () => {
+        expect(shouldTeaseLongform('long')).toBe(false);
+        expect(shouldTeaseLongform('lecture')).toBe(false);
+        expect(shouldTeaseLongform('carousel')).toBe(false);
+        expect(shouldTeaseLongform('quote_video')).toBe(false);
+    });
+});
+
+describe('teaseLine', () => {
+    it('names the long-form slot derived from publish_at, not a hardcoded time', () => {
+        // 13:00Z = 9 AM EDT; long is +10h = 7 PM ET.
+        expect(teaseLine('short_1', '2026-05-12T13:00:00Z')).toBe('Full story tonight at 7:00 PM ET.');
+    });
+
+    it('shifts with the topic base rather than staying at 7 PM', () => {
+        // 11:00Z = 7 AM EDT; long is +10h = 5 PM ET.
+        expect(teaseLine('short_1', '2026-05-12T11:00:00Z')).toBe('Full story tonight at 5:00 PM ET.');
+    });
+
+    it('says "today" when the long-form lands before evening', () => {
+        // 04:00Z = midnight ET; long is +10h = 10 AM ET.
+        expect(teaseLine('short_1', '2026-05-12T04:00:00Z')).toBe('Full story today at 10:00 AM ET.');
+    });
+
+    it('names the weekday when the long-form crosses into the next ET day', () => {
+        // 22:00Z = 6 PM ET; long is +10h = 4 AM ET the following day.
+        const out = teaseLine('short_1', '2026-05-12T22:00:00Z');
+        expect(out).toMatch(/^Full story \w+day at 4:00 AM ET\.$/);
+        expect(out).not.toContain('tonight');
+    });
+
+    it('returns null for a legacy topic with no publish_at — no false promise', () => {
+        expect(teaseLine('short_1', null)).toBeNull();
     });
 });
 

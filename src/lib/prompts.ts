@@ -7,6 +7,10 @@ export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnai
  * Sourced from performance_metrics (weekly yt-dlp collector on the music
  * machine) aggregated per topic in the daily-topic cron.
  */
+/** Lookback window for get_topic_winners. Single source of truth: the RPC call
+ *  and the prompt text that describes it must not drift apart. */
+export const WINNERS_WINDOW_DAYS = 10;
+
 export interface TopicWinner {
     title: string;
     views: number;
@@ -155,6 +159,10 @@ export function buildTopicPrompt(
     recentTopics: string[],
     count: number,
     topWinners: TopicWinner[] = [],
+    /** Lookback window the winners were selected over. Passed in rather than
+     *  restated here: the prompt claimed "last 30 days" while the caller queried
+     *  10, so Claude was told something false about its own evidence. */
+    winnersWindowDays: number = WINNERS_WINDOW_DAYS,
 ): { system: string; user: string } {
     if (persona.content_format === 'quote_video') {
         return buildQuoteTopicPrompt(persona, recentTopics, count);
@@ -170,7 +178,7 @@ export function buildTopicPrompt(
     const remixCount = count >= 4 ? 2 : count >= 2 ? 1 : 0;
     const winnersBlock = topWinners.length >= 3 && remixCount > 0
         ? `
-PROVEN WINNERS (our highest-engagement published topics, last 30 days):
+PROVEN WINNERS (our highest-engagement published topics, last ${winnersWindowDays} days):
 ${topWinners.map(w => `- "${w.title}" — ${w.views.toLocaleString()} views, ${w.likes.toLocaleString()} likes`).join('\n')}
 
 Of the ${count} topics, exactly ${remixCount} must be WINNER REMIXES: pick a proven winner above and tell a DIFFERENT chapter of the same story — the aftermath, one named individual's perspective, the opposition's attempt to stop it, or what the textbooks left out. A remix must stand alone as a new story for someone who never saw the original, and its title must NOT reuse the original title's wording (lead with the new angle, not the original's name).

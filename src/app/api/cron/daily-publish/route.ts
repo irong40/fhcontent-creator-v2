@@ -5,7 +5,7 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId, pieceTitle, teaseLine, shouldTeaseLongform } from './helpers';
 import { PLATFORM_DAILY_CAP, DAILY_CAP_WINDOW_HOURS, isAccountAtDailyCap, isTransientPublishError } from '@/lib/publish-limits';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
@@ -176,6 +176,9 @@ async function publishPieceToPlatform(
     mediaUrl: string,
     pageId?: string,
     hasBakedAudio?: boolean,
+    /** Topic's base publish_at — used to name the long-form's slot in the tease.
+     *  Null on legacy topics without staggering, which simply get no tease. */
+    topicPublishAt?: string | null,
 ): Promise<{ platformStatus: PlatformStatus; result: PlatformResult }> {
     // For carousel pieces on Instagram, upload all slides
     const mediaUrls: string[] = [];
@@ -198,14 +201,31 @@ async function publishPieceToPlatform(
         ? (piece.caption_short || piece.caption_long || '')
         : (piece.caption_long || piece.caption_short || '');
 
+    // Point shorts at the day's long-form. Each short covers ONE point of a
+    // story whose full telling publishes at the +10h slot; without this the
+    // connection between them exists only in the schedule, invisibly, and the
+    // long-form averaged fewer views than any of its own shorts.
+    // Appended BEFORE hashtag capping so Instagram's limit counts the final text.
+    if (shouldTeaseLongform(piece.piece_type)) {
+        const tease = teaseLine(piece.piece_type, topicPublishAt ?? null);
+        if (tease && !caption.includes(tease)) {
+            caption = caption ? `${caption}\n\n${tease}` : tease;
+        }
+    }
+
     // Platform-specific sanitization
     if (platform === 'instagram') {
         caption = capInstagramHashtags(caption);
     }
+
+    // Each piece publishes under its OWN title, not the topic's — five uploads
+    // sharing one title read as duplicate spam on the channel. The long-form
+    // keeps the topic title (pieceTitle handles that), since it IS the story.
+    const title = pieceTitle(piece, topicTitle);
     const platformTitle =
-        platform === 'tiktok' ? truncateTikTokTitle(topicTitle)
-        : platform === 'youtube' ? truncateYouTubeTitle(topicTitle)
-        : topicTitle;
+        platform === 'tiktok' ? truncateTikTokTitle(title)
+        : platform === 'youtube' ? truncateYouTubeTitle(title)
+        : title;
 
     const target = buildTarget(platform, {
         title: platformTitle,
@@ -431,7 +451,7 @@ export async function publishTopic(
             pieceAttempted = true;
             try {
                 const { platformStatus, result: platformResult } =
-                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl, pageId, hasBakedAudio);
+                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl, pageId, hasBakedAudio, topic.publish_at);
                 updatedPlatforms[platform] = platformStatus;
                 result.platformResults[key] = platformResult;
                 anySuccess = true;
