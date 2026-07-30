@@ -338,6 +338,7 @@ Generate content for 6 pieces:
 - Include imagePrompt for each slide
 
 FOR EACH PIECE, PROVIDE:
+- title: The headline this piece publishes under, max 90 characters. Each of the 6 pieces MUST get a DIFFERENT title — they publish to the same channel on the same day, and identical titles read as duplicate spam and give a viewer no reason to open more than one. Write each short's title from ITS OWN point (the specific number, name, place or reversal in that piece), not from the topic. Do NOT number them ("Part 2"), do NOT reuse the topic title's opening words. For the LONG piece, and only the long piece, use the topic title as given — that piece is the whole story and viewers search for it by name.
 - script: The spoken/displayed text (NEVER include the creator's name)
 - captionLong: 2200 character caption. End with EXACTLY 3 hashtags — no more, no fewer. Choose 3 high-relevance tags for the ${persona.brand} brand. Do NOT add a long hashtag list under any circumstance — Instagram rejects posts with more than 5 hashtags, so 3 is the hard ceiling.
 - captionShort: 280 character caption for Twitter/X. End with EXACTLY 2 hashtags — no more.
@@ -348,12 +349,12 @@ For each piece, also include a "musicTrack" field with a mood string for backgro
 OUTPUT FORMAT (JSON only):
 {
   "pieces": [
-    {"pieceType": "long", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "dramatic"},
-    {"pieceType": "short_1", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "upbeat"},
-    {"pieceType": "short_2", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "reflective"},
-    {"pieceType": "short_3", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "triumphant"},
-    {"pieceType": "short_4", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "inspirational"},
-    {"pieceType": "carousel", "script": "...", "captionLong": "...", "captionShort": "...", "carouselSlides": [{"slide": 1, "text": "...", "imagePrompt": "..."}, ...], "musicTrack": "inspirational"}
+    {"pieceType": "long", "title": "${topic.title.replace(/"/g, "'")}", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "dramatic"},
+    {"pieceType": "short_1", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "upbeat"},
+    {"pieceType": "short_2", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "reflective"},
+    {"pieceType": "short_3", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "triumphant"},
+    {"pieceType": "short_4", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "inspirational"},
+    {"pieceType": "carousel", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "carouselSlides": [{"slide": 1, "text": "...", "imagePrompt": "..."}, ...], "musicTrack": "inspirational"}
   ]
 }`;
 

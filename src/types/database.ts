@@ -223,6 +223,10 @@ export interface Database {
                     topic_id: string;
                     piece_type: PieceType;
                     piece_order: number;
+                    /** Per-piece publish headline (migration 027). Null on rows
+                     *  generated before it; daily-publish falls back to
+                     *  caption_short then the topic title. */
+                    title: string | null;
                     script: string | null;
                     caption_long: string | null;
                     caption_short: string | null;
@@ -253,6 +257,7 @@ export interface Database {
                     topic_id: string;
                     piece_type: PieceType;
                     piece_order: number;
+                    title?: string | null;
                     script?: string | null;
                     caption_long?: string | null;
                     caption_short?: string | null;
@@ -283,6 +288,7 @@ export interface Database {
                     topic_id?: string;
                     piece_type?: PieceType;
                     piece_order?: number;
+                    title?: string | null;
                     script?: string | null;
                     caption_long?: string | null;
                     caption_short?: string | null;

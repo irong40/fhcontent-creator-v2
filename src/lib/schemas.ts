@@ -45,6 +45,11 @@ export const topicResponseSchema = z.object({
 
 const generatedPieceSchema = z.object({
     pieceType: z.enum(['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel']),
+    /** Per-piece headline. Optional so a model response that omits it still
+     *  validates rather than failing a whole topic's generation — daily-publish
+     *  falls back to caption_short and then the topic title (helpers.pieceTitle).
+     *  Capped at 100 to match YouTube's title limit. */
+    title: z.string().max(100).optional(),
     script: z.string(),
     captionLong: z.string(),
     captionShort: z.string(),
