@@ -4,16 +4,28 @@
  * Used for THUMBNAILS / photoreal slides (images that legitimately depict
  * people and must pass the HUVA subject audit). Each image is produced by an
  * explicit, bounded retry ladder:
- *   1. Imagen 4 (primary)   → audit. Pass ⇒ use it.
- *   2. Imagen 4 (retry)     → re-audit (constraint-strengthened prompt).
+ *   1. Google (primary)     → audit. Pass ⇒ use it.
+ *   2. Google (retry)       → re-audit (constraint-strengthened prompt).
  *   3. gpt-image-1 (secondary) → audit.
  *   4. gpt-image-1 (retry)  → re-audit (final strengthened retry).
  *   5. HUVA satori text template (non-photographic, no people — always passes).
  *
- * Attempt budget is bounded per image (PRIMARY_ATTEMPTS Imagen + SECONDARY_ATTEMPTS
+ * The primary slug is the string 'imagen' for historical reasons and is now a
+ * misnomer: Imagen 4 is retired (every id 404s "no longer available to new
+ * users") and GeminiClient.generateImage calls `gemini-3.1-flash-image`. The
+ * slug is kept rather than renamed because it is a persisted discriminator —
+ * callers already map it to 'gemini' for cost tracking. Read 'imagen' as
+ * "the Google rung".
+ *
+ * Attempt budget is bounded per image (PRIMARY_ATTEMPTS Google + SECONDARY_ATTEMPTS
  * gpt-image-1), so there is no runaway image-API spend and no infinite loop. The
  * template fallback is $0 and always succeeds, so an image only fails if even the
  * template renderer throws.
+ *
+ * BOTH generative rungs were dead simultaneously until 2026-07-30 — Imagen
+ * retired, OpenAI account at zero credits — so every photoreal image silently
+ * became a text template. That is the all-words format this ladder exists to
+ * avoid, and nothing alerted because the template rung "succeeds".
  *
  * NOTE ON CAROUSELS: HUVA carousel *slides* are text-over-background with NO
  * people, so they are rendered TEMPLATE-FIRST (satori) directly by the caller and
@@ -30,7 +42,7 @@
 
 import type { CarouselSlide } from '@/types/database';
 
-/** Max primary-provider (Imagen 4) attempts before falling through to the secondary. */
+/** Max primary-provider (Google / gemini-3.1-flash-image) attempts before falling through. */
 export const PRIMARY_ATTEMPTS = 2;
 /** Max secondary-provider (gpt-image-1) attempts before falling through to the template. */
 export const SECONDARY_ATTEMPTS = 2;
