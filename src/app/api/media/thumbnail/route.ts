@@ -4,9 +4,10 @@ import { openai } from '@/lib/openai';
 import { gemini } from '@/lib/gemini';
 import { claude } from '@/lib/claude';
 import { uploadImage } from '@/lib/storage';
-import { estimateDalleCost, base64ToArrayBuffer } from '@/lib/utils';
+import { estimateDalleCost } from '@/lib/utils';
 import { thumbnailGenerateSchema } from '@/lib/schemas';
-import { generateSlideWithLadder, type SlideLadderDeps } from '@/lib/carousel-slide';
+import { generateSlideWithLadder, serializeAttempts, type SlideLadderDeps } from '@/lib/carousel-slide';
+import { generatePhotoCascade } from '@/lib/photo-provider';
 import { renderHuvaSlide } from '@/lib/huva-template';
 
 // Imagen/gpt-image-1 plus the satori (+ resvg native addon) template fallback
@@ -83,19 +84,17 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        // Photoreal ladder: Imagen 4 primary → gpt-image-1 secondary → satori
-        // template fallback. Every photographic rung is audited against the
-        // subject constraint; the template (no people) bypasses it legitimately,
-        // so a thumbnail can never hard-fail.
+        // Photoreal ladder: gpt-image-1 → satori template fallback. Every
+        // photographic rung is audited against the subject constraint; the
+        // template (no people) bypasses it legitimately, so a thumbnail can
+        // never hard-fail.
+        //
+        // The Imagen rung was removed 2026-07-28 — imagen-4.0-* 404s ("no longer
+        // available to new users"). The generated rung is a cascade
+        // (gemini-3.1-flash-image, then gpt-image-1); see photo-provider.ts.
         const ladderDeps: SlideLadderDeps = {
-            generatePrimary: async (prompt) => {
-                const result = await gemini.generateImage(prompt, { aspectRatio: '1:1' });
-                return base64ToArrayBuffer(result.imageData);
-            },
-            generateSecondary: async (prompt) => {
-                const result = await openai.generateImage(prompt);
-                return base64ToArrayBuffer(result.imageData);
-            },
+            generatePhoto: (prompt) =>
+                generatePhotoCascade(prompt, { log: (m) => console.log(m) }),
             audit: (image, constraint) => claude.auditImageSubjects(image, constraint),
             renderTemplate: (slide) => renderHuvaSlide(slide, 1),
             applyGuardrail: applySubjectGuardrail,
@@ -109,7 +108,7 @@ export async function POST(request: NextRequest) {
         );
 
         const imageBuffer = result.imageBuffer;
-        const sourceService = result.source === 'imagen' ? 'gemini' : result.source;
+        const sourceService = result.source;
 
         // Upload to Supabase Storage
         const storagePath = `${piece.topic_id}/${piece.piece_type}_thumbnail.png`;
@@ -129,12 +128,7 @@ export async function POST(request: NextRequest) {
             asset_url: thumbnailUrl,
             metadata: {
                 prompt: piece.thumbnail_prompt,
-                attempts: result.attempts.map(a => ({
-                    provider: a.provider,
-                    attempt: a.attempt,
-                    outcome: a.outcome,
-                    ...(a.detail ? { detail: a.detail } : {}),
-                })),
+                attempts: serializeAttempts(result.attempts),
             },
             status: 'ready',
         });
