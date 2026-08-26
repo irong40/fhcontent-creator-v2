@@ -47,3 +47,10 @@ next-env.d.ts
 
 # python bytecode (scripts/ollama-grade.py etc.)
 **/__pycache__/
+
+# Session and CLI scratch (regenerated per session — not shared state)
+.claude/project-state.json
+.claude/session-handoff.md
+.planning/agent-history.json
+supabase/.temp/
+logs/
