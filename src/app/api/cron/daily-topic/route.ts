@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
 import { topicResponseSchema } from '@/lib/schemas';
-import { buildTopicPrompt, type TopicWinner } from '@/lib/prompts';
+import { buildTopicPrompt, WINNERS_WINDOW_DAYS, type TopicWinner } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
 import { notifyError } from '@/lib/notifications';
@@ -147,7 +147,7 @@ export async function GET(request: Request) {
                 let topWinners: TopicWinner[] = [];
                 try {
                     const { data: winnersData, error: winnersError } = await supabase
-                        .rpc('get_topic_winners', { p_persona_id: persona.id, p_days: 10, p_limit: 8 });
+                        .rpc('get_topic_winners', { p_persona_id: persona.id, p_days: WINNERS_WINDOW_DAYS, p_limit: 8 });
                     if (winnersError) {
                         console.error(`top-winners RPC failed for ${persona.name} (continuing without):`, winnersError);
                     } else {

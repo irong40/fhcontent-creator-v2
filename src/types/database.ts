@@ -33,9 +33,11 @@ export interface Database {
                     content_guardrail: string | null;
                     guardrail_notebook_ids: string[] | null;
                     facebook_page_ids: string[] | null;
+                    facebook_enabled: boolean;
                     default_music_url: string | null;
                     content_format: ContentFormat;
                     blotato_video_enabled: boolean;
+                    style_brief: string | null;
                     is_active: boolean;
                     created_at: string;
                     updated_at: string;
@@ -63,9 +65,11 @@ export interface Database {
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
+                    facebook_enabled?: boolean;
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
                     blotato_video_enabled?: boolean;
+                    style_brief?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -93,9 +97,11 @@ export interface Database {
                     content_guardrail?: string | null;
                     guardrail_notebook_ids?: string[] | null;
                     facebook_page_ids?: string[] | null;
+                    facebook_enabled?: boolean;
                     default_music_url?: string | null;
                     content_format?: ContentFormat;
                     blotato_video_enabled?: boolean;
+                    style_brief?: string | null;
                     is_active?: boolean;
                     created_at?: string;
                     updated_at?: string;
@@ -217,6 +223,10 @@ export interface Database {
                     topic_id: string;
                     piece_type: PieceType;
                     piece_order: number;
+                    /** Per-piece publish headline (migration 027). Null on rows
+                     *  generated before it; daily-publish falls back to
+                     *  caption_short then the topic title. */
+                    title: string | null;
                     script: string | null;
                     caption_long: string | null;
                     caption_short: string | null;
@@ -247,6 +257,7 @@ export interface Database {
                     topic_id: string;
                     piece_type: PieceType;
                     piece_order: number;
+                    title?: string | null;
                     script?: string | null;
                     caption_long?: string | null;
                     caption_short?: string | null;
@@ -277,6 +288,7 @@ export interface Database {
                     topic_id?: string;
                     piece_type?: PieceType;
                     piece_order?: number;
+                    title?: string | null;
                     script?: string | null;
                     caption_long?: string | null;
                     caption_short?: string | null;
@@ -808,7 +820,7 @@ export interface Database {
             performance_metrics: {
                 Row: {
                     id: string;
-                    content_piece_id: string;
+                    content_piece_id: string | null;
                     platform: string;
                     views: number;
                     likes: number;
@@ -816,10 +828,12 @@ export interface Database {
                     saves: number;
                     comments: number;
                     captured_at: string;
+                    handle: string | null;
+                    blotato_post_id: string | null;
                 };
                 Insert: {
                     id?: string;
-                    content_piece_id: string;
+                    content_piece_id?: string | null;
                     platform: string;
                     views?: number;
                     likes?: number;
@@ -827,6 +841,8 @@ export interface Database {
                     saves?: number;
                     comments?: number;
                     captured_at?: string;
+                    handle?: string | null;
+                    blotato_post_id?: string | null;
                 };
                 Update: {
                     id?: string;
@@ -887,6 +903,62 @@ export interface Database {
                     }
                 ];
             };
+            reference_packs: {
+                Row: {
+                    id: string;
+                    persona_id: string;
+                    source_video_id: string;
+                    source_channel: string | null;
+                    source_url: string;
+                    title: string;
+                    view_count: number | null;
+                    duration_seconds: number | null;
+                    transcript_excerpt: string | null;
+                    thumbnail_url: string | null;
+                    thumbnail_style_notes: string | null;
+                    metadata: Json;
+                    created_at: string;
+                };
+                Insert: {
+                    id?: string;
+                    persona_id: string;
+                    source_video_id: string;
+                    source_channel?: string | null;
+                    source_url: string;
+                    title: string;
+                    view_count?: number | null;
+                    duration_seconds?: number | null;
+                    transcript_excerpt?: string | null;
+                    thumbnail_url?: string | null;
+                    thumbnail_style_notes?: string | null;
+                    metadata?: Json;
+                    created_at?: string;
+                };
+                Update: {
+                    id?: string;
+                    persona_id?: string;
+                    source_video_id?: string;
+                    source_channel?: string | null;
+                    source_url?: string;
+                    title?: string;
+                    view_count?: number | null;
+                    duration_seconds?: number | null;
+                    transcript_excerpt?: string | null;
+                    thumbnail_url?: string | null;
+                    thumbnail_style_notes?: string | null;
+                    metadata?: Json;
+                    created_at?: string;
+                };
+                Relationships: [
+                    {
+                        foreignKeyName: "reference_packs_persona_id_fkey";
+                        columns: ["persona_id"];
+                        isOneToOne: false;
+                        referencedRelation: "personas";
+                        referencedColumns: ["id"];
+                    }
+                ];
+            };
         };
         Views: {
             cost_summary: {
@@ -912,6 +984,22 @@ export interface Database {
                 Args: { p_persona_id: string; p_days?: number; p_limit?: number };
                 Returns: { title: string; views: number; likes: number }[];
             };
+            get_account_performance: {
+                Args: { p_days?: number };
+                Returns: {
+                    handle: string; brand: string; purpose: string; platform: string;
+                    posts: number; views: number; likes: number; comments: number;
+                    shares: number; saves: number; last_post: string;
+                }[];
+            };
+            backfill_metric_handles: {
+                Args: Record<string, never>;
+                Returns: number;
+            };
+            count_recent_account_posts: {
+                Args: { p_platform: string; p_account_id: string; p_hours?: number };
+                Returns: number;
+            };
         };
         Enums: Record<string, never>;
         CompositeTypes: Record<string, never>;
@@ -928,6 +1016,10 @@ export interface PlatformAccounts {
     bluesky?: string;
     linkedin?: string;
     facebook?: string;
+    /** Legacy single-page convention (Holloway/Ashford personas): a Facebook
+     *  Page id stored directly on platform_accounts. Prefer persona.facebook_page_ids;
+     *  this is a resolver fallback. */
+    facebook_page?: string;
     fanbase?: string;
 }
 
@@ -948,6 +1040,12 @@ export interface PlatformStatus {
     status: 'pending' | 'published' | 'failed';
     post_id?: string;
     published_at?: string;
+    /** When we submitted this post to Blotato. The cap counter's primary
+     *  timestamp: a pending submission must count against the rolling-24h
+     *  window from SUBMISSION time — falling back to the piece's created_at
+     *  undercounts old backlog pieces submitted today (Codex review 2026-07-18,
+     *  Major 1: exactly the catch-up-storm scenario the cap guards against). */
+    submitted_at?: string;
     error?: string;
     /** Live post URL resolved from Blotato after publish. Written lazily by
      *  the analytics pull (getPostStatus → publicUrl) and used to join our
@@ -970,6 +1068,7 @@ export interface PublishedPlatforms {
     twitter?: PlatformStatus;
     bluesky?: PlatformStatus;
     linkedin?: PlatformStatus;
+    facebook?: PlatformStatus;
 }
 
 export type TopicStatus =
@@ -1019,6 +1118,7 @@ export type PodcastEpisode = Database['public']['Tables']['podcast_episodes']['R
 export type WorkflowLock = Database['public']['Tables']['workflow_locks']['Row'];
 export type PerformanceMetric = Database['public']['Tables']['performance_metrics']['Row'];
 export type ContentIdea = Database['public']['Tables']['content_ideas']['Row'];
+export type ReferencePack = Database['public']['Tables']['reference_packs']['Row'];
 
 // Insert types
 export type PersonaInsert = Database['public']['Tables']['personas']['Insert'];

@@ -7,6 +7,10 @@ export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnai
  * Sourced from performance_metrics (weekly yt-dlp collector on the music
  * machine) aggregated per topic in the daily-topic cron.
  */
+/** Lookback window for get_topic_winners. Single source of truth: the RPC call
+ *  and the prompt text that describes it must not drift apart. */
+export const WINNERS_WINDOW_DAYS = 10;
+
 export interface TopicWinner {
     title: string;
     views: number;
@@ -68,6 +72,24 @@ function buildBrandVoiceBlock(persona: Persona): string {
     return parts.join('\n\n');
 }
 
+const STYLE_BRIEF_MAX_CHARS = 1500;
+
+/**
+ * Build the niche style-brief block from personas.style_brief (migration 024,
+ * populated by src/scripts/build-reference-pack.ts). Returns "" when the
+ * persona has no brief so every prompt stays byte-identical to today.
+ */
+function buildStyleBriefBlock(persona: Persona): string {
+    // Bracket access: DB types may lag migrations (same rationale as buildBrandVoiceBlock)
+    const p = persona as unknown as Record<string, unknown>;
+    const raw = typeof p['style_brief'] === 'string' ? (p['style_brief'] as string).trim() : '';
+    if (!raw) return '';
+    // Sanitize: straight double quotes coach the model into breaking the JSON-only output contract
+    const safe = raw.replace(/"/g, "'").slice(0, STYLE_BRIEF_MAX_CHARS);
+    return `NICHE STYLE BRIEF (distilled from top-performing videos in this niche — follow the PATTERNS, never copy wording; if this conflicts with PROVEN WINNERS above, PROVEN WINNERS take precedence):
+${safe}`;
+}
+
 /**
  * Topic prompt for quote_video personas (see migration 016). Emits the SAME
  * JSON shape as the standard topic prompt (title, hook, 4 historicalPoints)
@@ -83,11 +105,12 @@ function buildQuoteTopicPrompt(
     count: number,
 ): { system: string; user: string } {
     const voiceBlock = buildBrandVoiceBlock(persona);
+    const styleBlock = buildStyleBriefBlock(persona);
 
     const system = `You are curating historical quotes for ${persona.name}, ${persona.brand}.
 Your voice: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-${voiceBlock ? `\n${voiceBlock}\n` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `EXPERTISE AREAS:
@@ -136,12 +159,17 @@ export function buildTopicPrompt(
     recentTopics: string[],
     count: number,
     topWinners: TopicWinner[] = [],
+    /** Lookback window the winners were selected over. Passed in rather than
+     *  restated here: the prompt claimed "last 30 days" while the caller queried
+     *  10, so Claude was told something false about its own evidence. */
+    winnersWindowDays: number = WINNERS_WINDOW_DAYS,
 ): { system: string; user: string } {
     if (persona.content_format === 'quote_video') {
         return buildQuoteTopicPrompt(persona, recentTopics, count);
     }
 
     const voiceBlock = buildBrandVoiceBlock(persona);
+    const styleBlock = buildStyleBriefBlock(persona);
 
     // Engagement feedback: when the weekly collector has produced winners,
     // dedicate 2 of the week's topics to remixing them and steer the rest
@@ -150,7 +178,7 @@ export function buildTopicPrompt(
     const remixCount = count >= 4 ? 2 : count >= 2 ? 1 : 0;
     const winnersBlock = topWinners.length >= 3 && remixCount > 0
         ? `
-PROVEN WINNERS (our highest-engagement published topics, last 30 days):
+PROVEN WINNERS (our highest-engagement published topics, last ${winnersWindowDays} days):
 ${topWinners.map(w => `- "${w.title}" — ${w.views.toLocaleString()} views, ${w.likes.toLocaleString()} likes`).join('\n')}
 
 Of the ${count} topics, exactly ${remixCount} must be WINNER REMIXES: pick a proven winner above and tell a DIFFERENT chapter of the same story — the aftermath, one named individual's perspective, the opposition's attempt to stop it, or what the textbooks left out. A remix must stand alone as a new story for someone who never saw the original, and its title must NOT reuse the original title's wording (lead with the new angle, not the original's name).
@@ -161,7 +189,7 @@ The remaining ${count - remixCount} topics must be fresh stories, but favor the 
     const system = `You are generating content topics for ${persona.name}, ${persona.brand}.
 Your voice: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-${voiceBlock ? `\n${voiceBlock}\n` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `EXPERTISE AREAS:
@@ -214,6 +242,7 @@ function buildQuoteContentPrompt(
     persona: Persona,
     topic: Topic,
 ): { system: string; user: string } {
+    // No style-brief injection here (deliberate): the live cron discards this system prompt (captionsSystem substitution) and quote scripts are verbatim quotes assembled in code — a style brief must never touch them.
     const points = topic.historical_points as HistoricalPoint[];
     const quote = points[0];
     const contextFacts = points.slice(1);
@@ -265,10 +294,11 @@ export function buildContentPrompt(
     }
 
     const points = topic.historical_points as HistoricalPoint[];
+    const styleBlock = buildStyleBriefBlock(persona);
 
     const system = `You are a content writer creating scripts for ${persona.brand}.
 Voice style: ${persona.voice_style}
-${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
+${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
@@ -308,6 +338,7 @@ Generate content for 6 pieces:
 - Include imagePrompt for each slide
 
 FOR EACH PIECE, PROVIDE:
+- title: The headline this piece publishes under, max 90 characters. Each of the 6 pieces MUST get a DIFFERENT title — they publish to the same channel on the same day, and identical titles read as duplicate spam and give a viewer no reason to open more than one. Write each short's title from ITS OWN point (the specific number, name, place or reversal in that piece), not from the topic. Do NOT number them ("Part 2"), do NOT reuse the topic title's opening words. For the LONG piece, and only the long piece, use the topic title as given — that piece is the whole story and viewers search for it by name.
 - script: The spoken/displayed text (NEVER include the creator's name)
 - captionLong: 2200 character caption. End with EXACTLY 3 hashtags — no more, no fewer. Choose 3 high-relevance tags for the ${persona.brand} brand. Do NOT add a long hashtag list under any circumstance — Instagram rejects posts with more than 5 hashtags, so 3 is the hard ceiling.
 - captionShort: 280 character caption for Twitter/X. End with EXACTLY 2 hashtags — no more.
@@ -318,12 +349,12 @@ For each piece, also include a "musicTrack" field with a mood string for backgro
 OUTPUT FORMAT (JSON only):
 {
   "pieces": [
-    {"pieceType": "long", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "dramatic"},
-    {"pieceType": "short_1", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "upbeat"},
-    {"pieceType": "short_2", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "reflective"},
-    {"pieceType": "short_3", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "triumphant"},
-    {"pieceType": "short_4", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "inspirational"},
-    {"pieceType": "carousel", "script": "...", "captionLong": "...", "captionShort": "...", "carouselSlides": [{"slide": 1, "text": "...", "imagePrompt": "..."}, ...], "musicTrack": "inspirational"}
+    {"pieceType": "long", "title": "${topic.title.replace(/"/g, "'")}", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "dramatic"},
+    {"pieceType": "short_1", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "upbeat"},
+    {"pieceType": "short_2", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "reflective"},
+    {"pieceType": "short_3", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "triumphant"},
+    {"pieceType": "short_4", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "thumbnailPrompt": "...", "musicTrack": "inspirational"},
+    {"pieceType": "carousel", "title": "...", "script": "...", "captionLong": "...", "captionShort": "...", "carouselSlides": [{"slide": 1, "text": "...", "imagePrompt": "..."}, ...], "musicTrack": "inspirational"}
   ]
 }`;
 
@@ -518,11 +549,12 @@ export function buildRemixPrompt(
 ): { system: string; user: string; maxTokens: number } {
     const points = topic.historical_points as HistoricalPoint[];
     const voiceBlock = buildBrandVoiceBlock(persona);
+    const styleBlock = buildStyleBriefBlock(persona);
 
     const system = `You are a content writer creating scripts for ${persona.brand}.
 Voice style: ${persona.voice_style}
 ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
-${voiceBlock ? `\n${voiceBlock}\n` : ''}
+${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
 - NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.

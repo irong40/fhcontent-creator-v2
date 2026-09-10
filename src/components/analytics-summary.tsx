@@ -42,8 +42,11 @@ export function AnalyticsSummary() {
                 }
             }
 
-            // Sort by saves + shares (engagement signal)
+            // Sort by saves + shares (engagement signal). content_piece_id is
+            // nullable now (separate-pipeline snapshots have none) — this card is
+            // about content_pieces posts, so drop those.
             const sorted = Array.from(latest.values())
+                .filter((m): m is typeof m & { content_piece_id: string } => m.content_piece_id !== null)
                 .sort((a, b) => (b.saves + b.shares) - (a.saves + a.shares))
                 .slice(0, 5);
 

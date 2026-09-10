@@ -45,6 +45,11 @@ export const topicResponseSchema = z.object({
 
 const generatedPieceSchema = z.object({
     pieceType: z.enum(['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel']),
+    /** Per-piece headline. Optional so a model response that omits it still
+     *  validates rather than failing a whole topic's generation — daily-publish
+     *  falls back to caption_short and then the topic title (helpers.pieceTitle).
+     *  Capped at 100 to match YouTube's title limit. */
+    title: z.string().max(100).optional(),
     script: z.string(),
     captionLong: z.string(),
     captionShort: z.string(),
@@ -216,6 +221,19 @@ export const voicePreviewSchema = z.object({
     text: z.string().min(1).max(2000),
     voiceId: z.string().min(1),
 });
+
+// --- Reference pack schemas (competitor style-brief distillation) ---
+
+/**
+ * Distilled niche style brief produced by src/scripts/build-reference-pack.ts
+ * and stored in personas.style_brief. Hard-capped at 1500 chars (the prompt
+ * injection caps again as defense in depth).
+ */
+export const referencePackBriefSchema = z.object({
+    brief: z.string().min(1).max(1500),
+});
+
+export type ReferencePackBrief = z.infer<typeof referencePackBriefSchema>;
 
 // --- Quick post schema ---
 

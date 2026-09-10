@@ -3,9 +3,15 @@ import type { Platform } from '@/lib/blotato';
 
 /**
  * Platform distribution matrix:
- * - long video  → tiktok, instagram, youtube
- * - short 1-4   → tiktok, instagram, youtube, threads, twitter
+ * - long video  → tiktok, instagram, youtube, facebook
+ * - short 1-4   → tiktok, instagram, youtube, threads, twitter, facebook
  * - carousel    → instagram
+ *
+ * Facebook (Reels) is in the video lists but is gated in
+ * getConfiguredTargetPlatforms behind a per-persona opt-in (facebook_enabled)
+ * so it stays off for the personas configured with FB pages but not yet
+ * cleared to auto-post — only opted-in personas (e.g. Sentinel Aerial) publish
+ * to FB.
  *
  * NOTE: Bluesky disabled 2026-05-10 per Adam — no accounts wired up, was
  * generating spurious 'No account configured' failure rows. Re-add to the
@@ -14,21 +20,40 @@ import type { Platform } from '@/lib/blotato';
 export function getTargetPlatforms(pieceType: PieceType): Platform[] {
     switch (pieceType) {
         case 'long':
-            return ['tiktok', 'instagram', 'youtube'];
+            return ['tiktok', 'instagram', 'youtube', 'facebook'];
         case 'short_1':
         case 'short_2':
         case 'short_3':
         case 'short_4':
-            return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter'];
+            return ['tiktok', 'instagram', 'youtube', 'threads', 'twitter', 'facebook'];
         case 'carousel':
             return ['instagram'];
         case 'quote_video':
             // Looping quote card (<5s video, 10s+ read time). Video platforms
             // only — the loop-replay view mechanic doesn't exist on text feeds.
-            return ['tiktok', 'instagram', 'youtube'];
+            return ['tiktok', 'instagram', 'youtube', 'facebook'];
         default:
             return [];
     }
+}
+
+/**
+ * The Facebook Page id to publish a persona's video to. Prefers the persona's
+ * facebook_page_ids array (first entry — single-page for now; multi-page is a
+ * later change), falling back to the legacy platform_accounts.facebook_page.
+ * Returns null when no page is configured, which keeps FB out of the target
+ * list rather than submitting a page-less (and rejected) FB post.
+ */
+export function resolveFacebookPageId(
+    accounts: PlatformAccounts | null | undefined,
+    facebookPageIds: string[] | null | undefined,
+): string | null {
+    // Normalize both sources: a whitespace-only or empty id must resolve to
+    // null (not reach Blotato as pageId: "") — Codex review 2026-07-18, Minor 1.
+    const fromArray = facebookPageIds?.[0]?.trim();
+    if (fromArray) return fromArray;
+    const legacy = accounts?.facebook_page?.trim();
+    return legacy || null;
 }
 
 /**
@@ -36,14 +61,27 @@ export function getTargetPlatforms(pieceType: PieceType): Platform[] {
  * actually have an account_id on the persona. Avoids spurious "No account
  * configured" failure rows when a persona simply hasn't connected a given
  * network yet (e.g. Dr. Carter has no Bluesky).
+ *
+ * Facebook is special: it requires the persona to be explicitly opted in
+ * (fb.enabled), to have a connected FB account (accounts.facebook), AND to have
+ * a resolvable Page id. This keeps FB posting off for personas that carry FB
+ * config but haven't been cleared to auto-post to their pages.
  */
 export function getConfiguredTargetPlatforms(
     pieceType: PieceType,
     accounts: PlatformAccounts | null | undefined,
+    fb?: { enabled?: boolean | null; pageIds?: string[] | null },
 ): Platform[] {
     const all = getTargetPlatforms(pieceType);
     if (!accounts) return [];
-    return all.filter((p) => Boolean(accounts[p as keyof PlatformAccounts]));
+    return all.filter((p) => {
+        if (p === 'facebook') {
+            return Boolean(fb?.enabled)
+                && Boolean(accounts.facebook)
+                && resolveFacebookPageId(accounts, fb?.pageIds) !== null;
+        }
+        return Boolean(accounts[p as keyof PlatformAccounts]);
+    });
 }
 
 /**
@@ -150,6 +188,108 @@ export function isSlotReady(
     const slot = pieceSlotTime(pieceType, topicPublishAt);
     if (!slot) return true; // legacy topic with no publish_at — fire immediately
     return now.getTime() >= slot.getTime();
+}
+
+/**
+ * Minimal shape `pieceTitle` needs. Declared structurally rather than as
+ * ContentPiece so tests can pass plain objects, and so `title` (added by the
+ * per-piece-title migration) is optional for rows predating it.
+ */
+export interface TitleablePiece {
+    piece_type: PieceType;
+    caption_short?: string | null;
+    /** Crafted per-piece title. Null on rows generated before the column existed. */
+    title?: string | null;
+}
+
+/** Piece types that keep the topic title: these ARE the story, not one point of
+ *  it, and the topic title is how a viewer searches for the full telling. */
+const TOPIC_TITLED_PIECES: ReadonlySet<PieceType> = new Set<PieceType>(['long', 'lecture']);
+
+/**
+ * The title a single piece publishes under.
+ *
+ * Every piece of a topic used to publish under the topic title, so a story's
+ * five uploads appeared on the channel as five identical rows — indistinguishable
+ * from duplicate spam, and giving a viewer no reason to open more than one.
+ *
+ * Fallback chain, most-crafted first:
+ *   1. `piece.title` — written by the generator, once that migration lands
+ *   2. first sentence of `caption_short` — already distinct and factual on every
+ *      existing row, so this works retroactively across the backlog
+ *   3. `topicTitle` — last resort, restoring the old behaviour
+ *
+ * Length is NOT capped here; the caller applies the platform cap via
+ * truncateYouTubeTitle / truncateTikTokTitle so there is one place that knows
+ * each platform's limit.
+ */
+export function pieceTitle(piece: TitleablePiece, topicTitle: string): string {
+    const fallback = (topicTitle ?? '').trim();
+    if (TOPIC_TITLED_PIECES.has(piece.piece_type)) return fallback;
+
+    const crafted = piece.title?.trim();
+    if (crafted) return crafted;
+
+    const caption = piece.caption_short?.trim();
+    if (caption) {
+        // First sentence. Require whitespace-or-end after the terminator so
+        // "$5. shares" style decimals and abbreviations don't split mid-figure.
+        const m = caption.match(/^([\s\S]*?[.!?])(?:\s|$)/);
+        const first = (m?.[1] ?? caption).trim();
+        // A stub like "1897:" is worse than the topic title — require substance.
+        if (first.length >= 15) return first;
+    }
+
+    return fallback;
+}
+
+/** True for pieces that should carry a pointer to the day's long-form. The
+ *  long-form is the destination, and the carousel is a static side format. */
+export function shouldTeaseLongform(pieceType: PieceType): boolean {
+    return pieceType === 'short_1' || pieceType === 'short_2'
+        || pieceType === 'short_3' || pieceType === 'short_4';
+}
+
+/**
+ * Caption sentence pointing a short at the day's long-form.
+ *
+ * The long-form publishes LAST (+10h), so at the moment a short goes out the
+ * video does not exist yet and cannot be linked. The tease names the time
+ * instead. That time is derived from the topic's own `publish_at` via
+ * pieceSlotTime rather than hardcoded, so it stays truthful if a topic's base
+ * time shifts.
+ *
+ * Returns null for legacy topics with no publish_at — better no promise than a
+ * wrong one.
+ */
+export function teaseLine(
+    pieceType: PieceType,
+    topicPublishAt: string | null,
+): string | null {
+    const longSlot = pieceSlotTime('long', topicPublishAt);
+    const ownSlot = pieceSlotTime(pieceType, topicPublishAt);
+    if (!longSlot || !ownSlot) return null;
+
+    const tz = 'America/New_York';
+    const time = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(longSlot);
+
+    const dayOf = (d: Date) =>
+        new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(d);
+    const sameDay = dayOf(longSlot) === dayOf(ownSlot);
+
+    if (!sameDay) {
+        const weekday = new Intl.DateTimeFormat('en-US', {
+            timeZone: tz, weekday: 'long',
+        }).format(longSlot);
+        return `Full story ${weekday} at ${time} ET.`;
+    }
+
+    const hour = Number(new Intl.DateTimeFormat('en-US', {
+        timeZone: tz, hour: 'numeric', hour12: false,
+    }).format(longSlot));
+    return `Full story ${hour >= 17 ? 'tonight' : 'today'} at ${time} ET.`;
 }
 
 export function truncateTikTokTitle(title: string, max: number = TIKTOK_TITLE_MAX): string {

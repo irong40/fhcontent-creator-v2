@@ -8,6 +8,7 @@ import { QuickPostDialog } from '@/components/quick-post-dialog';
 const links = [
     { href: '/plan', label: 'Plan' },
     { href: '/calendar', label: 'Calendar' },
+    { href: '/admin/social', label: 'Social' },
     { href: '/costs', label: 'Costs' },
     { href: '/personas', label: 'Personas' },
     { href: '/api/health', label: 'API Status' },

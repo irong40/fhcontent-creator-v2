@@ -14,6 +14,24 @@ export function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+/**
+ * Detect an image's real media type from its magic bytes.
+ *
+ * The image ladder mixes formats — gpt-image-1 returns PNG, Library of Congress
+ * derivatives are JPEG — and both consumers of these bytes break on a wrong
+ * label: the vision audit 400s (which is swallowed as a rejection), and satori
+ * throws a RangeError trying to parse a PNG as a JPEG. Never assume the format;
+ * read it.
+ */
+export function sniffImageMime(image: ArrayBuffer): 'image/png' | 'image/jpeg' {
+  const head = new Uint8Array(image.slice(0, 4));
+  if (head[0] === 0xff && head[1] === 0xd8) return 'image/jpeg';
+  if (head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return 'image/png';
+  // Unknown container: PNG is the safer default — satori tolerates a mislabelled
+  // PNG far better than it tolerates a mislabelled JPEG.
+  return 'image/png';
+}
+
 export function estimateDuration(words: number): string {
   const minutes = words / 150; // ~150 wpm speaking rate
   if (minutes < 1) return `${Math.round(minutes * 60)}s`;

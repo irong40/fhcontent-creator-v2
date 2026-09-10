@@ -51,6 +51,8 @@ function makeSupabaseMock(
     calls: RecordedCalls,
 ) {
     return {
+        // count_recent_account_posts — 0 keeps the 24h cap guard inert here.
+        rpc: () => Promise.resolve({ data: 0, error: null }),
         from(table: string) {
             if (table === 'topics') {
                 return {

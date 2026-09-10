@@ -99,36 +99,49 @@ class GeminiClient {
         return { text };
     }
 
-    /** Generate a photographic image using Google Imagen 4 via the REST
-     *  `:predict` endpoint (NOT the `:generateContent` shape — that is for the
-     *  conversational Gemini models and returns no image bytes for this use).
+    /** Generate a photographic image with `gemini-3.1-flash-image` via the
+     *  `:generateContent` endpoint.
      *
-     *  Model id verified against the live ListModels API on 2026-06-02:
-     *  `imagen-4.0-generate-001` (siblings: -ultra-generate-001, -fast-generate-001).
+     *  This used to call Imagen 4 (`imagen-4.0-generate-001`) via `:predict`.
+     *  That whole family is retired: every id 404s with "no longer available to
+     *  new users", re-confirmed 2026-07-30 against both keys we hold. Because
+     *  rung 2 (gpt-image-1) is simultaneously dead on a zero-credit OpenAI
+     *  account, the carousel ladder had no working image rung at all and every
+     *  slide fell through to the satori text template — the all-words format
+     *  the photo-first work exists to retire.
      *
-     *  Request shape: { instances: [{ prompt }], parameters: { sampleCount, aspectRatio } }
-     *  Response shape: { predictions: [{ bytesBase64Encoded, mimeType }] }
+     *  3.1-flash over 3-pro: on the same prompt, pro renders garbled
+     *  pseudo-lettering into signage and headstones while flash leaves them
+     *  honestly blurred. Invented text inside something a viewer reads as a
+     *  photograph is the worse failure for a history brand. Flash is cheaper too.
      *
-     *  Throws on failure with the actual API body so the caller's alert shows the
-     *  real reason (auth / content-policy / quota / paid-plan-required) instead of
-     *  a generic "failed" message. NOTE: Imagen `:predict` requires a *paid* Google
-     *  AI plan; on a free-tier key it 400s with "only available on paid plans",
-     *  in which case the caller falls through to the gpt-image-1 / template rungs. */
+     *  Request shape: { contents: [{ parts: [{ text }] }],
+     *                   generationConfig: { responseModalities, imageConfig } }
+     *  Response shape: candidates[].content.parts[].inlineData.data (base64).
+     *  The inline key is camelCase or snake_case depending on model, so both
+     *  are checked.
+     *
+     *  Returns base64 JPEG (Imagen returned PNG). Callers that re-encode via
+     *  sharp are unaffected; any caller writing bytes straight to a `.png` path
+     *  is relying on content sniffing.
+     *
+     *  Throws with the actual API body so the caller's alert shows the real
+     *  reason (auth / content-policy / quota) rather than a generic failure. */
     async generateImage(prompt: string, options?: {
         aspectRatio?: string;
         model?: string;
     }): Promise<{ imageData: string }> {
-        const model = options?.model || 'imagen-4.0-generate-001';
+        const model = options?.model || 'gemini-3.1-flash-image';
         const response = await fetch(
-            `${this.baseUrl}/v1beta/models/${model}:predict?key=${this.apiKey}`,
+            `${this.baseUrl}/v1beta/models/${model}:generateContent?key=${this.apiKey}`,
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    instances: [{ prompt }],
-                    parameters: {
-                        sampleCount: 1,
-                        aspectRatio: options?.aspectRatio || '1:1',
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseModalities: ['IMAGE'],
+                        imageConfig: { aspectRatio: options?.aspectRatio || '1:1' },
                     },
                 }),
             }
@@ -136,20 +149,21 @@ class GeminiClient {
 
         if (!response.ok) {
             const errBody = await response.text().catch(() => '');
-            throw new Error(`Imagen API ${response.status}: ${errBody.slice(0, 400)}`);
+            throw new Error(`Gemini image API ${response.status}: ${errBody.slice(0, 400)}`);
         }
 
         const data = await response.json();
-        const prediction = data.predictions?.[0];
-        const imageData = prediction?.bytesBase64Encoded;
-        if (!imageData) {
-            const filtered = data.predictions?.[0]?.raiFilteredReason;
-            throw new Error(
-                `Imagen returned no image (raiFilteredReason=${filtered ?? 'unknown'}, body=${JSON.stringify(data).slice(0, 200)})`
-            );
+        for (const cand of data.candidates ?? []) {
+            for (const part of cand.content?.parts ?? []) {
+                const inline = part.inlineData ?? part.inline_data;
+                if (inline?.data) return { imageData: inline.data as string };
+            }
         }
 
-        return { imageData: imageData as string };
+        const blocked = data.candidates?.[0]?.finishReason;
+        throw new Error(
+            `Gemini returned no image (finishReason=${blocked ?? 'unknown'}, body=${JSON.stringify(data).slice(0, 200)})`
+        );
     }
 
     /** Generate music via Google Lyria RealTime (lyria-realtime-exp) */

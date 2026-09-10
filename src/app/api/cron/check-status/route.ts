@@ -136,10 +136,16 @@ async function pollBlotatoStatuses(supabase: SupabaseClient): Promise<BlotatoPol
                     pieceUpdated = true;
                     result.published++;
                 } else if (postStatus.status === 'failed') {
+                    // Blotato returns the real reason as `errorMessage`; read it
+                    // first. Preserve any prior retry_count so daily-publish's
+                    // per-platform budget still bounds transient (quota/429)
+                    // retries instead of resubmitting into a saturated window.
+                    const errorMsg = postStatus.errorMessage || postStatus.error || 'Publishing failed';
                     updatedPlatforms[platform] = {
                         status: 'failed',
                         post_id: ps.post_id,
-                        error: postStatus.error || 'Publishing failed',
+                        error: errorMsg,
+                        retry_count: ps.retry_count,
                     };
                     pieceUpdated = true;
                     result.failed++;

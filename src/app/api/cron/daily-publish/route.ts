@@ -5,7 +5,8 @@ import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
 import { validateCronSecret } from '../middleware';
-import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady } from './helpers';
+import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId, pieceTitle, teaseLine, shouldTeaseLongform } from './helpers';
+import { PLATFORM_DAILY_CAP, DAILY_CAP_WINDOW_HOURS, isAccountAtDailyCap, isTransientPublishError } from '@/lib/publish-limits';
 import type { TopicWithPersona, ContentPiece, PlatformAccounts, PlatformStatus, PublishedPlatforms } from '@/types/database';
 
 export const maxDuration = 300;
@@ -160,6 +161,11 @@ interface PublishResult {
     deferred?: boolean;
     /** Number of pieces deferred this tick because their slot hasn't arrived. */
     piecesDeferred?: number;
+    /** Platform submissions skipped this tick because the account was already at
+     *  its rolling-24h provider cap (YouTube/TikTok). Not failures — they retry
+     *  on a later tick once the window drains. Kept out of `warnings` so they
+     *  don't trip the failure alert. */
+    capDeferrals?: string[];
 }
 
 async function publishPieceToPlatform(
@@ -168,6 +174,11 @@ async function publishPieceToPlatform(
     accountId: string,
     topicTitle: string,
     mediaUrl: string,
+    pageId?: string,
+    hasBakedAudio?: boolean,
+    /** Topic's base publish_at — used to name the long-form's slot in the tease.
+     *  Null on legacy topics without staggering, which simply get no tease. */
+    topicPublishAt?: string | null,
 ): Promise<{ platformStatus: PlatformStatus; result: PlatformResult }> {
     // For carousel pieces on Instagram, upload all slides
     const mediaUrls: string[] = [];
@@ -190,21 +201,40 @@ async function publishPieceToPlatform(
         ? (piece.caption_short || piece.caption_long || '')
         : (piece.caption_long || piece.caption_short || '');
 
+    // Point shorts at the day's long-form. Each short covers ONE point of a
+    // story whose full telling publishes at the +10h slot; without this the
+    // connection between them exists only in the schedule, invisibly, and the
+    // long-form averaged fewer views than any of its own shorts.
+    // Appended BEFORE hashtag capping so Instagram's limit counts the final text.
+    if (shouldTeaseLongform(piece.piece_type)) {
+        const tease = teaseLine(piece.piece_type, topicPublishAt ?? null);
+        if (tease && !caption.includes(tease)) {
+            caption = caption ? `${caption}\n\n${tease}` : tease;
+        }
+    }
+
     // Platform-specific sanitization
     if (platform === 'instagram') {
         caption = capInstagramHashtags(caption);
     }
+
+    // Each piece publishes under its OWN title, not the topic's — five uploads
+    // sharing one title read as duplicate spam on the channel. The long-form
+    // keeps the topic title (pieceTitle handles that), since it IS the story.
+    const title = pieceTitle(piece, topicTitle);
     const platformTitle =
-        platform === 'tiktok' ? truncateTikTokTitle(topicTitle)
-        : platform === 'youtube' ? truncateYouTubeTitle(topicTitle)
-        : topicTitle;
+        platform === 'tiktok' ? truncateTikTokTitle(title)
+        : platform === 'youtube' ? truncateYouTubeTitle(title)
+        : title;
 
     const target = buildTarget(platform, {
         title: platformTitle,
         isAiGenerated: true,
-        // quote_video carries its own ACE-Step music loop — TikTok must not
-        // auto-add a library track on top of it.
-        autoAddMusic: piece.piece_type !== 'quote_video',
+        // Pieces with a baked-in music bed (quote_video loops, pre-rendered
+        // quiz shorts) must not have TikTok lay a library track on top.
+        autoAddMusic: piece.piece_type !== 'quote_video' && !hasBakedAudio,
+        // Facebook only: the Page to publish the Reel to.
+        pageId,
     });
 
     const response = await blotato.publishPost({
@@ -216,7 +246,14 @@ async function publishPieceToPlatform(
     });
 
     return {
-        platformStatus: { status: 'pending', post_id: response.postSubmissionId },
+        platformStatus: {
+            status: 'pending',
+            post_id: response.postSubmissionId,
+            // Cap accounting anchor: the rolling-24h window counts from
+            // submission, not piece creation (old backlog pieces submitted
+            // today must count toward today's provider quota).
+            submitted_at: new Date().toISOString(),
+        },
         result: { status: 'pending', postId: response.postSubmissionId },
     };
 }
@@ -274,6 +311,34 @@ export async function publishTopic(
 
     let anySuccess = false;
 
+    // Rolling-24h submission count per capped account, seeded once from the DB
+    // and incremented locally as we submit this run. This is the guard against
+    // the 2026-07-15/16 root cause: a catch-up storm blowing past YouTube's
+    // 10-uploads/24h/account and TikTok's OpenAPI limit, whose rejections then
+    // showed up as (masked) "Publishing failed" rows. Only capped platforms are
+    // queried. Counts are per-account, so shared accounts are counted correctly.
+    const accountUsage = new Map<string, number>();
+    for (const platform of Object.keys(PLATFORM_DAILY_CAP)) {
+        const accountId = accounts?.[platform as keyof PlatformAccounts];
+        if (!accountId) continue;
+        const { data: cnt, error: cntError } = await supabase.rpc('count_recent_account_posts', {
+            p_platform: platform,
+            p_account_id: accountId,
+            p_hours: DAILY_CAP_WINDOW_HOURS,
+        });
+        if (cntError || typeof cnt !== 'number') {
+            // FAIL CLOSED (Codex review 2026-07-18, Major 6): if the counter is
+            // unavailable, we cannot prove we're under the provider cap — treat
+            // the account as AT cap so the platform defers to a later tick
+            // rather than publishing blind. An accounting failure must never
+            // become "usage is zero".
+            console.error(`[daily-publish] cap counter failed for ${platform}:${accountId} — deferring platform (fail closed): ${cntError?.message ?? 'non-numeric result'}`);
+            accountUsage.set(platform, PLATFORM_DAILY_CAP[platform]);
+            continue;
+        }
+        accountUsage.set(platform, cnt);
+    }
+
     for (const piece of pieces as ContentPiece[]) {
         // Piece-level slot gating: pieces fire at staggered times across the
         // day (long → 7 PM ET, shorts spread morning-to-evening, carousel at
@@ -309,7 +374,10 @@ export async function publishTopic(
         }
 
         const existingPlatforms = (piece.published_platforms || {}) as PublishedPlatforms;
-        const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts);
+        const targetPlatforms = getConfiguredTargetPlatforms(piece.piece_type, accounts, {
+            enabled: persona.facebook_enabled,
+            pageIds: persona.facebook_page_ids,
+        });
 
         // Misconfiguration: piece type has zero target platforms (no account set
         // on the persona for any platform that accepts this piece type). Without
@@ -355,15 +423,41 @@ export async function publishTopic(
                 continue;
             }
 
+            // Rolling-24h provider cap guard. If this account is already at its
+            // window cap, DEFER this platform (skip the submit, leave it
+            // unresolved so a later tick / the next day retries) rather than
+            // firing a doomed submission the provider rejects with a quota
+            // error. A deferral is not a failure: no failed row, no alert.
+            if (isAccountAtDailyCap(platform, accountUsage.get(platform) ?? 0)) {
+                const note = `${piece.piece_type}: ${platform} deferred — account at ${accountUsage.get(platform)}/${PLATFORM_DAILY_CAP[platform]} 24h cap`;
+                (result.capDeferrals ??= []).push(note);
+                console.log(`[daily-publish] piece ${piece.id} ${platform} deferred — 24h account cap reached`);
+                continue;
+            }
+
             const key = `${piece.piece_type}:${platform}`;
+
+            // Facebook needs a Page id on the target; resolve it here so a
+            // page-less FB post is never submitted (getConfiguredTargetPlatforms
+            // already guarantees one exists for facebook).
+            const pageId = platform === 'facebook'
+                ? resolveFacebookPageId(accounts, persona.facebook_page_ids) ?? undefined
+                : undefined;
+
+            // Pre-rendered quiz shorts (ingest-quiz.ts sets this sentinel
+            // voice_id) ship with their own music bed baked in.
+            const hasBakedAudio = topic.voice_id === 'quiz-prerendered';
 
             pieceAttempted = true;
             try {
                 const { platformStatus, result: platformResult } =
-                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl);
+                    await publishPieceToPlatform(piece, platform, accountId, topic.title, mediaUrl, pageId, hasBakedAudio, topic.publish_at);
                 updatedPlatforms[platform] = platformStatus;
                 result.platformResults[key] = platformResult;
                 anySuccess = true;
+                // Count this submission toward the account's rolling-24h budget
+                // so later pieces in the same run also respect the cap.
+                accountUsage.set(platform, (accountUsage.get(platform) ?? 0) + 1);
             } catch (e) {
                 const errorMsg = e instanceof Error ? e.message : 'Unknown error';
                 console.error(`Failed to publish piece ${piece.id} to ${platform}:`, errorMsg);
@@ -421,7 +515,8 @@ export async function publishTopic(
             // Mark this run as "deferred" if every piece was slot-gated (vs.
             // genuinely broken — missing media / config / no targets, which
             // would have populated result.warnings).
-            if ((result.piecesDeferred ?? 0) > 0 && result.warnings.length === 0) {
+            if (((result.piecesDeferred ?? 0) > 0 || (result.capDeferrals?.length ?? 0) > 0)
+                && result.warnings.length === 0) {
                 result.deferred = true;
             }
             return result;
@@ -452,6 +547,31 @@ export async function publishTopic(
         // selector, so the topic never retried even after the key was fixed.
         // Only give up once every failed platform has exhausted its
         // per-platform retry budget (MAX_PLATFORM_RETRIES).
+        // Before giving up: if every failed platform failed with a transient
+        // rate/quota limit (not a broken token/caption), keep the topic
+        // retryable and DON'T alert — it clears when the provider's rolling
+        // window drains. The cap guard should prevent reaching here, but
+        // cross-pipeline bursts on shared accounts can still trip a provider
+        // limit mid-run. Staleness (MAX_SCHEDULED_AGE_DAYS) bounds the retries.
+        const allFailuresTransient = (pieces as ContentPiece[]).every((p) => {
+            const platforms = (p.published_platforms ?? {}) as Record<string, PlatformStatus>;
+            return Object.values(platforms).every(
+                (ps) => ps?.status !== 'failed' || isTransientPublishError(ps.error),
+            );
+        });
+        // Transient-ness keeps a topic retryable ONLY while some platform still
+        // has retry budget — otherwise this early return would bypass the
+        // MAX_PLATFORM_RETRIES ceiling and the topic would silently loop until
+        // the 3-day staleness guard drops it with no terminal alert (Codex
+        // review 2026-07-18, Major 3).
+        if (allFailuresTransient && hasRetryablePlatform(pieces as ContentPiece[], MAX_PLATFORM_RETRIES)) {
+            await supabase
+                .from('topics')
+                .update({ status: 'scheduled', error_message: 'Provider rate/quota limit — will retry when the 24h window clears' })
+                .eq('id', topicId);
+            return result;
+        }
+
         const anyRetryable = hasRetryablePlatform(pieces as ContentPiece[], MAX_PLATFORM_RETRIES);
         if (anyRetryable) {
             // Leave the topic 'scheduled' so the next hourly tick retries the
@@ -631,12 +751,14 @@ export async function GET(request: Request) {
 
         const topicsDeferred = results.filter((r) => r.deferred).length;
         const topicsShipped = results.filter((r) => r.piecesProcessed > 0).length;
+        const capDeferrals = results.flatMap((r) => r.capDeferrals ?? []);
 
         return NextResponse.json({
             success: true,
             processed: results.length,
             topicsShipped,
             topicsDeferred,
+            capDeferrals: capDeferrals.length > 0 ? capDeferrals : undefined,
             results,
             errors: errors.length > 0 ? errors : undefined,
             evergreen: evergreenFills.length > 0 ? evergreenFills : undefined,

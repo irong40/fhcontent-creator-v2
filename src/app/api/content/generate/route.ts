@@ -20,6 +20,9 @@ const PIECE_ORDER: Record<PieceType, number> = {
 /** Normalized piece shape shared by the standard (6-piece) and quote_video (1-piece) responses. */
 interface GeneratedPiece {
     pieceType: PieceType;
+    /** Per-piece headline. Optional: quote_video responses don't carry one, and
+     *  daily-publish falls back to caption_short then the topic title. */
+    title?: string;
     script: string;
     captionLong: string;
     captionShort: string;
@@ -97,6 +100,7 @@ export async function POST(request: NextRequest) {
                     topic_id: topicId,
                     piece_type: piece.pieceType,
                     piece_order: PIECE_ORDER[piece.pieceType],
+                    title: piece.title || null,
                     script: piece.script,
                     caption_long: piece.captionLong,
                     caption_short: piece.captionShort,

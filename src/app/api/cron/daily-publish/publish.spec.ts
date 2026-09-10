@@ -76,16 +76,18 @@ describe('getMediaUrl with JSON carousel', () => {
 });
 
 describe('publishing platform distribution', () => {
-    it('long video targets 3 platforms', () => {
-        expect(getTargetPlatforms('long')).toHaveLength(3);
+    it('long video targets 4 platforms (facebook added 2026-07-18)', () => {
+        expect(getTargetPlatforms('long')).toHaveLength(4);
+        expect(getTargetPlatforms('long')).toContain('facebook');
     });
 
-    it('short videos target 5 platforms (bluesky disabled 2026-05-10)', () => {
-        expect(getTargetPlatforms('short_1')).toHaveLength(5);
-        expect(getTargetPlatforms('short_2')).toHaveLength(5);
-        expect(getTargetPlatforms('short_3')).toHaveLength(5);
-        expect(getTargetPlatforms('short_4')).toHaveLength(5);
+    it('short videos target 6 platforms (bluesky disabled 2026-05-10; facebook added 2026-07-18)', () => {
+        expect(getTargetPlatforms('short_1')).toHaveLength(6);
+        expect(getTargetPlatforms('short_2')).toHaveLength(6);
+        expect(getTargetPlatforms('short_3')).toHaveLength(6);
+        expect(getTargetPlatforms('short_4')).toHaveLength(6);
         expect(getTargetPlatforms('short_1')).not.toContain('bluesky');
+        expect(getTargetPlatforms('short_1')).toContain('facebook');
     });
 
     it('carousel targets only instagram', () => {
