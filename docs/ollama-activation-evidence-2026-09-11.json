@@ -1,0 +1,67 @@
+{
+  "checkedAt": "2026-09-11T20:26:41.428Z",
+  "deployment": "https://fhcontent-creator-v2-87js7b128-faith-harmony.vercel.app",
+  "provider": "ollama",
+  "boundary": "Live deployed cron -> hosted Supabase queue -> hidden Windows worker -> local Ollama -> deployed cron -> six pending pieces and human-review hold. Internal future-dated test topic, subsequently removed. No media or publishing triggered.",
+  "topic": {
+    "id": "30c125e8-26fa-4f7c-953a-2556311e9e32",
+    "status": "content_ready",
+    "requires_review": true,
+    "coo_auto_approved_at": null,
+    "approved_at": null,
+    "publish_date": "2099-12-31",
+    "retry_count": 0
+  },
+  "pieces": [
+    {
+      "id": "41bbacd1-304e-4688-9de3-4c04b0ecb9bf",
+      "piece_type": "carousel",
+      "status": "pending"
+    },
+    {
+      "id": "29052a0b-202f-44a4-96d1-fb44c175ba2c",
+      "piece_type": "long",
+      "status": "pending"
+    },
+    {
+      "id": "349281c1-2510-4403-bfd9-11b65c2aff60",
+      "piece_type": "short_1",
+      "status": "pending"
+    },
+    {
+      "id": "1b2122e0-fe9a-433c-a29d-740df89288a2",
+      "piece_type": "short_2",
+      "status": "pending"
+    },
+    {
+      "id": "27009702-428d-49f4-acdd-dbc0e79eab92",
+      "piece_type": "short_3",
+      "status": "pending"
+    },
+    {
+      "id": "f87c8dac-ab2b-4d46-962b-e513379a0100",
+      "piece_type": "short_4",
+      "status": "pending"
+    }
+  ],
+  "costs": [
+    {
+      "service": "ollama",
+      "operation": "content_generation",
+      "cost_usd": 0,
+      "tokens_input": 2266,
+      "tokens_output": 3759
+    }
+  ],
+  "job": {
+    "id": "4116e946-186e-4454-892b-dbc58f9ff147",
+    "status": "succeeded",
+    "model": "qwen3:8b",
+    "attempts": 1,
+    "input_tokens": 2266,
+    "output_tokens": 3759,
+    "lease_token": null,
+    "created_at": "2026-09-11T20:23:30.023839+00:00",
+    "updated_at": "2026-09-11T20:26:13.515737+00:00"
+  }
+}

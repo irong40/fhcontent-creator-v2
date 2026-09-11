@@ -70,6 +70,7 @@ export async function GET(request: Request) {
             .from('topics')
             .select('*, personas(*)')
             .in('status', ['content_ready', 'approved', 'scheduled'])
+            .or('requires_review.is.null,requires_review.eq.false')
             .lte('publish_date', tomorrow)
             .order('publish_date', { ascending: true, nullsFirst: false });
 
@@ -107,6 +108,7 @@ export async function GET(request: Request) {
 
             for (const topicRow of personaTopics) {
                 const topic = topicRow as unknown as TopicWithBrand;
+                if (topic.requires_review === true) continue;
                 const persona = topic.personas;
 
                 // Fetch ALL pieces for this topic

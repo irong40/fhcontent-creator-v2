@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-09-11T19:55:56.284Z",
+  "boundary": "Isolated PGlite PostgreSQL and real loopback Ollama. No hosted Supabase transport, deployed route, or publishing was exercised.",
+  "checks": [
+    "Migration executes in isolated PostgreSQL",
+    "Anonymous table and authenticated claim privileges denied",
+    "An active lease cannot be claimed twice; wrong token cannot complete",
+    "Expired lease reclaimed; actual local Ollama output validated and completed",
+    "Third expired attempt becomes terminal failure"
+  ],
+  "elapsedMs": 14669,
+  "result": {
+    "status": "succeeded",
+    "model": "qwen3:8b",
+    "result_text": "{\n  \"caption\": \"SAI documents visible site conditions with aerial photographs, but these do not certify safety.\"\n}",
+    "input_tokens": 61,
+    "output_tokens": 25,
+    "attempts": 2
+  }
+}

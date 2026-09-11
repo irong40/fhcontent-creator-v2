@@ -670,6 +670,7 @@ export async function GET(request: Request) {
             // and per-platform retry skip prevent re-firing already-shipped
             // pieces.
             .in('status', ['scheduled', 'approved', 'publishing', 'partially_published'])
+            .or('requires_review.is.null,requires_review.eq.false')
             .not('publish_date', 'is', null)
             .lte('publish_date', today);
 
@@ -709,7 +710,8 @@ export async function GET(request: Request) {
                 .from('topics')
                 .select('id, title, status, publish_at, publish_date, published_at')
                 .eq('status', 'scheduled')
-                .not('publish_date', 'is', null)
+                .or('requires_review.is.null,requires_review.eq.false')
+            .not('publish_date', 'is', null)
                 .lte('publish_date', today);
 
             selection = selectPublishableTopics(refetched ?? []);

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { claude } from '@/lib/claude';
+import { generateQueuedContent, localContentResponseSchema } from '@/lib/content-inference';
+import { LocalInferencePendingError } from '@/lib/local-inference-queue';
+import { z } from 'zod';
 import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
@@ -104,23 +106,25 @@ export async function GET(request: Request) {
                 .eq('topic_id', topic.id);
 
             if (existingCount && existingCount > 0) {
-                // Pieces already exist — promote to scheduled (auto-recover from
-                // a prior partial run that inserted pieces but never updated
-                // topic status).
+                // A prior insert may have completed before its status update.
+                // Provider/approval is uncertain, so recovery always requires review.
                 await supabase.from('topics').update({
-                    status: 'scheduled',
+                    status: 'content_ready',
+                    requires_review: true,
+                    review_reason: 'Recovered existing content; review before approval',
                     content_ready_at: new Date().toISOString(),
-                    coo_auto_approved_at: new Date().toISOString(),
+                    coo_auto_approved_at: null,
                 }).eq('id', topic.id);
                 topicResult.piecesInserted = existingCount;
                 results.push(topicResult);
                 continue;
             }
 
-            await supabase
-                .from('topics')
-                .update({ status: 'content_generating' })
-                .eq('id', topic.id);
+            // Local work survives a serverless timeout as a durable job. Keep
+            // its topic selectable until a completed response is consumed.
+            if (process.env.CONTENT_INFERENCE_PROVIDER !== 'ollama') {
+                await supabase.from('topics').update({ status: 'content_generating' }).eq('id', topic.id);
+            }
 
             try {
                 const { system, user } = buildContentPrompt(persona, topic);
@@ -133,6 +137,7 @@ export async function GET(request: Request) {
                 let parsed: unknown;
                 let inputTokens: number;
                 let outputTokens: number;
+                let provider: 'ollama' | 'claude';
 
                 if (isQuote) {
                     // Robust quote path. The on-screen script is fully
@@ -151,17 +156,16 @@ export async function GET(request: Request) {
 
 OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT write it. Call the \`emit_quote_captions\` tool and provide ONLY captionLong and captionShort as plain text values (the tool handles all encoding; do not add quotes, backslashes, or escaping).`;
 
-                    const { data, inputTokens: it, outputTokens: ot } =
-                        await claude.generateStructured<{ captionLong: string; captionShort: string }>(
-                            captionsSystem,
-                            user,
-                            {
-                                name: 'emit_quote_captions',
-                                description: 'Return the long and short captions for this quote post.',
-                                inputSchema: QUOTE_CAPTIONS_TOOL_SCHEMA,
-                            },
-                            { maxTokens: 4096 },
-                        );
+                    const response = await generateQueuedContent({
+                        requestKey: `content:${topic.id}:captions:${topic.retry_count ?? 0}`,
+                        system: captionsSystem.replace('Call the `emit_quote_captions` tool', 'Return JSON'),
+                        user,
+                        schema: QUOTE_CAPTIONS_TOOL_SCHEMA,
+                        maxTokens: 4096,
+                    });
+                    const data = JSON.parse(response.text);
+                    const { inputTokens: it, outputTokens: ot } = response;
+                    provider = response.provider;
                     inputTokens = it;
                     outputTokens = ot;
                     parsed = {
@@ -174,8 +178,16 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     };
                 } else {
                     // Standard 6-piece path: unchanged text-mode generation.
-                    const { text, inputTokens: it, outputTokens: ot } =
-                        await claude.generateContent(system, user, { maxTokens: 8192 });
+                    const response = await generateQueuedContent({
+                        requestKey: `content:${topic.id}:pieces:${topic.retry_count ?? 0}`,
+                        // Reserve enough input room for the actual ~9 KB source
+                        // prompts. Output truncation still fails worker validation.
+                        system, user, maxTokens: process.env.CONTENT_INFERENCE_PROVIDER === 'ollama' ? 6144 : 8192,
+                        schema: process.env.CONTENT_INFERENCE_PROVIDER === 'ollama'
+                            ? z.toJSONSchema(localContentResponseSchema) : undefined,
+                    });
+                    const { text, inputTokens: it, outputTokens: ot } = response;
+                    provider = response.provider;
                     inputTokens = it;
                     outputTokens = ot;
                     const jsonText = text.replace(/```json\n?|\n?```/g, '').trim();
@@ -183,10 +195,10 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 }
 
                 await supabase.from('cost_tracking').insert({
-                    service: 'claude',
+                    service: provider,
                     operation: 'content_generation',
                     topic_id: topic.id,
-                    cost_usd: estimateClaudeCost(inputTokens, outputTokens),
+                    cost_usd: provider === 'ollama' ? 0 : estimateClaudeCost(inputTokens, outputTokens),
                     tokens_input: inputTokens,
                     tokens_output: outputTokens,
                 });
@@ -201,8 +213,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     );
                 }
 
-                let piecesInserted = 0;
-                for (const piece of contentResult.data.pieces as Array<{
+                const pieces = contentResult.data.pieces as Array<{
                     pieceType: PieceType;
                     script: string;
                     captionLong: string;
@@ -210,9 +221,10 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     thumbnailPrompt?: string;
                     carouselSlides?: unknown;
                     musicTrack?: string;
-                }>) {
+                }>;
+                const rows = pieces.map(piece => {
                     const pieceType = piece.pieceType as PieceType;
-                    const { error: pieceErr } = await supabase.from('content_pieces').insert({
+                    return {
                         topic_id: topic.id,
                         piece_type: pieceType,
                         piece_order: PIECE_ORDER[pieceType] ?? 99,
@@ -224,22 +236,28 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                             ? (piece.carouselSlides as unknown as Database['public']['Tables']['content_pieces']['Insert']['carousel_slides'])
                             : null,
                         music_track: piece.musicTrack || null,
-                        status: 'pending',
-                    });
-                    if (!pieceErr) piecesInserted++;
-                }
+                        status: 'pending' as const,
+                    };
+                });
+                const { error: insertError } = await supabase.from('content_pieces').insert(rows);
+                if (insertError) throw new Error(insertError.message);
+                const piecesInserted = rows.length;
 
-                if (piecesInserted === 0) {
-                    throw new Error('zero pieces inserted');
-                }
-
-                await supabase.from('topics').update({
-                    status: 'scheduled',
+                const { error: statusError } = await supabase.from('topics').update({
+                    status: provider === 'ollama' ? 'content_ready' : 'scheduled',
+                    requires_review: provider === 'ollama',
+                    review_reason: provider === 'ollama' ? 'Local model draft requires human factual review' : null,
                     content_ready_at: new Date().toISOString(),
-                    coo_auto_approved_at: new Date().toISOString(),
+                    coo_auto_approved_at: provider === 'ollama' ? null : new Date().toISOString(),
                 }).eq('id', topic.id);
+                if (statusError) throw new Error(statusError.message);
                 topicResult.piecesInserted = piecesInserted;
             } catch (e) {
+                if (e instanceof LocalInferencePendingError) {
+                    await supabase.from('topics').update({ status: 'draft', error_message: null }).eq('id', topic.id);
+                    results.push({ ...topicResult, queued: true });
+                    continue;
+                }
                 const errMsg = e instanceof Error ? e.message : 'unknown';
                 // Circuit-breaker: count the attempt; once retries are exhausted
                 // hold the topic for manual review (requires_review excludes it

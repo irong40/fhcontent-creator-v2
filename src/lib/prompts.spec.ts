@@ -234,9 +234,9 @@ describe('buildContentPrompt', () => {
     it('includes musicTrack in video piece output format examples', () => {
         const { user } = buildContentPrompt(mockPersona, mockTopic);
         // All video pieces should have musicTrack in their JSON example
-        const longMatch = user.match(/"pieceType": "long".*?"musicTrack"/s);
-        const short1Match = user.match(/"pieceType": "short_1".*?"musicTrack"/s);
-        const short4Match = user.match(/"pieceType": "short_4".*?"musicTrack"/s);
+        const longMatch = user.match(/"pieceType": "long"[\s\S]*?"musicTrack"/);
+        const short1Match = user.match(/"pieceType": "short_1"[\s\S]*?"musicTrack"/);
+        const short4Match = user.match(/"pieceType": "short_4"[\s\S]*?"musicTrack"/);
         expect(longMatch).not.toBeNull();
         expect(short1Match).not.toBeNull();
         expect(short4Match).not.toBeNull();

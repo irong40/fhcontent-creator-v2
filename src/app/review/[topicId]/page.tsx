@@ -154,6 +154,7 @@ export default function ReviewPage() {
     async function callMediaApi(
         pieceId: string, url: string, body: Record<string, unknown>, successMsg: string,
     ) {
+        if (topic?.requires_review && url.startsWith('/api/media/')) { toast.error('Approve text for media first'); return; }
         setGenerating(pieceId);
         try {
             const res = await fetch(url, {
@@ -224,6 +225,7 @@ export default function ReviewPage() {
     }
 
     async function previewVoice(text: string) {
+        if (topic?.requires_review) { toast.error('Approve text for media first'); return; }
         if (!topic?.voice_id) { toast.error('No voice selected'); return; }
         if (!text.trim()) { toast.error('No text to preview'); return; }
         setPreviewing(true);
@@ -246,6 +248,7 @@ export default function ReviewPage() {
     }
 
     async function generatePodcast() {
+        if (topic?.requires_review) { toast.error('Approve text for media first'); return; }
         if (!topic) return;
         const brandId = topic.personas?.brand_id;
         if (!brandId) { toast.error('No brand configured for this persona'); return; }
@@ -266,6 +269,19 @@ export default function ReviewPage() {
         } finally {
             setGeneratingPodcast(false);
         }
+    }
+
+    async function approveTextForMedia() {
+        if (Object.keys(dirty).length) { toast.error('Save your text changes before approving'); return; }
+        setApproving(true);
+        try {
+            const res = await fetch(`/api/topics/${topicId}/review-text`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok || !data.success) { toast.error(data.error || 'Text review failed'); return; }
+            toast.success('Text approved for media generation');
+            await load();
+        } catch { toast.error('Text review failed'); }
+        finally { setApproving(false); }
     }
 
     async function approveTopic() {
@@ -850,7 +866,15 @@ export default function ReviewPage() {
                 <Card className="mt-6">
                     <CardHeader><CardTitle>Approve & Schedule</CardTitle></CardHeader>
                     <CardContent className="space-y-4">
-                        {topic.status === 'content_ready' && (
+                        {topic.status === 'content_ready' && topic.requires_review === true && (
+                            <div className="flex items-center gap-4">
+                                <Button onClick={approveTextForMedia} disabled={approving || Object.keys(dirty).length > 0}>
+                                    {approving ? 'Approving...' : 'Approve text for media'}
+                                </Button>
+                                <p className="text-sm text-muted-foreground">Review the saved text and its sources before allowing media generation. Final media approval follows separately.</p>
+                            </div>
+                        )}
+                        {topic.status === 'content_ready' && topic.requires_review !== true && (
                             <div className="flex items-center gap-4">
                                 <Button onClick={approveTopic} disabled={approving}>
                                     {approving ? 'Approving...' : 'Approve Topic'}

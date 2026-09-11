@@ -34,6 +34,13 @@ export async function POST(
             );
         }
 
+        if (topic.requires_review) {
+            return NextResponse.json(
+                { success: false, error: 'Review and approve the text before final topic approval.' },
+                { status: 409 },
+            );
+        }
+
         // Verify all pieces are ready or produced
         const { data: pieces } = await supabase
             .from('content_pieces')
@@ -61,6 +68,8 @@ export async function POST(
             .update({
                 status: 'approved',
                 approved_at: new Date().toISOString(),
+                requires_review: false,
+                reviewed_at: new Date().toISOString(),
             })
             .eq('id', id);
 

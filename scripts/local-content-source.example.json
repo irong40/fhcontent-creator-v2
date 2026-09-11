@@ -1,0 +1,7 @@
+{
+  "kind": "captions",
+  "sourceId": "synthetic-sai-documentation-demo",
+  "reviewedBy": "synthetic audit fixture; not a client approval",
+  "source": "Sentinel Aerial Inspections provides aerial documentation. The photographs show the condition of the site at the time of capture. A report connects observations to source photographs and identifies matters for follow-up. The documentation does not certify safety or engineering compliance.",
+  "instructions": "Write a short plain-language caption. Preserve the documentation scope and limitation. This is a synthetic demonstration, not a client deliverable."
+}

@@ -1,0 +1,24 @@
+{
+  "status": "needs_review",
+  "provider": "ollama",
+  "model": "qwen3:8b",
+  "draft": {
+    "title": "Sentinel Aerial Inspections Documentation",
+    "body": "Sentinel Aerial Inspections offers aerial documentation services. The photographs capture the site's condition at the time of capture. A report links observations to source images and highlights areas requiring further attention. The documentation does not confirm safety or engineering compliance.",
+    "sourceIds": [
+      "synthetic-sai-documentation-demo"
+    ]
+  },
+  "provenance": {
+    "sourceId": "synthetic-sai-documentation-demo",
+    "reviewedBy": "synthetic audit fixture; not a client approval",
+    "sourceSha256": "46fbebce5ec839bedc0773e110dc6de2684497caa71eff555936d3973698cacb",
+    "promptVersion": 1
+  },
+  "usage": {
+    "inputTokens": 217,
+    "outputTokens": 83,
+    "elapsedMs": 15400
+  },
+  "limitations": "Schema, word count, source ID and new numeric tokens checked. Names, omitted facts and semantic accuracy require independent human review. No publication authorization."
+}

@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-09-11T20:13:27.149Z",
+  "provider": "ollama",
+  "model": "qwen3:8b",
+  "boundary": "Synthetic hosted Supabase queue job, actual host worker and loopback Ollama. No topic, content, media or publishing mutation.",
+  "text": "{\n  \"caption\": \"SAI documents visible site conditions with aerial photographs, but these do not certify safety.\"\n}",
+  "inputTokens": 61,
+  "outputTokens": 25
+}
