@@ -5,6 +5,7 @@ import { topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt, WINNERS_WINDOW_DAYS, type TopicWinner } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
+import { isSourced, takeCandidates, settleCandidate, NO_CANDIDATES } from '@/lib/sourced-topics';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
@@ -123,8 +124,22 @@ export async function GET(request: Request) {
             }
 
             // ── Step 1: Generate 7 topics in one Claude call ──
-            let weekTopics: Array<{ title: string; hook: string; historicalPoints: unknown; thumbnailPrompt?: string }> = [];
-            try {
+            let weekTopics: Array<{ title: string; hook: string; historicalPoints: unknown; thumbnailPrompt?: string; candidateId?: string }> = [];
+            if (isSourced(persona)) {
+                // Sourced persona: topics come only from the office's source-first loop
+                // (public.topic_candidates, see lib/sourced-topics.ts). The model is never
+                // asked to think of one, and fewer than 7 ready means fewer than 7 topics.
+                const taken = await takeCandidates(supabase, persona.id, TOPICS_PER_WEEK);
+                personaResult.errors.push(...taken.problems);
+                if (taken.topics.length === 0) {
+                    personaResult.skipped = true;
+                    personaResult.skipReason = NO_CANDIDATES;
+                    await notifyError({ source: 'daily-topic', message: NO_CANDIDATES, personaName: persona.name });
+                    results.push(personaResult);
+                    continue;
+                }
+                weekTopics = taken.topics;
+            } else try {
                 const ninetyDaysAgo = new Date(nowMs - 90 * 24 * 60 * 60 * 1000).toISOString();
                 const { data: recentData } = await supabase
                     .from('published_log')
@@ -204,6 +219,7 @@ export async function GET(request: Request) {
                     });
                     if (dupCheck?.[0]?.is_duplicate === true) {
                         personaResult.errors.push(`Day ${i + 1} (${publishDate}): duplicate of "${dupCheck[0].similar_title}", skipped`);
+                        if (topic.candidateId) await settleCandidate(supabase, topic.candidateId, { discarded: true });
                         continue;
                     }
 
@@ -244,6 +260,7 @@ export async function GET(request: Request) {
                         personaResult.errors.push(`Day ${i + 1}: topic insert failed: ${insertError?.message}`);
                         continue;
                     }
+                    if (topic.candidateId) await settleCandidate(supabase, topic.candidateId, { topicId: inserted.id });
 
                     // Guardrail check
                     let heldForReview = false;

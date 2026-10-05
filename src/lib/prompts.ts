@@ -1,3 +1,4 @@
+import { sourceDiscipline } from './sourced-topics';
 import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/database';
 
 export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
@@ -267,7 +268,7 @@ THE QUOTE (appears on screen in the video):
 
 SUPPORTING FACTS (for caption depth):
 ${contextFacts.map(p => `- ${p.claim} (${p.source}, ${p.year})`).join('\n')}
-
+${sourceDiscipline(points)}
 Generate content for 1 piece — a short looping quote video:
 
 FOR THE PIECE, PROVIDE:
@@ -310,8 +311,8 @@ You MUST respond with valid JSON only. No markdown, no code fences, no explanati
 HOOK: ${topic.hook}
 
 HISTORICAL POINTS:
-${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
-
+${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})${p.quote ? `\n   SOURCE PASSAGE: "${p.quote}"` : ''}`).join('\n')}
+${sourceDiscipline(points)}
 Generate content for 6 pieces:
 
 ## 1. LONG VIDEO (2-4 minutes)

@@ -1028,6 +1028,10 @@ export interface HistoricalPoint {
     claim: string;
     source: string;
     year: string;
+    /** Set on topics written by the office's source-first loop (lib/sourced-topics.ts):
+     *  the page the claim came from and the passage on it that the claim rests on. */
+    url?: string;
+    quote?: string;
 }
 
 export interface CarouselSlide {

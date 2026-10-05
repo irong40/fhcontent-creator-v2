@@ -6,6 +6,7 @@ import { topicGenerateSchema, topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
+import { isSourced, SOURCED_ON_DEMAND } from '@/lib/sourced-topics';
 import type { Database } from '@/types/database';
 
 export async function POST(request: NextRequest) {
@@ -24,6 +25,11 @@ export async function POST(request: NextRequest) {
 
         if (personaError || !persona) {
             return NextResponse.json({ success: false, error: 'Persona not found' }, { status: 404 });
+        }
+
+        // A sourced persona never gets a topic from the model's memory (lib/sourced-topics.ts).
+        if (isSourced(persona)) {
+            return NextResponse.json({ success: false, error: SOURCED_ON_DEMAND }, { status: 409 });
         }
 
         // Fetch recent topics for duplicate avoidance (last 90 days)
