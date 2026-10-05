@@ -6,6 +6,8 @@ import type { Platform } from '@/lib/blotato';
 import { quickPostSchema } from '@/lib/schemas';
 import { openai } from '@/lib/openai';
 import { estimateClaudeCost, estimateDalleCost } from '@/lib/utils';
+import { isSourced } from '@/lib/sourced-topics';
+import { SOURCED_NO_QUICK_POST } from '@/lib/source-gate';
 
 export async function POST(request: NextRequest) {
     try {
@@ -26,6 +28,13 @@ export async function POST(request: NextRequest) {
                 { success: false, error: 'Persona not found' },
                 { status: 404 },
             );
+        }
+
+        // A sourced persona publishes only what passed a source check. A Quick Post has no
+        // topic and no check, so it is refused here, before any model or platform call
+        // (Codex review 2026-10-05, finding 5).
+        if (isSourced(persona)) {
+            return NextResponse.json({ success: false, error: SOURCED_NO_QUICK_POST }, { status: 409 });
         }
 
         // Expand text with Claude if requested

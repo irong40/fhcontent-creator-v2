@@ -41,3 +41,26 @@ The database refuses to clear a text's review, approve, schedule or publish a to
 the office's source validator has filed a pass for it (migration
 `20261004232349_topic_source_gate.sql`). The loop's program proves a passage is on a page.
 The validator reads the finished text against it.
+
+## The gate, second pass (2026-10-05)
+
+A Codex review of the whole project found ways around the first gate. Adam said yes to closing them the same day.
+
+What changed in the database (`supabase/migrations/20261005220307_topic_source_gate_outbound.sql`):
+
+- `public.topic_source_cleared(topic)` is the rule in one place. A topic is cleared when its newest source check is a pass, or when it has no check and the app's server marked it `source_verified`. A fail always blocks.
+- The trigger now also covers `published` and `partially_published`, a date or time given to a topic that is already approved or scheduled, and a review hold cleared on an approved or scheduled topic.
+- A topic that is already out may settle among `publishing`, `partially_published` and `published`. It may not go back to `approved` or `scheduled` without a pass.
+- A signed-in session cannot set `source_verified`. Only the server can.
+
+What changed in the app:
+
+- `src/lib/source-gate.ts`: `sourceCleared` asks that database function. It fails closed.
+- `publishTopic` asks it before anything is sent to a platform. It used to post first and set the status afterwards, so the database's refusal came after the post. The Publish button returns 409 with the reason.
+- Quick Post and the lecture route refuse a sourced persona.
+
+Proved with 21 cases run against the live database inside a transaction that was rolled back, and by `publish-source-gate.spec.ts`, `source-gate.spec.ts` and `content/quick-post/route.spec.ts`.
+
+Still open from that review: a pass belongs to a topic, not to a version of its text, so a remix after a pass is not rechecked. Media can render for a text that has not passed. The record is `agent-office/content/fh-content/2026-10-05-codex-review.md`.
+
+One consequence to know: `src/scripts/ingest-quiz.ts` inserts quiz shorts as `scheduled`. The gate refuses that insert unless the row is `source_verified` or has a pass. It has refused it since 2026-10-04.

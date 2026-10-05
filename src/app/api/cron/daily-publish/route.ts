@@ -4,6 +4,7 @@ import { blotato, buildTarget, type Platform } from '@/lib/blotato';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { fillEvergreenGaps } from '@/lib/evergreen';
+import { sourceCleared } from '@/lib/source-gate';
 import { validateCronSecret } from '../middleware';
 import { getConfiguredTargetPlatforms, getMediaUrl, getCarouselUrls, isTextOnlyPlatform, truncateTikTokTitle, truncateYouTubeTitle, capInstagramHashtags, isSlotReady, resolveFacebookPageId, pieceTitle, teaseLine, shouldTeaseLongform } from './helpers';
 import { PLATFORM_DAILY_CAP, DAILY_CAP_WINDOW_HOURS, isAccountAtDailyCap, isTransientPublishError } from '@/lib/publish-limits';
@@ -166,6 +167,8 @@ interface PublishResult {
      *  on a later tick once the window drains. Kept out of `warnings` so they
      *  don't trip the failure alert. */
     capDeferrals?: string[];
+    /** Set when the source gate refused this topic. Nothing was sent to any platform. */
+    blocked?: string;
 }
 
 async function publishPieceToPlatform(
@@ -277,6 +280,23 @@ export async function publishTopic(
     const topic = topicData as unknown as TopicWithPersona;
     const persona = topic.personas;
     const accounts = persona.platform_accounts as PlatformAccounts;
+
+    // Ask the source gate BEFORE anything leaves (Codex review 2026-10-05, critical 1).
+    // This used to post first and set the status afterwards, so the database's refusal
+    // arrived after the post. It runs on every call: a retry of a failed topic, and each
+    // later slot of a topic that is already publishing, are asked again.
+    const gate = await sourceCleared(supabase, topicId);
+    if (!gate.cleared) {
+        console.warn(`[daily-publish] Topic ${topicId} ("${topic.title}") not published. ${gate.reason}`);
+        return {
+            topicId,
+            title: topic.title,
+            piecesProcessed: 0,
+            platformResults: {},
+            warnings: [gate.reason],
+            blocked: gate.reason,
+        };
+    }
 
     const { data: pieces } = await supabase
         .from('content_pieces')
@@ -601,10 +621,16 @@ export async function publishTopic(
     // check-status can poll Blotato statuses and eventually settle the topic.
     // Idempotent: if topic was already publishing, this is a no-op.
     if (topic.status !== 'publishing') {
-        await supabase
+        const { error: promoteError } = await supabase
             .from('topics')
             .update({ status: 'publishing' })
             .eq('id', topicId);
+        if (promoteError) {
+            // The gate was asked above, so this should not be a source refusal. Say so loudly
+            // if it ever is: the posts for this tick are already out.
+            console.error(`[daily-publish] Topic ${topicId} posted but its status could not be set to publishing:`, promoteError.message);
+            result.warnings.push(`Status could not be set to publishing: ${promoteError.message}`);
+        }
     }
 
     // Only insert published_log on the FIRST run that produces success — not
@@ -752,6 +778,7 @@ export async function GET(request: Request) {
         }
 
         const topicsDeferred = results.filter((r) => r.deferred).length;
+        const sourceBlocked = results.filter((r) => r.blocked).length;
         const topicsShipped = results.filter((r) => r.piecesProcessed > 0).length;
         const capDeferrals = results.flatMap((r) => r.capDeferrals ?? []);
 
@@ -760,6 +787,7 @@ export async function GET(request: Request) {
             processed: results.length,
             topicsShipped,
             topicsDeferred,
+            sourceBlocked: sourceBlocked > 0 ? sourceBlocked : undefined,
             capDeferrals: capDeferrals.length > 0 ? capDeferrals : undefined,
             results,
             errors: errors.length > 0 ? errors : undefined,

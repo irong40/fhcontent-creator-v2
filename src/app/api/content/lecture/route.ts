@@ -4,6 +4,8 @@ import { claude } from '@/lib/claude';
 import { lectureGenerateSchema, lectureScriptResponseSchema } from '@/lib/schemas';
 import { buildLectureScriptPrompt } from '@/lib/prompts-lecture';
 import { estimateClaudeCost } from '@/lib/utils';
+import { isSourced } from '@/lib/sourced-topics';
+import { SOURCED_NO_LECTURE } from '@/lib/source-gate';
 import type { LectureChapter, Persona, LectureData } from '@/types/database';
 
 export const maxDuration = 300;
@@ -50,6 +52,12 @@ export async function POST(request: NextRequest) {
                 { success: false, error: 'Persona not found' },
                 { status: 404 },
             );
+        }
+
+        // A sourced persona never gets a topic a model wrote from memory (Codex review
+        // 2026-10-05, finding 5). Refused before the chapter is touched or a model is called.
+        if (isSourced(persona)) {
+            return NextResponse.json({ success: false, error: SOURCED_NO_LECTURE }, { status: 409 });
         }
 
         // Update chapter status

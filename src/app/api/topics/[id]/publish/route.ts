@@ -59,6 +59,9 @@ export async function POST(
 
         try {
             const result = await publishTopic(id);
+            if (result.blocked) {
+                return NextResponse.json({ success: false, error: result.blocked }, { status: 409 });
+            }
             return NextResponse.json({
                 success: true,
                 ...result,

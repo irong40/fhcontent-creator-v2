@@ -17,6 +17,8 @@ vi.mock('@/lib/workflow-lock', () => ({
     releaseLock: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/evergreen', () => ({ fillEvergreenGaps: vi.fn(async () => []) }));
+// The source gate has its own spec (publish-source-gate.spec.ts). Here every topic is cleared.
+vi.mock('@/lib/source-gate', () => ({ sourceCleared: vi.fn(async () => ({ cleared: true })) }));
 
 import { publishTopic } from './route';
 import { createAdminClient } from '@/lib/supabase/server';
