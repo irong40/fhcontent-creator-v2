@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
+import { renderRefusal } from '@/lib/source-gate';
 import { blotato } from '@/lib/blotato';
 import { videoGenerateSchema } from '@/lib/schemas';
 
@@ -9,6 +10,12 @@ export async function POST(request: NextRequest) {
         const { contentPieceId, blotatoTemplateId } = videoGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
+
+        // No render for a text that has not passed its source check (Codex review 2026-10-05).
+        const refusal = await renderRefusal(supabase, contentPieceId);
+        if (refusal) {
+            return NextResponse.json({ success: false, error: refusal }, { status: 409 });
+        }
 
         // Verify content piece exists
         const { data: piece, error: fetchError } = await supabase

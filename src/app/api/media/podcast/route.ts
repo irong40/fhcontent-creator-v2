@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
+import { renderRefusalForTopic } from '@/lib/source-gate';
 import { claude } from '@/lib/claude';
 import { elevenlabs } from '@/lib/elevenlabs';
 import { uploadAudio } from '@/lib/storage';
@@ -16,6 +17,12 @@ export async function POST(request: NextRequest) {
         const { topicId, brandId } = podcastGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
+
+        // No script, no voice for a text that has not passed its source check (Codex review 2026-10-05).
+        const refusal = await renderRefusalForTopic(supabase, topicId);
+        if (refusal) {
+            return NextResponse.json({ success: false, error: refusal }, { status: 409 });
+        }
 
         // Fetch the topic with its persona
         const { data: topic, error: topicError } = await supabase

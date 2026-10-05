@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
+import { renderRefusal } from '@/lib/source-gate';
 import { claude } from '@/lib/claude';
 import { openai } from '@/lib/openai';
 import { uploadImage } from '@/lib/storage';
@@ -36,6 +37,13 @@ export async function POST(request: NextRequest) {
         const { contentPieceId } = carouselGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
+
+        // No render for a text that has not passed its source check (Codex review 2026-10-05).
+        // This route also writes new slide words, which then need a check of their own.
+        const refusal = await renderRefusal(supabase, contentPieceId);
+        if (refusal) {
+            return NextResponse.json({ success: false, error: refusal }, { status: 409 });
+        }
 
         // Fetch content piece with its topic
         const { data: piece, error: fetchError } = await supabase

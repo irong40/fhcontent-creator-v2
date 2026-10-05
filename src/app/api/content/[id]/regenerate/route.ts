@@ -4,6 +4,7 @@ import { claude } from '@/lib/claude';
 import { buildContentPrompt } from '@/lib/prompts';
 import { regeneratePieceResponseSchema } from '@/lib/schemas';
 import { estimateClaudeCost } from '@/lib/utils';
+import { pointLines, sourceDiscipline, type PointLine } from '@/lib/sourced-topics';
 import type { TopicWithPersona, PieceType } from '@/types/database';
 
 export async function POST(
@@ -61,6 +62,9 @@ export async function POST(
         };
 
         const isCarousel = pieceType === 'carousel';
+        // The same points, passages and source rule the first draft was written under
+        // (Codex review 2026-10-05, finding 7: this prompt used to drop them).
+        const points = topic.historical_points as unknown as PointLine[];
 
         const userPrompt = `Regenerate ONLY the ${pieceLabels[pieceType]} for this topic:
 
@@ -68,8 +72,8 @@ TOPIC: ${topic.title}
 HOOK: ${topic.hook}
 
 HISTORICAL POINTS:
-${(topic.historical_points as Array<{ point: number; claim: string; source: string; year: string }>).map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
-
+${pointLines(points)}
+${sourceDiscipline(points)}
 Provide a fresh, improved version. Output JSON:
 {
   "script": "...",

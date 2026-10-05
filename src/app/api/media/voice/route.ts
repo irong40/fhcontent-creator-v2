@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
+import { renderRefusal } from '@/lib/source-gate';
 import { elevenlabs } from '@/lib/elevenlabs';
 import { uploadAudio } from '@/lib/storage';
 import { estimateElevenLabsCost } from '@/lib/utils';
@@ -11,6 +12,12 @@ export async function POST(request: NextRequest) {
         const { contentPieceId, voiceId } = voiceGenerateSchema.parse(body);
 
         const supabase = createAdminClient();
+
+        // No render for a text that has not passed its source check (Codex review 2026-10-05).
+        const refusal = await renderRefusal(supabase, contentPieceId);
+        if (refusal) {
+            return NextResponse.json({ success: false, error: refusal }, { status: 409 });
+        }
 
         // Fetch content piece
         const { data: piece, error: fetchError } = await supabase

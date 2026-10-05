@@ -7,6 +7,7 @@ import { claude } from '@/lib/claude';
 import { uploadAudio, uploadImage } from '@/lib/storage';
 import { estimateDalleCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
+import { sourceCleared } from '@/lib/source-gate';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
 import { generateSlideWithLadder, serializeAttempts, type SlideLadderDeps } from '@/lib/carousel-slide';
@@ -98,6 +99,7 @@ export async function GET(request: Request) {
         }
 
         const results = [];
+        const sourceBlocked: Array<{ topicId: string; title: string; reason: string }> = [];
         let isFirstPersona = true;
 
         for (const [, personaTopics] of topicsByPersona) {
@@ -109,6 +111,15 @@ export async function GET(request: Request) {
             for (const topicRow of personaTopics) {
                 const topic = topicRow as unknown as TopicWithBrand;
                 if (topic.requires_review === true) continue;
+
+                // No paid render for a text that has not passed its source check, or that
+                // changed after it passed (Codex review 2026-10-05, finding 6).
+                const gate = await sourceCleared(supabase, topic.id);
+                if (!gate.cleared) {
+                    console.warn(`[daily-media] Topic ${topic.id} ("${topic.title}") not rendered. ${gate.reason}`);
+                    sourceBlocked.push({ topicId: topic.id, title: topic.title, reason: gate.reason });
+                    continue;
+                }
                 const persona = topic.personas;
 
                 // Fetch ALL pieces for this topic
@@ -559,6 +570,7 @@ export async function GET(request: Request) {
             success: true,
             processed: results.length,
             results,
+            sourceBlocked: sourceBlocked.length > 0 ? sourceBlocked : undefined,
         });
     } catch (error) {
         console.error('Daily media cron error:', error);

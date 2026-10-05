@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSourced, takeCandidates, settleCandidate, sourceDiscipline } from './sourced-topics';
+import { isSourced, takeCandidates, claimCandidate, settleCandidate, sourceDiscipline, CANDIDATE_READ_LIMIT } from './sourced-topics';
 import { buildContentPrompt } from './prompts';
 
 type Call = { table: string; op: string; args: unknown[] };
@@ -88,6 +88,16 @@ describe('takeCandidates', () => {
         expect(problems[0]).toContain('three');
     });
 
+    it('finds the good candidates behind a long run of bad ones', async () => {
+        const bad = Array.from({ length: 20 }, (_, i) => row(`bad${i}`, { historical_points: [] }));
+        const { db, calls } = fakeDb([...bad, row('good1'), row('good2')]);
+        const { topics, problems } = await takeCandidates(db, 'p', 7);
+        expect(topics.map(t => t.candidateId)).toEqual(['good1', 'good2']);
+        expect(problems).toHaveLength(20);
+        expect(calls.find(c => c.op === 'limit')?.args).toEqual([CANDIDATE_READ_LIMIT]);
+        expect(CANDIDATE_READ_LIMIT).toBeGreaterThanOrEqual(100);
+    });
+
     it('creates nothing when the table cannot be read', async () => {
         const { db } = fakeDb([], { message: 'boom' });
         expect(await takeCandidates(db, 'p', 7)).toEqual({ topics: [], problems: ['Topic candidates could not be read: boom'] });
@@ -99,22 +109,90 @@ describe('takeCandidates', () => {
     });
 });
 
-describe('settleCandidate', () => {
-    it('marks a candidate used with the topic it became', async () => {
-        const { db, calls } = fakeDb([]);
-        await settleCandidate(db, 'cand-1', { topicId: 'topic-9' });
-        const patch = calls.find(c => c.op === 'update')?.args[0] as Record<string, unknown>;
-        expect(patch.status).toBe('used');
-        expect(patch.topic_id).toBe('topic-9');
-        expect(calls.filter(c => c.op === 'eq').map(c => c.args)).toEqual([['id', 'cand-1'], ['status', 'ready']]);
+/** A one-table stand-in that really applies updates, so a claim can be tested against a second claim. */
+function candidateTable(rows: Array<Record<string, unknown>>, failWith: string | null = null) {
+    const from = () => {
+        let patch: Record<string, unknown> = {};
+        const filters: Array<(r: Record<string, unknown>) => boolean> = [];
+        const b: Record<string, unknown> = {
+            update: (p: Record<string, unknown>) => { patch = p; return b; },
+            eq: (col: string, val: unknown) => { filters.push(r => r[col] === val); return b; },
+            is: (col: string, val: unknown) => { filters.push(r => (r[col] ?? null) === val); return b; },
+            select: async () => {
+                if (failWith) return { data: null, error: { message: failWith } };
+                const hit = rows.filter(r => filters.every(f => f(r)));
+                hit.forEach(r => Object.assign(r, patch));
+                return { data: hit.map(r => ({ id: r.id })), error: null };
+            },
+        };
+        return b;
+    };
+    return { from } as never;
+}
+
+describe('claimCandidate', () => {
+    it('takes a ready candidate once, and a second run cannot take it again', async () => {
+        const rows = [{ id: 'cand-1', status: 'ready', topic_id: null, used_at: null }];
+        const db = candidateTable(rows);
+        expect(await claimCandidate(db, 'cand-1')).toBe(true);
+        expect(rows[0].status).toBe('used');
+        expect(rows[0].used_at).toEqual(expect.any(String));
+        expect(await claimCandidate(db, 'cand-1')).toBe(false);
     });
 
-    it('marks a duplicate discarded', async () => {
-        const { db, calls } = fakeDb([]);
-        await settleCandidate(db, 'cand-1', { discarded: true });
-        const patch = calls.find(c => c.op === 'update')?.args[0] as Record<string, unknown>;
-        expect(patch.status).toBe('discarded');
-        expect(patch.topic_id).toBeUndefined();
+    it('does not take a candidate that is used, discarded or missing', async () => {
+        const rows = [{ id: 'used', status: 'used' }, { id: 'gone', status: 'discarded' }];
+        const db = candidateTable(rows);
+        expect(await claimCandidate(db, 'used')).toBe(false);
+        expect(await claimCandidate(db, 'gone')).toBe(false);
+        expect(await claimCandidate(db, 'nope')).toBe(false);
+    });
+
+    it('is not a claim when the database refuses', async () => {
+        const rows = [{ id: 'cand-1', status: 'ready' }];
+        expect(await claimCandidate(candidateTable(rows, 'boom'), 'cand-1')).toBe(false);
+        expect(rows[0].status).toBe('ready');
+    });
+});
+
+describe('settleCandidate', () => {
+    const claimed = () => [{ id: 'cand-1', status: 'used', topic_id: null as string | null, used_at: '2026-10-11T02:00:00Z' as string | null }];
+
+    it('links a claimed candidate to the topic it became, once', async () => {
+        const rows = claimed();
+        const db = candidateTable(rows);
+        expect(await settleCandidate(db, 'cand-1', { topicId: 'topic-9' })).toBe(true);
+        expect(rows[0]).toMatchObject({ status: 'used', topic_id: 'topic-9' });
+        // a second topic can never be hung on the same candidate
+        expect(await settleCandidate(db, 'cand-1', { topicId: 'topic-10' })).toBe(false);
+        expect(rows[0].topic_id).toBe('topic-9');
+    });
+
+    it('discards a claimed candidate the duplicate check refused', async () => {
+        const rows = claimed();
+        expect(await settleCandidate(candidateTable(rows), 'cand-1', { discarded: true })).toBe(true);
+        expect(rows[0]).toMatchObject({ status: 'discarded', topic_id: null });
+    });
+
+    it('gives a claimed candidate back when no topic came of it', async () => {
+        const rows = claimed();
+        const db = candidateTable(rows);
+        expect(await settleCandidate(db, 'cand-1', { released: true })).toBe(true);
+        expect(rows[0]).toMatchObject({ status: 'ready', used_at: null, topic_id: null });
+        expect(await claimCandidate(db, 'cand-1')).toBe(true);
+    });
+
+    it('never gives back a candidate that already became a topic', async () => {
+        const rows = [{ id: 'cand-1', status: 'used', topic_id: 'topic-9', used_at: 'x' }];
+        expect(await settleCandidate(candidateTable(rows), 'cand-1', { released: true })).toBe(false);
+        expect(rows[0]).toMatchObject({ status: 'used', topic_id: 'topic-9' });
+    });
+
+    it('touches nothing that was not claimed, and says so', async () => {
+        const rows = [{ id: 'cand-1', status: 'ready', topic_id: null }];
+        expect(await settleCandidate(candidateTable(rows), 'cand-1', { topicId: 'topic-9' })).toBe(false);
+        expect(rows[0]).toMatchObject({ status: 'ready', topic_id: null });
+        expect(await settleCandidate(candidateTable(rows, 'boom'), 'cand-1', { discarded: true })).toBe(false);
     });
 });
 

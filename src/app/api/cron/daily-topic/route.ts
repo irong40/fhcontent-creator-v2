@@ -5,7 +5,7 @@ import { topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt, WINNERS_WINDOW_DAYS, type TopicWinner } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
-import { isSourced, takeCandidates, settleCandidate, NO_CANDIDATES } from '@/lib/sourced-topics';
+import { isSourced, takeCandidates, claimCandidate, settleCandidate, NO_CANDIDATES } from '@/lib/sourced-topics';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
@@ -210,8 +210,20 @@ export async function GET(request: Request) {
                 const publishDateObj = new Date(monday);
                 publishDateObj.setUTCDate(publishDateObj.getUTCDate() + i);
                 const publishDate = publishDateObj.toISOString().split('T')[0];
+                // The candidate this pass has claimed and not yet turned into a topic.
+                let claimedId: string | null = null;
 
                 try {
+                    // A sourced topic's candidate is claimed before anything is created, so a
+                    // run that dies part way cannot leave it ready for a second topic.
+                    if (topic.candidateId) {
+                        if (!(await claimCandidate(supabase, topic.candidateId))) {
+                            personaResult.errors.push(`Day ${i + 1} (${publishDate}): topic candidate ${topic.candidateId} was already taken, skipped`);
+                            continue;
+                        }
+                        claimedId = topic.candidateId;
+                    }
+
                     // Duplicate check
                     const { data: dupCheck } = await supabase.rpc('check_duplicate_topic', {
                         p_persona_id: persona.id,
@@ -219,7 +231,10 @@ export async function GET(request: Request) {
                     });
                     if (dupCheck?.[0]?.is_duplicate === true) {
                         personaResult.errors.push(`Day ${i + 1} (${publishDate}): duplicate of "${dupCheck[0].similar_title}", skipped`);
-                        if (topic.candidateId) await settleCandidate(supabase, topic.candidateId, { discarded: true });
+                        if (claimedId) {
+                            await settleCandidate(supabase, claimedId, { discarded: true });
+                            claimedId = null;
+                        }
                         continue;
                     }
 
@@ -258,9 +273,20 @@ export async function GET(request: Request) {
 
                     if (insertError || !inserted) {
                         personaResult.errors.push(`Day ${i + 1}: topic insert failed: ${insertError?.message}`);
+                        if (claimedId) {
+                            // No topic came of it: the candidate goes back for the next run.
+                            await settleCandidate(supabase, claimedId, { released: true });
+                            claimedId = null;
+                        }
                         continue;
                     }
-                    if (topic.candidateId) await settleCandidate(supabase, topic.candidateId, { topicId: inserted.id });
+                    if (claimedId) {
+                        const linked = await settleCandidate(supabase, claimedId, { topicId: inserted.id });
+                        if (!linked) {
+                            personaResult.errors.push(`Day ${i + 1}: topic ${inserted.id} was created but its candidate ${claimedId} could not be linked to it`);
+                        }
+                        claimedId = null;
+                    }
 
                     // Guardrail check
                     let heldForReview = false;
@@ -304,6 +330,10 @@ export async function GET(request: Request) {
                     });
                 } catch (e) {
                     personaResult.errors.push(`Day ${i + 1} (${publishDate}): ${e instanceof Error ? e.message : 'unknown'}`);
+                    if (claimedId) {
+                        // Thrown before a topic existed: give the candidate back.
+                        await settleCandidate(supabase, claimedId, { released: true }).catch(() => false);
+                    }
                 }
             } // end per-topic loop
 

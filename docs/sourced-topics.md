@@ -61,6 +61,34 @@ What changed in the app:
 
 Proved with 21 cases run against the live database inside a transaction that was rolled back, and by `publish-source-gate.spec.ts`, `source-gate.spec.ts` and `content/quick-post/route.spec.ts`.
 
-Still open from that review: a pass belongs to a topic, not to a version of its text, so a remix after a pass is not rechecked. Media can render for a text that has not passed. The record is `agent-office/content/fh-content/2026-10-05-codex-review.md`.
+Those two were open when this section was written. Both were closed later the same day: see the next section. The record is `agent-office/content/fh-content/2026-10-05-codex-review.md`.
 
 One consequence to know: `src/scripts/ingest-quiz.ts` inserts quiz shorts as `scheduled`. The gate refuses that insert unless the row is `source_verified` or has a pass. It has refused it since 2026-10-04.
+
+## A pass belongs to one version of the text (2026-10-05, evening)
+
+Adam said yes to the rest of the review's open items.
+
+**The text version.** `supabase/migrations/20261005221723_topic_source_check_text_version.sql` gives each topic's text a fingerprint: its title, hook and points, and each piece's title, script, captions and carousel slide words. Media addresses, image prompts and statuses are left out, so a render does not change it. The office prints the fingerprint for the validator as `Text version:`, and the check row stores it. A pass clears only that version.
+
+`topic_source_state(topic)` answers one of five words:
+
+| State | Meaning | Cleared |
+|---|---|---|
+| `pass` | the newest check passed this exact text | yes |
+| `verified` | no check, and the server marked it `source_verified` | yes |
+| `changed` | the text is not the one the newest check read | no |
+| `fail` | the newest check failed this text | no |
+| `none` | no check | no |
+
+What this means in the app: remix a caption, regenerate a script, edit a slide or change the hook after a pass, and the topic is `changed`. It cannot be approved, scheduled, dated, rendered or published until the validator checks the text as it stands. The edit itself is never refused.
+
+**No render without a pass.** The media cron and the video, voice, thumbnail, music, carousel and podcast routes ask `topic_source_cleared` first and return 409 with the reason. A lecture piece is course material and is not gated there.
+
+**Every writer sees the passages.** `pointLines` and `sourceDiscipline` (`src/lib/sourced-topics.ts`) now feed the quote-video, carousel, podcast, newsletter, remix and regenerate prompts as well as the first draft. For a topic with no source passages each prompt is byte for byte what it was; that was checked against the previous commit.
+
+**A candidate cannot become two topics.** The weekly run claims a candidate (`ready` to `used`) before it creates the topic, links the topic afterwards, and gives the candidate back if no topic came of it. A run that dies in between leaves a spent candidate with no topic, never a second topic. Reading candidates now looks through 200 rows, so bad rows at the front cannot hide good ones.
+
+Proved with 17 cases run against the live database inside a rolled-back transaction, and by `prompts-sourced.spec.ts`, `source-gate.spec.ts`, `daily-media/source-gate.spec.ts` and `sourced-topics.spec.ts`.
+
+Not covered: the podcast script and the newsletter draft are written by a model after the check and are not part of the text version. The podcast feed serves only episodes marked `published`, and nothing in the app marks them. The newsletter draft is a draft. If either is ever sent out as it stands, it has not been source-checked.

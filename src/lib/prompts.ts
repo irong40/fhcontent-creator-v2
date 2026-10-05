@@ -1,4 +1,4 @@
-import { sourceDiscipline } from './sourced-topics';
+import { pointLines, sourceDiscipline } from './sourced-topics';
 import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/database';
 
 export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
@@ -267,7 +267,7 @@ THE QUOTE (appears on screen in the video):
 — ${quote.source}, ${quote.year}
 
 SUPPORTING FACTS (for caption depth):
-${contextFacts.map(p => `- ${p.claim} (${p.source}, ${p.year})`).join('\n')}
+${contextFacts.map(p => `- ${p.claim} (${p.source}, ${p.year})${p.quote && p.quote.trim() ? `\n  SOURCE PASSAGE: "${p.quote}"` : ''}`).join('\n')}
 ${sourceDiscipline(points)}
 Generate content for 1 piece — a short looping quote video:
 
@@ -311,7 +311,7 @@ You MUST respond with valid JSON only. No markdown, no code fences, no explanati
 HOOK: ${topic.hook}
 
 HISTORICAL POINTS:
-${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})${p.quote ? `\n   SOURCE PASSAGE: "${p.quote}"` : ''}`).join('\n')}
+${pointLines(points)}
 ${sourceDiscipline(points)}
 Generate content for 6 pieces:
 
@@ -381,8 +381,8 @@ IMPORTANT RULES:
 HOOK: ${topic.hook}
 
 HISTORICAL POINTS:
-${researchContent.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
-
+${pointLines(researchContent)}
+${sourceDiscipline(researchContent)}
 Generate 8-10 carousel slides following this structure:
 - Slide 1: Hook/Title slide — attention-grabbing headline
 - Slides 2-5: One historical point per slide with visual-friendly text
@@ -430,8 +430,8 @@ You MUST respond with valid JSON only. No markdown, no code fences, no explanati
 HOOK: ${topic.hook}
 
 HISTORICAL POINTS:
-${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
-
+${pointLines(points)}
+${sourceDiscipline(points)}
 ORIGINAL SHORT SCRIPT (2-4 min):
 ${longFormScript}
 
@@ -487,8 +487,8 @@ IMPORTANT RULES:
 HOOK: ${topic.hook}
 
 HISTORICAL POINTS:
-${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
-
+${pointLines(points)}
+${sourceDiscipline(points)}
 ORIGINAL VIDEO SCRIPT:
 ${longFormScript}
 
@@ -567,8 +567,8 @@ HOOK: ${topic.hook}
 PIECE TYPE: ${pieceType}
 
 HISTORICAL POINTS:
-${points.map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})`).join('\n')}
-
+${pointLines(points)}
+${sourceDiscipline(points)}
 CURRENT ${REMIX_FIELD_LABELS[field].toUpperCase()}:
 ${currentValue}
 

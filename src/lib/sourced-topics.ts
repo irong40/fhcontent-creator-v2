@@ -24,6 +24,9 @@ export const NO_CANDIDATES =
 export const SOURCED_ON_DEMAND =
     'This persona takes its topics from sourced candidates written by the office topic loop. The weekly run adds them; none are written on demand.';
 
+/** How many ready candidates one read looks through to find `count` good ones. */
+export const CANDIDATE_READ_LIMIT = 200;
+
 export function isSourced(persona: { content_guardrail?: string | null }): boolean {
     return (persona.content_guardrail ?? '').trim().toLowerCase() === SOURCED_GUARDRAIL;
 }
@@ -67,7 +70,9 @@ export async function takeCandidates(
         .eq('persona_id', personaId)
         .eq('status', 'ready')
         .order('created_at', { ascending: true })
-        .limit(count * 2);
+        // Far more than the count: a run of bad rows at the front must not hide the good ones
+        // behind them (Codex review 2026-10-05, finding 9).
+        .limit(CANDIDATE_READ_LIMIT);
 
     if (error) {
         return { topics: [], problems: [`Topic candidates could not be read: ${error.message}`] };
@@ -97,24 +102,56 @@ export async function takeCandidates(
     return { topics, problems };
 }
 
-/** Mark a candidate used (it became a topic) or discarded (the duplicate check refused it). */
+/**
+ * Take a candidate for this run. True only when this call moved it from ready to used.
+ *
+ * It is claimed BEFORE the topic is created (Codex review 2026-10-05, finding 8). Until then
+ * the topic was created first and the candidate marked used afterwards, so a run that died in
+ * between left the candidate ready and the next run made the same topic a second time. Now a
+ * run that dies in between leaves a candidate that is spent and has no topic. That costs one
+ * candidate. It cannot publish anything twice.
+ */
+export async function claimCandidate(supabase: Db, candidateId: string): Promise<boolean> {
+    const { data, error } = await supabase
+        .from('topic_candidates')
+        .update({ status: 'used', used_at: new Date().toISOString() })
+        .eq('id', candidateId)
+        .eq('status', 'ready')
+        .select('id');
+    if (error) {
+        console.error(`Topic candidate ${candidateId} could not be claimed:`, error.message);
+        return false;
+    }
+    return Array.isArray(data) && data.length === 1;
+}
+
+/**
+ * What became of a candidate this run claimed: it became a topic, the duplicate check refused
+ * it, or the topic could not be created and it goes back to ready. Only a claimed candidate
+ * with no topic yet is touched. False means nothing was changed, and the caller says so.
+ */
 export async function settleCandidate(
     supabase: Db,
     candidateId: string,
-    outcome: { topicId: string } | { discarded: true },
-): Promise<void> {
-    const now = new Date().toISOString();
+    outcome: { topicId: string } | { discarded: true } | { released: true },
+): Promise<boolean> {
     const patch = 'topicId' in outcome
-        ? { status: 'used', used_at: now, topic_id: outcome.topicId }
-        : { status: 'discarded', used_at: now };
-    const { error } = await supabase
+        ? { topic_id: outcome.topicId }
+        : 'discarded' in outcome
+            ? { status: 'discarded' }
+            : { status: 'ready', used_at: null };
+    const { data, error } = await supabase
         .from('topic_candidates')
         .update(patch)
         .eq('id', candidateId)
-        .eq('status', 'ready');
+        .eq('status', 'used')
+        .is('topic_id', null)
+        .select('id');
     if (error) {
         console.error(`Topic candidate ${candidateId} could not be settled:`, error.message);
+        return false;
     }
+    return Array.isArray(data) && data.length === 1;
 }
 
 /**
@@ -129,5 +166,25 @@ SOURCE DISCIPLINE (these points were written from real source passages, and a fa
 - You may explain, connect and react. You may not add an event, a statistic, a quotation, a cause, or a "first", "only" or "largest" that the points do not state.
 - Do not put words in anyone's mouth. Quote a person only with words that appear in a point or a source passage.
 - If the points are too thin for the word count, write a shorter piece.
+- These rules come first. Where an instruction below asks for added context, background, analysis, quotations or source citations, give only what the points and their source passages hold.
 `;
+}
+
+export interface PointLine {
+    point: number;
+    claim: string;
+    source: string;
+    year: string;
+    quote?: string | null;
+}
+
+/**
+ * The points as every writer sees them. A point the office loop wrote shows the passage it
+ * rests on, so the writer has the source's own words in front of it. A point with no passage
+ * prints exactly as it always did.
+ */
+export function pointLines(points: PointLine[]): string {
+    return points
+        .map(p => `${p.point}. ${p.claim} (Source: ${p.source}, ${p.year})${p.quote && p.quote.trim() ? `\n   SOURCE PASSAGE: "${p.quote}"` : ''}`)
+        .join('\n');
 }
