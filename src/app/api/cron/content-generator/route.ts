@@ -5,6 +5,7 @@ import { LocalInferencePendingError } from '@/lib/local-inference-queue';
 import { z } from 'zod';
 import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
+import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR } from '@/lib/quote-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
@@ -127,7 +128,18 @@ export async function GET(request: Request) {
             }
 
             try {
-                const { system, user } = buildContentPrompt(persona, topic);
+                const { system, user: basePrompt } = buildContentPrompt(persona, topic);
+                // A draft rejected for an unsourced quotation is rewritten with the reason in
+                // the prompt. The local model runs at temperature 0: the same prompt would
+                // write the same caption and fail the same way three times.
+                const priorQuoteFault = topic.error_message?.includes(UNSOURCED_QUOTE_ERROR)
+                    ? topic.error_message.slice(topic.error_message.indexOf(UNSOURCED_QUOTE_ERROR))
+                    : null;
+                const user = priorQuoteFault
+                    ? `${basePrompt}
+
+A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.`
+                    : basePrompt;
                 // quote_video personas return 1 piece; standard personas return 6.
                 const isQuote = persona.content_format === 'quote_video';
                 const responseSchema = isQuote
@@ -211,6 +223,11 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     throw new Error(
                         `Invalid content shape: ${contentResult.error.issues.map(i => i.message).join('; ')}`,
                     );
+                }
+
+                const quoteFaults = sourcedQuoteFaults(topic.historical_points as HistoricalPoint[], contentResult.data.pieces as Array<Record<string, unknown>>);
+                if (quoteFaults.length > 0) {
+                    throw new Error(`${UNSOURCED_QUOTE_ERROR}: ${quoteFaults.slice(0, 2).join('; ')}`);
                 }
 
                 const pieces = contentResult.data.pieces as Array<{

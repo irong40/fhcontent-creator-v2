@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ generate: vi.fn(), updates: [] as Record<string, unknown>[], inserts: [] as unknown[], existing: 0 }));
+const state = vi.hoisted(() => ({ generate: vi.fn(), updates: [] as Record<string, unknown>[], inserts: [] as unknown[], existing: 0, topic: {} as Record<string, unknown> }));
 vi.mock('@/lib/content-inference', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/content-inference')>(), generateQueuedContent: state.generate }));
 vi.mock('@/lib/local-inference-queue', () => ({ LocalInferencePendingError: class extends Error {} }));
 vi.mock('@/lib/prompts', () => ({ buildContentPrompt: () => ({ system: 'system', user: 'source' }) }));
@@ -11,7 +11,7 @@ vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (tab
     const chain = {
         select: (_fields?: string, options?: unknown) => { if (options) response = { count: state.existing }; return chain; },
         eq: () => chain, not: () => chain, or: () => chain, order: () => chain,
-        limit: () => { response = { data: [{ id: 'fixture', title: 'Source', retry_count: 0, personas: { name: 'Fixture', content_format: 'standard' } }], error: null }; return chain; },
+        limit: () => { response = { data: [{ id: 'fixture', title: 'Source', retry_count: 0, personas: { name: 'Fixture', content_format: 'standard' }, ...state.topic }], error: null }; return chain; },
         update: (value: Record<string, unknown>) => { state.updates.push(value); return chain; },
         insert: (value: unknown) => { if (table === 'content_pieces') state.inserts.push(value); return chain; },
         then: (resolve: (value: unknown) => unknown) => Promise.resolve(response).then(resolve),
@@ -19,7 +19,7 @@ vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (tab
 } }) }));
 import { GET } from './route';
 import { LocalInferencePendingError } from '@/lib/local-inference-queue';
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.inserts.length = 0; state.existing = 0; });
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.inserts.length = 0; state.existing = 0; state.topic = {}; });
 describe('local content consumption', () => {
     it('leaves queued work selectable without charging retries or inserting content', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
@@ -46,6 +46,22 @@ describe('local content consumption', () => {
         await GET(new Request('https://fixture/api/cron/content-generator'));
         expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready', requires_review: true, coo_auto_approved_at: null });
         expect(state.updates.some(u => u.status === 'scheduled')).toBe(false);
+    });
+    it('rejects a sourced draft that quotes words no source holds, and says why on the retry', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        const passage = 'now I am sick and tired of being sick and tired, and we want a change.';
+        state.topic = { historical_points: [{ claim: passage, quote: passage, source: 'Speech', year: '1964' }] };
+        const pieces = ['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel'].map(pieceType => ({ pieceType, script: 'source draft', captionLong: 'caption', captionShort: pieceType === 'long' ? "Her words: 'I'm sick and tired of being sick and tired.'" : 'caption' }));
+        state.generate.mockResolvedValue({ text: JSON.stringify({ pieces }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.inserts).toHaveLength(0);
+        const fault = state.updates.at(-1) as { status: string; error_message: string };
+        expect(fault.status).toBe('draft');
+        expect(fault.error_message).toContain('Unsourced quotation');
+        state.updates.length = 0;
+        state.topic = { ...state.topic, retry_count: 1, error_message: fault.error_message };
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.generate.mock.calls.at(-1)?.[0].user).toContain('A PREVIOUS DRAFT WAS REJECTED');
     });
     it('recovers existing pieces to review without generating or autoapproving', async () => {
         state.existing = 6;
