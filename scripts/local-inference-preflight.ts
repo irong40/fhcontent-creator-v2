@@ -12,7 +12,7 @@ async function main() {
         const {system,user}=buildContentPrompt(topic.personas,topic);
         const bytes=Buffer.byteLength(system)+Buffer.byteLength(user);
         const maxTokens=topic.personas.content_format==='quote_video'?4096:6144;
-        return {topicId:topic.id,format:topic.personas.content_format,status:topic.status,requiresReview:topic.requires_review,promptBytes:bytes,reservedTokens:maxTokens,withinBaseBudget:bytes+maxTokens+512<=16384};
+        return {topicId:topic.id,format:topic.personas.content_format,status:topic.status,requiresReview:topic.requires_review,promptBytes:bytes,reservedTokens:maxTokens,withinBaseBudget:Math.ceil(bytes/2)+maxTokens+512<=16384};
     });
     console.log(JSON.stringify(rows,null,2));
 }

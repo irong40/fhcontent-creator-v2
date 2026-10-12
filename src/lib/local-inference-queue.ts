@@ -55,8 +55,10 @@ export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): 
     if (promptBytes > 24000) {
         throw new Error('Local inference prompts exceed the 24000-byte context budget');
     }
-    // Byte count conservatively bounds input tokens; reserve chat framing and output.
-    if (promptBytes + request.maxTokens + 512 > 16384) {
+    // Two bytes per token conservatively bounds input tokens (qwen3 measured at
+    // 3.3+ bytes/token over every completed job, 2026-10-12); reserve chat
+    // framing and output. Same rule as the table CHECK and the worker.
+    if (Math.ceil(promptBytes / 2) + request.maxTokens + 512 > 16384) {
         throw new Error('Local inference prompt and output exceed the 16384-token context budget');
     }
     const serializedSchema = JSON.stringify(request.schema ?? null);

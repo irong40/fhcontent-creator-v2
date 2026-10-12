@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { open, unlink } from 'node:fs/promises';
+import { open, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,8 +61,8 @@ export function createRpc(env: Record<string, string | undefined>, request: type
 export async function inferJob(job: Job, request: typeof fetch = fetch) {
   const promptBytes = Buffer.byteLength(job.system_prompt + job.user_prompt, 'utf8');
   if (promptBytes > 24000) throw new Error('PROMPT_TOO_LARGE');
-  // Conservative byte-per-token bound reserves output plus chat-template overhead.
-  if (promptBytes + job.max_tokens + 512 > 16384) throw new Error('CONTEXT_BUDGET_EXCEEDED');
+  // Conservative two-bytes-per-token bound reserves output plus chat-template overhead.
+  if (Math.ceil(promptBytes / 2) + job.max_tokens + 512 > 16384) throw new Error('CONTEXT_BUDGET_EXCEEDED');
   const remaining = Date.parse(job.lease_expires_at)-Date.now();
   if (!Number.isFinite(remaining) || remaining < 270000) throw new Error('LEASE_TOO_SHORT');
   // Validate schema conversion before spending local inference time. Unsupported schemas fail closed.
@@ -102,6 +102,17 @@ export async function runOnce(rpc:Rpc, workerId:string, request:typeof fetch=fet
   if (accepted!==true) throw new Error('Lease rejected completion; output discarded');
   return 'completed';
 }
+/** True when the lock was left by a process that no longer runs, and was removed. */
+export async function clearStaleLock(lockPath: string, alive: (pid: number) => boolean = pidAlive) {
+  let pid: number;
+  try { pid = Number((await readFile(lockPath,'utf8')).trim()); } catch { return false; }
+  if (Number.isInteger(pid) && pid > 0 && alive(pid)) return false;
+  await unlink(lockPath);
+  return true;
+}
+function pidAlive(pid: number) {
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
 async function main() {
   const args=process.argv.slice(2);
   if(args.length!==1 || !['--once','--loop'].includes(args[0])) throw new Error('Usage: npx tsx scripts/local-inference-worker.ts --once|--loop');
@@ -109,7 +120,12 @@ async function main() {
   const rpc=createRpc(process.env);
   const lockPath=join(tmpdir(),'fhcontent-local-inference-worker.lock');
   let lock;
-  try {lock=await open(lockPath,'wx');} catch {throw new Error('Worker lock exists; verify no worker is running before removing stale lock');}
+  try {lock=await open(lockPath,'wx');} catch {
+    // A reboot or a killed process never reaches the finally below, and the lock it leaves
+    // stopped the worker for a week (2026-10-04 to 10-12). Clear it only if its pid is gone.
+    if (!(await clearStaleLock(lockPath))) throw new Error('Worker lock exists and its process is still running');
+    lock=await open(lockPath,'wx');
+  }
   let stop=false;const onStop=()=>{stop=true;};process.on('SIGINT',onStop);process.on('SIGTERM',onStop);
   const workerId=`local-${randomUUID()}`;
   try {
@@ -130,7 +146,7 @@ async function main() {
   } finally {await lock.close();await unlink(lockPath);process.off('SIGINT',onStop);process.off('SIGTERM',onStop);}
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
-  main().catch(error=>{console.error(error instanceof FatalAuth?error.message:`Local inference worker stopped (${error instanceof Error ? error.name : 'unknown error'}); inspect configuration, service health, or lease status. No automatic cloud fallback.`);process.exitCode=1;});
+  main().catch(error=>{console.error(error instanceof FatalAuth?error.message:`Local inference worker stopped (${error instanceof Error ? `${error.name}: ${error.message}` : 'unknown error'}); inspect configuration, service health, or lease status. No automatic cloud fallback.`);process.exitCode=1;});
 }
 
 

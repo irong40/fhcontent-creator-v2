@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSourced, takeCandidates, claimCandidate, settleCandidate, sourceDiscipline, CANDIDATE_READ_LIMIT } from './sourced-topics';
+import { isSourced, takeCandidates, claimCandidate, settleCandidate, releaseCandidateOfTopic, sourceDiscipline, CANDIDATE_READ_LIMIT } from './sourced-topics';
 import { buildContentPrompt } from './prompts';
 
 type Call = { table: string; op: string; args: unknown[] };
@@ -224,5 +224,24 @@ describe('the script prompt for a sourced topic', () => {
     it('gives no rule when no point carries a passage', () => {
         expect(sourceDiscipline([{}, { quote: '' }, { quote: null }])).toBe('');
         expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('SOURCE DISCIPLINE');
+    });
+});
+
+describe('releaseCandidateOfTopic', () => {
+    it('gives the candidate of a failed topic back to ready, and touches no other row', async () => {
+        const rows = [
+            { id: 'cand-1', status: 'used', topic_id: 'topic-1', used_at: '2026-10-11T02:00:00Z' },
+            { id: 'cand-2', status: 'used', topic_id: 'topic-2', used_at: '2026-10-11T02:00:00Z' },
+            { id: 'cand-3', status: 'discarded', topic_id: 'topic-1', used_at: null },
+        ];
+        expect(await releaseCandidateOfTopic(candidateTable(rows), 'topic-1')).toBe(1);
+        expect(rows[0]).toMatchObject({ status: 'ready', topic_id: null, used_at: null });
+        expect(rows[1]).toMatchObject({ status: 'used', topic_id: 'topic-2' });
+        expect(rows[2]).toMatchObject({ status: 'discarded' });
+    });
+
+    it('releases nothing for a topic that came from no candidate, or on a read error', async () => {
+        expect(await releaseCandidateOfTopic(candidateTable([]), 'topic-9')).toBe(0);
+        expect(await releaseCandidateOfTopic(candidateTable([{ id: 'c', status: 'used', topic_id: 'topic-9' }], 'boom'), 'topic-9')).toBe(0);
     });
 });

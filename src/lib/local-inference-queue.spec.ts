@@ -60,10 +60,10 @@ describe('local inference durable queue', () => {
     });
     it('reserves requested output and framing within the model context', async () => {
         database('succeeded');
-        await expect(getOrEnqueueLocalInference({ ...request, system: 'x', user: 'x'.repeat(7679), maxTokens: 8192 })).resolves.toHaveProperty('text');
+        await expect(getOrEnqueueLocalInference({ ...request, system: 'x', user: 'x'.repeat(15359), maxTokens: 8192 })).resolves.toHaveProperty('text');
         admin.mockClear();
-        await expect(getOrEnqueueLocalInference({ ...request, system: 'x', user: 'x'.repeat(7680), maxTokens: 8192 })).rejects.toThrow('16384-token');
-        await expect(getOrEnqueueLocalInference({ ...request, system: 'x', user: 'x'.repeat(8999), maxTokens: 8192 })).rejects.toThrow('16384-token');
+        await expect(getOrEnqueueLocalInference({ ...request, system: 'x', user: 'x'.repeat(15360), maxTokens: 8192 })).rejects.toThrow('16384-token');
+        await expect(getOrEnqueueLocalInference({ ...request, system: 'x', user: 'x'.repeat(20000), maxTokens: 8192 })).rejects.toThrow('16384-token');
         expect(admin).not.toHaveBeenCalled();
     });
 });

@@ -5,7 +5,7 @@ import { topicResponseSchema } from '@/lib/schemas';
 import { buildTopicPrompt, WINNERS_WINDOW_DAYS, type TopicWinner } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
 import { verifyTopicAgainstNotebookLM, hasGuardrail } from '@/lib/guardrail';
-import { isSourced, takeCandidates, claimCandidate, settleCandidate, NO_CANDIDATES } from '@/lib/sourced-topics';
+import { isSourced, takeCandidates, claimCandidate, settleCandidate, releaseCandidateOfTopic, NO_CANDIDATES } from '@/lib/sourced-topics';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
@@ -93,18 +93,27 @@ export async function GET(request: Request) {
             const sixDaysAgo = new Date(nowMs - 6 * 24 * 60 * 60 * 1000).toISOString();
             const oneDayAgo = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
 
+            // Only drafts whose day has already passed are stale. A draft dated
+            // today or later is this week's queue still waiting on the writer
+            // (2026-10-12: the local worker was down a week and this sweep
+            // failed every sourced draft before it got its text).
+            const todayDate = new Date(nowMs).toISOString().split('T')[0];
             const { data: staleDrafts } = await supabase
                 .from('topics')
                 .select('id, title, status')
                 .eq('persona_id', persona.id)
                 .in('status', ['draft', 'content_generating'])
-                .lt('created_at', oneDayAgo);
+                .lt('created_at', oneDayAgo)
+                .or(`publish_date.is.null,publish_date.lt.${todayDate}`);
             if (staleDrafts && staleDrafts.length > 0) {
                 for (const stale of staleDrafts) {
                     await supabase.from('topics').update({
                         status: 'failed',
                         error_message: `Auto-failed by daily-topic: stuck in ${stale.status} >24h`,
                     }).eq('id', stale.id);
+                    // A sourced topic that never got its text gives its candidate
+                    // back, so the sourced work is used next week instead of lost.
+                    await releaseCandidateOfTopic(supabase, stale.id);
                 }
             }
 

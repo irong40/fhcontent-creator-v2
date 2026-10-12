@@ -155,6 +155,25 @@ export async function settleCandidate(
 }
 
 /**
+ * A topic made from a candidate failed before it got its text: give the candidate back so the
+ * next weekly run uses it again. Touches only a used candidate linked to that topic. Returns
+ * how many candidates went back to ready.
+ */
+export async function releaseCandidateOfTopic(supabase: Db, topicId: string): Promise<number> {
+    const { data, error } = await supabase
+        .from('topic_candidates')
+        .update({ status: 'ready', used_at: null, topic_id: null })
+        .eq('topic_id', topicId)
+        .eq('status', 'used')
+        .select('id');
+    if (error) {
+        console.error(`Topic candidate for topic ${topicId} could not be released:`, error.message);
+        return 0;
+    }
+    return Array.isArray(data) ? data.length : 0;
+}
+
+/**
  * The rule a script writer gets when its points came from the loop. Returns '' for a topic
  * with no source passages, so an unsourced persona's prompt is unchanged.
  */

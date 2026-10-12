@@ -243,12 +243,18 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 if (insertError) throw new Error(insertError.message);
                 const piecesInserted = rows.length;
 
+                // Every provider lands in review. Since the source gate (2026-10-04)
+                // the database refuses 'scheduled' without a passing source check,
+                // so the old Claude path to 'scheduled' only ever failed after the
+                // paid call. The source check and the text review come first.
                 const { error: statusError } = await supabase.from('topics').update({
-                    status: provider === 'ollama' ? 'content_ready' : 'scheduled',
-                    requires_review: provider === 'ollama',
-                    review_reason: provider === 'ollama' ? 'Local model draft requires human factual review' : null,
+                    status: 'content_ready',
+                    requires_review: true,
+                    review_reason: provider === 'ollama'
+                        ? 'Local model draft requires human factual review'
+                        : 'Model draft requires source check and human review',
                     content_ready_at: new Date().toISOString(),
-                    coo_auto_approved_at: provider === 'ollama' ? null : new Date().toISOString(),
+                    coo_auto_approved_at: null,
                 }).eq('id', topic.id);
                 if (statusError) throw new Error(statusError.message);
                 topicResult.piecesInserted = piecesInserted;

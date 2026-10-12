@@ -39,6 +39,14 @@ describe('local content consumption', () => {
         expect(state.inserts[0]).toHaveLength(6);
         expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready', requires_review: true, coo_auto_approved_at: null });
     });
+    it('holds cloud output for review too; never writes scheduled past the source gate', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+        const pieces = ['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel'].map(pieceType => ({ pieceType, script: 'source draft', captionLong: 'caption', captionShort: 'caption' }));
+        state.generate.mockResolvedValue({ text: JSON.stringify({ pieces }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready', requires_review: true, coo_auto_approved_at: null });
+        expect(state.updates.some(u => u.status === 'scheduled')).toBe(false);
+    });
     it('recovers existing pieces to review without generating or autoapproving', async () => {
         state.existing = 6;
         await GET(new Request('https://fixture/api/cron/content-generator'));

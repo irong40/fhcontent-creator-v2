@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {createRpc,runOnce,inferJob,readBoundedJson,QueueUnavailable} from '../../scripts/local-inference-worker';
+import {createRpc,runOnce,inferJob,readBoundedJson,QueueUnavailable,clearStaleLock} from '../../scripts/local-inference-worker';
 const job={id:'11111111-1111-4111-8111-111111111111',lease_token:'22222222-2222-4222-8222-222222222222',lease_expires_at:new Date(Date.now()+300000).toISOString(),model:'qwen3:8b' as const,status:'running' as const,system_prompt:'Transform supplied text.',user_prompt:'Synthetic source.',max_tokens:100,response_schema:{type:'object',properties:{title:{type:'string'}},required:['title'],additionalProperties:false}};
 const output={model:'qwen3:8b',done:true,done_reason:'stop',message:{role:'assistant',content:'{"title":"Draft"}'},prompt_eval_count:12,eval_count:8};
 const response=(data:unknown,status=200)=>Promise.resolve(new Response(JSON.stringify(data),{status}));
@@ -71,7 +71,7 @@ describe('worker resource bounds',()=>{
 describe('conservative context budget',()=>{
  it('rejects prompt plus requested output above context before inference',async()=>{
   const request=vi.fn();
-  await expect(inferJob({...job,system_prompt:'a'.repeat(7681),user_prompt:'b',max_tokens:8192},request)).rejects.toThrow('CONTEXT_BUDGET_EXCEEDED');
+  await expect(inferJob({...job,system_prompt:'a'.repeat(15360),user_prompt:'b',max_tokens:8192},request)).rejects.toThrow('CONTEXT_BUDGET_EXCEEDED');
   expect(request).not.toHaveBeenCalled();
  });
  it('accepts exact context budget without trimming source or output',async()=>{
@@ -80,5 +80,17 @@ describe('conservative context budget',()=>{
   await inferJob({...job,system_prompt:source,user_prompt:'b',max_tokens:8192},request);
   const body=JSON.parse(request.mock.calls[0][1].body);
   expect(body.messages[0].content).toBe(source);expect(body.options.num_predict).toBe(8192);
+ });
+});
+describe('stale worker lock',()=>{
+ it('clears a lock whose process is gone and keeps one whose process runs',async()=>{
+  const {mkdtemp,writeFile,access}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const dir=await mkdtemp(join(tmpdir(),'lock-'));const lock=join(dir,'w.lock');
+  await writeFile(lock,'4242');
+  expect(await clearStaleLock(lock,()=>true)).toBe(false);
+  await expect(access(lock)).resolves.toBeUndefined();
+  expect(await clearStaleLock(lock,()=>false)).toBe(true);
+  await expect(access(lock)).rejects.toThrow();
+  expect(await clearStaleLock(lock,()=>false)).toBe(false); // nothing to clear
  });
 });
