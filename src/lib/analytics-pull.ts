@@ -208,6 +208,7 @@ export interface AnalyticsIndexEntry {
     platform: string;
     id: string;       // Blotato numeric published-post id
     url: string;      // raw post URL (carries the @handle for some platforms)
+    postedAt: string | null; // Blotato postedAt: when the post went live
 }
 
 /** Step 2: pull posts-with-metrics from GET /v2/analytics, unioned across sort
@@ -233,7 +234,7 @@ export async function buildAnalyticsIndex(sinceIso: string): Promise<Map<string,
             seenPostIds.add(item.id);
             const key = normalizeUrl(item.postUrl);
             const metrics = item.latestMetrics?.metrics;
-            if (key && metrics) index.set(key, { metrics, platform: item.platform, id: item.id, url: item.postUrl ?? '' });
+            if (key && metrics) index.set(key, { metrics, platform: item.platform, id: item.id, url: item.postUrl ?? '', postedAt: item.postedAt ?? null });
         }
         await sleep(150);
     }
@@ -275,6 +276,11 @@ function hasSignal(m: ReturnType<typeof mapMetrics>): boolean {
     return m.views + m.likes + m.comments + m.shares + m.saves > 0;
 }
 
+/** Zero is a measurement, not a gap: a small account's post with no views yet is
+ *  a real data point, and dropping it left the series with holes that read as
+ *  "never collected". Every matched post is stored; hasSignal only feeds the
+ *  matchedNoSignal count so an all-zero run stays visible. */
+
 /** Step 3: match each published platform entry to its metrics and insert a
  *  point-in-time snapshot (tagged with the Blotato post id). Returns the set of
  *  matched URLs so unmatched analytics items can be captured separately. */
@@ -301,12 +307,13 @@ export async function snapshotMatchedMetrics(
             }
             out.matchedUrls.add(key);
             const mapped = mapMetrics(hit.metrics);
-            if (!hasSignal(mapped)) { out.matchedNoSignal++; continue; }
+            if (!hasSignal(mapped)) out.matchedNoSignal++;
 
             const { error: insertError } = await supabase.from('performance_metrics').insert({
                 content_piece_id: piece.id,
                 platform,
                 blotato_post_id: hit.id,
+                published_at: hit.postedAt,
                 ...mapped,
             });
             if (insertError) {
@@ -322,8 +329,10 @@ export async function snapshotMatchedMetrics(
 }
 
 /** Step 4: snapshot analytics items that matched no content_piece — the
- *  separate-pipeline accounts (e.g. Sentinel's Part 107 TikTok). Attributed by
- *  the @handle in the URL; handle-less platforms (YouTube/IG/FB) are skipped. */
+ *  separate-pipeline accounts (e.g. Sentinel's Part 107 TikTok, NorthEast Corner
+ *  Instagram/Facebook). Attributed by the @handle in the URL when it has one;
+ *  Instagram/Facebook URLs carry none, so they are stored with a null handle and
+ *  identified by blotato_post_id. YouTube stays with the yt-dlp collector. */
 export async function snapshotUnmatchedAccounts(
     supabase: AdminClient,
     index: Map<string, AnalyticsIndexEntry>,
@@ -334,16 +343,16 @@ export async function snapshotUnmatchedAccounts(
 
     for (const [key, hit] of index) {
         if (matchedUrls.has(key)) continue;
+        if (BLOTATO_EXCLUDED_PLATFORMS.has(hit.platform)) continue;
         const handle = handleFromUrl(hit.url);
-        if (!handle) continue;
         const mapped = mapMetrics(hit.metrics);
-        if (!hasSignal(mapped)) continue;
 
         const { error } = await supabase.from('performance_metrics').insert({
             content_piece_id: null,
             platform: hit.platform,
             handle,
             blotato_post_id: hit.id,
+            published_at: hit.postedAt,
             ...mapped,
         });
         if (error) insertErrors++;
@@ -421,7 +430,7 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
     // scanned pieces but stored nothing, something upstream is broken.
     // YouTube-only windows are NOT a fault — that platform is deliberately left
     // to the yt-dlp collector, so gate on non-YouTube entries actually seen.
-    const nonYoutubeConsidered = snap.snapshots + snap.matchedNoSignal + snap.unmatched;
+    const nonYoutubeConsidered = snap.snapshots + snap.unmatched;
     if (
         result.pieces_scanned > 0 &&
         result.snapshots === 0 &&
