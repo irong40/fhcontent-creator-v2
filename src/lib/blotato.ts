@@ -211,6 +211,9 @@ export interface BlotatoAnalyticsListItem {
     postUrl: string | null;
     platform: Platform | 'other';
     createdAt: string;
+    /** When the post went live on the platform (distinct from createdAt, the
+     *  Blotato record). Not present on every item. */
+    postedAt?: string | null;
     mediaUrls: string[];
     latestMetrics: { fetchedAt: string; metrics: BlotatoMetrics } | null;
     metricsHistory?: Array<{ fetchedAt: string; metrics: BlotatoMetrics }>;

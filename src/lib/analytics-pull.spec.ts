@@ -121,7 +121,7 @@ describe('buildAnalyticsIndex', () => {
 
         expect(index.size).toBe(1);
         expect(index.get('tiktok.com/@x/video/1')).toEqual({
-            metrics: { viewsCount: '5' }, platform: 'tiktok', id: 'a', url: 'https://www.tiktok.com/@x/video/1',
+            metrics: { viewsCount: '5' }, platform: 'tiktok', id: 'a', url: 'https://www.tiktok.com/@x/video/1', postedAt: null,
         });
     });
 
@@ -190,14 +190,14 @@ describe('snapshotMatchedMetrics', () => {
         return { supabase: supabase as never, inserts };
     }
 
-    function idx(entries: Array<[string, Record<string, string>, string, string]>) {
-        // [url, metrics, platform, blotatoId]
-        return new Map(entries.map(([url, metrics, platform, id]) => [
-            normalizeUrl(url), { metrics, platform, id, url },
+    function idx(entries: Array<[string, Record<string, string>, string, string, string?]>) {
+        // [url, metrics, platform, blotatoId, postedAt?]
+        return new Map(entries.map(([url, metrics, platform, id, postedAt]) => [
+            normalizeUrl(url), { metrics, platform, id, url, postedAt: postedAt ?? null },
         ])) as never;
     }
 
-    it('inserts a snapshot (with blotato id) for matched posts, buckets no-signal/unmatched, tracks matched urls', async () => {
+    it('inserts a snapshot (with blotato id) for matched posts, counts zero rows, buckets unmatched, tracks matched urls', async () => {
         const pieces = [{
             id: 'p1',
             published_platforms: {
@@ -214,14 +214,44 @@ describe('snapshotMatchedMetrics', () => {
 
         const res = await snapshotMatchedMetrics(supabase, pieces, index);
 
-        expect(res.snapshots).toBe(1);
+        expect(res.snapshots).toBe(2);
         expect(res.matchedNoSignal).toBe(1);
         expect(res.unmatched).toBe(1);
         expect(res.sampleUnmatchedUrl).toBe('https://instagram.com/reel/zzz');
         expect(res.matchedUrls.has('tiktok.com/@x/video/1')).toBe(true);
         expect(inserts).toEqual([
-            { content_piece_id: 'p1', platform: 'tiktok', blotato_post_id: '901', views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'tiktok', blotato_post_id: '901', published_at: null, views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'twitter', blotato_post_id: '902', published_at: null, views: 0, likes: 0, comments: 0, shares: 0, saves: 0 },
         ]);
+    });
+
+    it('writes published_at from Blotato postedAt', async () => {
+        const pieces = [{
+            id: 'p1',
+            published_platforms: { tiktok: { status: 'published', post_url: 'https://www.tiktok.com/@x/video/1' } },
+        }] as never[];
+        const index = idx([['https://www.tiktok.com/@x/video/1', { viewsCount: '100' }, 'tiktok', '901', '2026-09-30T14:05:00.000Z']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index);
+
+        expect(inserts[0]).toMatchObject({ published_at: '2026-09-30T14:05:00.000Z' });
+    });
+
+    it('keeps a matched post whose every metric is zero', async () => {
+        const pieces = [{
+            id: 'p1',
+            published_platforms: { instagram: { status: 'published', post_url: 'https://instagram.com/reel/abc' } },
+        }] as never[];
+        const index = idx([['https://instagram.com/reel/abc', { viewsCount: '0', likesCount: '0' }, 'instagram', '903']]);
+        const { supabase, inserts } = fakeClient();
+
+        const res = await snapshotMatchedMetrics(supabase, pieces, index);
+
+        expect(res.snapshots).toBe(1);
+        expect(res.matchedNoSignal).toBe(1);
+        expect(inserts).toHaveLength(1);
+        expect(inserts[0]).toMatchObject({ platform: 'instagram', blotato_post_id: '903', views: 0 });
     });
 
     // Regression (2026-07-26): YouTube belongs to the yt-dlp collector. While
@@ -269,32 +299,37 @@ describe('snapshotMatchedMetrics', () => {
 });
 
 describe('snapshotUnmatchedAccounts', () => {
-    it('captures handle-bearing unmatched posts (Sentinel), skips matched, handle-less and no-signal', async () => {
+    it('captures unmatched posts with or without a handle, keeps zero rows, skips matched and YouTube', async () => {
         const inserts: Array<Record<string, unknown>> = [];
         const supabase = {
             from: () => ({ insert: (row: Record<string, unknown>) => { inserts.push(row); return Promise.resolve({ error: null }); } }),
         } as never;
-        const index = new Map<string, { metrics: Record<string, string>; platform: string; id: string; url: string }>([
-            // Sentinel TikTok, unmatched, has signal → captured
-            [normalizeUrl('https://www.tiktok.com/@sentinelaerialinspector/video/9'),
-             { metrics: { viewsCount: '1049', likesCount: '3' }, platform: 'tiktok', id: '5410406', url: 'https://www.tiktok.com/@sentinelaerialinspector/video/9' }],
+        const entry = (url: string, metrics: Record<string, string>, platform: string, id: string, postedAt: string | null = null) =>
+            [normalizeUrl(url), { metrics, platform, id, url, postedAt }] as const;
+        const index = new Map([
+            // Sentinel TikTok, unmatched, has signal → captured with its handle and date
+            entry('https://www.tiktok.com/@sentinelaerialinspector/video/9', { viewsCount: '1049', likesCount: '3' }, 'tiktok', '5410406', '2026-10-01T12:00:00.000Z'),
             // already matched to a content_piece → skipped
-            [normalizeUrl('https://www.tiktok.com/@x/video/1'),
-             { metrics: { viewsCount: '100' }, platform: 'tiktok', id: '901', url: 'https://www.tiktok.com/@x/video/1' }],
-            // youtube, no handle in url → skipped
-            [normalizeUrl('https://www.youtube.com/watch?v=abc'),
-             { metrics: { viewsCount: '832' }, platform: 'youtube', id: '5277545', url: 'https://www.youtube.com/watch?v=abc' }],
-            // handle but zero signal → skipped
-            [normalizeUrl('https://www.tiktok.com/@x/video/5'),
-             { metrics: { viewsCount: '0' }, platform: 'tiktok', id: '905', url: 'https://www.tiktok.com/@x/video/5' }],
+            entry('https://www.tiktok.com/@x/video/1', { viewsCount: '100' }, 'tiktok', '901'),
+            // youtube belongs to the yt-dlp collector → skipped
+            entry('https://www.youtube.com/watch?v=abc', { viewsCount: '832' }, 'youtube', '5277545'),
+            // handle but zero signal → kept
+            entry('https://www.tiktok.com/@x/video/5', { viewsCount: '0' }, 'tiktok', '905'),
+            // instagram / facebook carry no handle in the url → kept with a null handle
+            entry('https://www.instagram.com/reel/IGabc/', { playsCount: '40' }, 'instagram', '906'),
+            entry('https://www.facebook.com/reel/999', { viewsCount: '0' }, 'facebook', '907'),
         ]) as never;
         const matched = new Set(['tiktok.com/@x/video/1']);
 
         const res = await snapshotUnmatchedAccounts(supabase, index, matched);
 
-        expect(res).toEqual({ capturedAccounts: 1, insertErrors: 0 });
+        expect(res).toEqual({ capturedAccounts: 4, insertErrors: 0 });
+        const zero = { comments: 0, shares: 0, saves: 0 };
         expect(inserts).toEqual([
-            { content_piece_id: null, platform: 'tiktok', handle: '@sentinelaerialinspector', blotato_post_id: '5410406', views: 1049, likes: 3, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: null, platform: 'tiktok', handle: '@sentinelaerialinspector', blotato_post_id: '5410406', published_at: '2026-10-01T12:00:00.000Z', views: 1049, likes: 3, ...zero },
+            { content_piece_id: null, platform: 'tiktok', handle: '@x', blotato_post_id: '905', published_at: null, views: 0, likes: 0, ...zero },
+            { content_piece_id: null, platform: 'instagram', handle: null, blotato_post_id: '906', published_at: null, views: 40, likes: 0, ...zero },
+            { content_piece_id: null, platform: 'facebook', handle: null, blotato_post_id: '907', published_at: null, views: 0, likes: 0, ...zero },
         ]);
     });
 });
