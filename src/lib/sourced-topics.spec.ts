@@ -224,6 +224,7 @@ describe('the script prompt for a sourced topic', () => {
     it('gives no rule when no point carries a passage', () => {
         expect(sourceDiscipline([{}, { quote: '' }, { quote: null }])).toBe('');
         expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('SOURCE DISCIPLINE');
+        expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('Quotation marks are for exact source text only');
     });
 });
 
