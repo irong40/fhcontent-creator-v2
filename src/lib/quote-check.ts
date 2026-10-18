@@ -93,3 +93,17 @@ export function closestSourceSentence(span: string, sources: string[]): string |
     }
     return best && best.score >= words.size / 2 ? best.sentence : null;
 }
+
+/** `text` with the quotation marks removed from each unsourced span, so the words stay as
+ *  description and stop claiming to be the speaker's. Used only after a retry has already
+ *  been told to copy the source exactly and did not. */
+export function unquoteUnsourced(text: string, sources: string[]): string {
+    let out = text;
+    for (const span of unsourcedQuotes(text, sources)) {
+        const at = out.indexOf(span);
+        if (at > 0 && at + span.length < out.length) {
+            out = out.slice(0, at - 1) + span + out.slice(at + span.length + 1);
+        }
+    }
+    return out;
+}

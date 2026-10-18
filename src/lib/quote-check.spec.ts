@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { quotedSpans, unsourcedQuotes, sourcedQuoteFaults, rejectedSpans, closestSourceSentence } from './quote-check';
+import { quotedSpans, unsourcedQuotes, sourcedQuoteFaults, rejectedSpans, closestSourceSentence, unquoteUnsourced } from './quote-check';
 
 // The real 2026-10-12 Hamer text (topic 5767ceaf), which failed its source check.
 const passage = 'And you can always hear this long sob story: "You know it takes time." For three hundred years, we\'ve given them time. And I\'ve been tired so long, now I am sick and tired of being sick and tired, and we want a change.';
@@ -51,5 +51,14 @@ describe('retry help', () => {
     });
     it('returns null when nothing in the sources resembles the span', () => {
         expect(closestSourceSentence('totally different words here', [passage])).toBeNull();
+    });
+});
+
+describe('unquoteUnsourced', () => {
+    it('drops the marks around a title quoted as speech and keeps sourced quotes', () => {
+        const t = `Hamer: "I’m sick and tired of being sick and tired." She said "now I am sick and tired of being sick and tired".`;
+        const out = unquoteUnsourced(t, [passage]);
+        expect(out).toBe(`Hamer: I’m sick and tired of being sick and tired. She said "now I am sick and tired of being sick and tired".`);
+        expect(unsourcedQuotes(out, [passage])).toEqual([]);
     });
 });

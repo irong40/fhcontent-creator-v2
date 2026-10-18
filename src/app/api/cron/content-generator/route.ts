@@ -5,7 +5,7 @@ import { LocalInferencePendingError } from '@/lib/local-inference-queue';
 import { z } from 'zod';
 import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
-import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSourceSentence } from '@/lib/quote-check';
+import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSourceSentence, unquoteUnsourced } from '@/lib/quote-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
@@ -232,6 +232,16 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     throw new Error(
                         `Invalid content shape: ${contentResult.error.issues.map(i => i.message).join('; ')}`,
                     );
+                }
+
+                // The retry was shown the exact sentence and still quoted something else: keep the
+                // words, drop the quotation marks, and let the check judge what remains.
+                if (priorQuoteFault) {
+                    for (const piece of contentResult.data.pieces as Array<Record<string, unknown>>) {
+                        for (const field of ['captionLong', 'captionShort', 'title']) {
+                            if (typeof piece[field] === 'string') piece[field] = unquoteUnsourced(piece[field] as string, retrySources);
+                        }
+                    }
                 }
 
                 const quoteFaults = sourcedQuoteFaults(topic.historical_points as HistoricalPoint[], contentResult.data.pieces as Array<Record<string, unknown>>);
