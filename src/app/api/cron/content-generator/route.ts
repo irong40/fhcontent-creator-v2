@@ -5,7 +5,7 @@ import { LocalInferencePendingError } from '@/lib/local-inference-queue';
 import { z } from 'zod';
 import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
-import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR } from '@/lib/quote-check';
+import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSourceSentence } from '@/lib/quote-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
@@ -135,10 +135,19 @@ export async function GET(request: Request) {
                 const priorQuoteFault = topic.error_message?.includes(UNSOURCED_QUOTE_ERROR)
                     ? topic.error_message.slice(topic.error_message.indexOf(UNSOURCED_QUOTE_ERROR))
                     : null;
+                // Name the nearest exact source sentence for each rejected span so the retry
+                // has words to copy, not only a rule.
+                const retrySources = (topic.historical_points as HistoricalPoint[] | null ?? [])
+                    .flatMap(p => [p.claim, p.quote ?? '']).filter(t => typeof t === 'string' && t.length > 0);
+                const copyThese = priorQuoteFault
+                    ? [...new Set(rejectedSpans(priorQuoteFault).map(s => closestSourceSentence(s, retrySources)).filter((s): s is string => !!s))]
+                    : [];
                 const user = priorQuoteFault
                     ? `${basePrompt}
 
-A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.`
+A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.${copyThese.length ? `
+If you quote the speaker, copy this sentence exactly, character for character, or leave the quotation marks out and describe it in your own words:
+${copyThese.map(s => `"${s}"`).join('\n')}` : ''}`
                     : basePrompt;
                 // quote_video personas return 1 piece; standard personas return 6.
                 const isQuote = persona.content_format === 'quote_video';

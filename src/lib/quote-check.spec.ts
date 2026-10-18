@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { quotedSpans, unsourcedQuotes, sourcedQuoteFaults } from './quote-check';
+import { quotedSpans, unsourcedQuotes, sourcedQuoteFaults, rejectedSpans, closestSourceSentence } from './quote-check';
 
 // The real 2026-10-12 Hamer text (topic 5767ceaf), which failed its source check.
 const passage = 'And you can always hear this long sob story: "You know it takes time." For three hundred years, we\'ve given them time. And I\'ve been tired so long, now I am sick and tired of being sick and tired, and we want a change.';
@@ -35,5 +35,21 @@ describe('sourcedQuoteFaults', () => {
     });
     it('does not check a topic with no source passages', () => {
         expect(sourcedQuoteFaults([{ claim: 'x', quote: null }], [{ pieceType: 'long', captionShort: failedCaption }])).toEqual([]);
+    });
+});
+
+describe('retry help', () => {
+    const fault = 'quote_video captionShort quotes "I’m sick and tired of being sick and tired.", which no source passage holds';
+    it('reads the rejected span back out of the fault message', () => {
+        expect(rejectedSpans(`Unsourced quotation: ${fault}`)).toEqual(['I’m sick and tired of being sick and tired.']);
+        expect(rejectedSpans(null)).toEqual([]);
+    });
+    it('finds the exact source sentence nearest the rejected span', () => {
+        const s = closestSourceSentence('I’m sick and tired of being sick and tired.', [passage]);
+        expect(s).toBe('And I\'ve been tired so long, now I am sick and tired of being sick and tired, and we want a change.');
+        expect(unsourcedQuotes(`"${s}"`, [passage])).toEqual([]);
+    });
+    it('returns null when nothing in the sources resembles the span', () => {
+        expect(closestSourceSentence('totally different words here', [passage])).toBeNull();
     });
 });

@@ -68,3 +68,28 @@ export function sourcedQuoteFaults(points: Array<{ claim?: string | null; quote?
     }
     return faults;
 }
+
+/** The rejected span named in a fault message ('... quotes "<span>", which no source ...'). */
+export function rejectedSpans(errorMessage: string | null | undefined): string[] {
+    if (!errorMessage) return [];
+    return [...errorMessage.matchAll(/quotes "(.+?)", which no source/g)].map(m => m[1]);
+}
+
+/** The source sentence that shares the most words with `span`, copied exactly, or null when
+ *  none shares at least half of them. A retry prompt that names this sentence gives the model
+ *  words to copy; "copy exactly" alone did not stop a 8b model repeating a speech title. */
+export function closestSourceSentence(span: string, sources: string[]): string | null {
+    const words = new Set(normalize(span).split(' ').filter(Boolean));
+    if (words.size === 0) return null;
+    let best: { sentence: string; score: number } | null = null;
+    for (const source of sources) {
+        for (const raw of source.split(/(?<=[.!?])\s+|\n+/)) {
+            const sentence = raw.trim();
+            if (!sentence) continue;
+            const have = new Set(normalize(sentence).split(' '));
+            const score = [...words].filter(w => have.has(w)).length;
+            if (!best || score > best.score) best = { sentence, score };
+        }
+    }
+    return best && best.score >= words.size / 2 ? best.sentence : null;
+}
