@@ -47,6 +47,42 @@ describe('local content consumption', () => {
         expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready', requires_review: true, coo_auto_approved_at: null });
         expect(state.updates.some(u => u.status === 'scheduled')).toBe(false);
     });
+    const sourcedPieces = () => ['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel'].map(pieceType => ({ pieceType, script: 'source draft', captionLong: 'caption', captionShort: 'James was a double agent for the British' }));
+    const lafayettePoint = { claim: 'James pretended to spy for the British but repeated to Lafayette what he overheard.', quote: 'James pretended to spy for the British but repeated to Lafayette what he overheard.', source: 'DVB', year: '1781' };
+
+    it('rejects a sourced draft whose claim the judge finds unsupported, and says why', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint] };
+        state.generate
+            .mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' })
+            .mockResolvedValueOnce({ text: JSON.stringify({ unsupported: [{ claim: 'double agent for the British', reason: 'he only pretended' }] }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.inserts).toHaveLength(0);
+        const fault = state.updates.at(-1) as { status: string; error_message: string };
+        expect(fault.status).toBe('draft');
+        expect(fault.error_message).toContain('Unsupported claim');
+    });
+
+    it('rejects a sourced draft when the claim check gives no verdict', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint] };
+        state.generate
+            .mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' })
+            .mockResolvedValueOnce({ text: 'Looks fine', inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.inserts).toHaveLength(0);
+    });
+
+    it('inserts a sourced draft the judge finds clean', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint] };
+        state.generate
+            .mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' })
+            .mockResolvedValueOnce({ text: '{"unsupported":[]}', inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.inserts).toHaveLength(1);
+    });
+
     it('rejects a sourced draft that quotes words no source holds, and says why on the retry', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
         const passage = 'now I am sick and tired of being sick and tired, and we want a change.';
