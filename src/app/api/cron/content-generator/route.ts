@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
 import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR } from '@/lib/quote-check';
-import { CLAIM_JUDGE_TOOL_SCHEMA, UNSUPPORTED_CLAIM_ERROR, claimJudgePrompt, hasSourcePassages, parseClaimVerdict, unsupportedSpecifics } from '@/lib/claim-check';
+import { UNSUPPORTED_CLAIM_ERROR, callJudge, hasSourcePassages, judgeClaims, unsupportedSpecifics } from '@/lib/claim-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
@@ -238,12 +238,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
                     const specifics = unsupportedSpecifics(claimPoints, generated);
                     if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
-                    const judge = claimJudgePrompt(claimPoints, generated);
-                    const verdict = await generateQueuedContent({
-                        requestKey: `claims:${topic.id}:${topic.retry_count ?? 0}`,
-                        system: judge.system, user: judge.user, maxTokens: 2048, schema: CLAIM_JUDGE_TOOL_SCHEMA,
-                    });
-                    const claimFaults = parseClaimVerdict(verdict.text);
+                    const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user));
                     if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
                 }
 

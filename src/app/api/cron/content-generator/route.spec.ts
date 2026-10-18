@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ generate: vi.fn(), updates: [] as Record<string, unknown>[], inserts: [] as unknown[], existing: 0, topic: {} as Record<string, unknown> }));
+const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), updates: [] as Record<string, unknown>[], inserts: [] as unknown[], existing: 0, topic: {} as Record<string, unknown> }));
 vi.mock('@/lib/content-inference', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/content-inference')>(), generateQueuedContent: state.generate }));
+vi.mock('@/lib/claim-check', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/claim-check')>(), callJudge: state.judge }));
 vi.mock('@/lib/local-inference-queue', () => ({ LocalInferencePendingError: class extends Error {} }));
 vi.mock('@/lib/prompts', () => ({ buildContentPrompt: () => ({ system: 'system', user: 'source' }) }));
 vi.mock('@/lib/notifications', () => ({ notifyError: vi.fn() }));
@@ -50,36 +51,41 @@ describe('local content consumption', () => {
     const sourcedPieces = () => ['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel'].map(pieceType => ({ pieceType, script: 'source draft', captionLong: 'caption', captionShort: 'James was a double agent for the British' }));
     const lafayettePoint = { claim: 'James pretended to spy for the British but repeated to Lafayette what he overheard.', quote: 'James pretended to spy for the British but repeated to Lafayette what he overheard.', source: 'DVB', year: '1781' };
 
-    it('rejects a sourced draft whose claim the judge finds unsupported, and says why', async () => {
+    const gen = () => state.generate.mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+
+    it('rejects a sourced draft when the judge finds one piece unsupported, and says why', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
         state.topic = { historical_points: [lafayettePoint] };
-        state.generate
-            .mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' })
-            .mockResolvedValueOnce({ text: JSON.stringify({ unsupported: [{ claim: 'double agent for the British', reason: 'he only pretended' }] }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        gen();
+        state.judge
+            .mockResolvedValueOnce('{"unsupported":[]}')
+            .mockResolvedValueOnce('{"unsupported":[{"claim":"double agent for the British","reason":"he only pretended"}]}')
+            .mockResolvedValue('{"unsupported":[]}');
         await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.judge).toHaveBeenCalledTimes(6); // one call per piece
         expect(state.inserts).toHaveLength(0);
         const fault = state.updates.at(-1) as { status: string; error_message: string };
         expect(fault.status).toBe('draft');
         expect(fault.error_message).toContain('Unsupported claim');
+        expect(fault.error_message).toContain('short_1');
     });
 
     it('rejects a sourced draft when the claim check gives no verdict', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
         state.topic = { historical_points: [lafayettePoint] };
-        state.generate
-            .mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' })
-            .mockResolvedValueOnce({ text: 'Looks fine', inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        gen();
+        state.judge.mockResolvedValue('Looks fine');
         await GET(new Request('https://fixture/api/cron/content-generator'));
         expect(state.inserts).toHaveLength(0);
     });
 
-    it('inserts a sourced draft the judge finds clean', async () => {
+    it('inserts a sourced draft every piece of which the judge finds clean', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
         state.topic = { historical_points: [lafayettePoint] };
-        state.generate
-            .mockResolvedValueOnce({ text: JSON.stringify({ pieces: sourcedPieces() }), inputTokens: 5, outputTokens: 20, provider: 'ollama' })
-            .mockResolvedValueOnce({ text: '{"unsupported":[]}', inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        gen();
+        state.judge.mockResolvedValue('{"unsupported":[]}');
         await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.judge).toHaveBeenCalledTimes(6);
         expect(state.inserts).toHaveLength(1);
     });
 

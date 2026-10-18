@@ -7,8 +7,11 @@
  * it if it bothered the neighbors). No quotation marks, so the quote check passed both.
  *
  * Two layers. Specifics (years and numbers) are checked in code. Every other assertion goes
- * to a judge model that may flag only what the points contradict or do not hold. The judge's
- * answer fails closed: anything that is not a parseable verdict rejects the draft.
+ * to a judge model that may flag only what the points contradict or do not hold. The judge sees
+ * ONE piece at a time with the topic's numbered passages (2026-10-18: given all six pieces at
+ * once it missed "threatened" in the long script; on one piece it caught it). A topic fails if
+ * any piece fails. The judge's answer fails closed: anything that is not a parseable verdict
+ * rejects the draft.
  */
 
 type Point = { claim?: string | null; quote?: string | null };
@@ -90,4 +93,64 @@ export function parseClaimVerdict(text: string): string[] {
 /** True when the topic has source passages, so claims can be checked against them. */
 export function hasSourcePassages(points: Point[] | null | undefined): boolean {
     return sourcesOf(points) !== null;
+}
+
+export type JudgeCall = (system: string, user: string) => Promise<string>;
+
+/** Judge model and endpoint. 127.0.0.1, not localhost: localhost can resolve to an empty ::1 server. */
+export function claimJudgeConfig(env: Record<string, string | undefined> = process.env) {
+    return {
+        model: env.CLAIM_JUDGE_MODEL?.trim() || 'qwen3:32b',
+        endpoint: (env.CLAIM_JUDGE_ENDPOINT?.trim() || 'http://127.0.0.1:11434').replace(/\/+$/, ''),
+    };
+}
+
+/**
+ * One judge call against Ollama, streamed. A non-streamed call sends no headers until the
+ * model finishes, and undici cuts that off at 5 minutes; a stream sends headers at once.
+ */
+export async function callJudge(system: string, user: string, env: Record<string, string | undefined> = process.env): Promise<string> {
+    const { model, endpoint } = claimJudgeConfig(env);
+    const response = await fetch(`${endpoint}/api/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+            model, stream: true, think: false, format: 'json', options: { temperature: 0 },
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        }),
+    });
+    if (!response.ok || !response.body) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: the claim check could not reach the judge model (HTTP ${response.status})`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let done = false;
+    const take = (line: string) => {
+        if (!line.trim()) return;
+        const chunk = JSON.parse(line) as { message?: { content?: string }; done?: boolean; error?: string };
+        if (chunk.error) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: the judge model failed: ${chunk.error}`);
+        text += chunk.message?.content ?? '';
+        if (chunk.done) done = true;
+    };
+    for (;;) {
+        const { value, done: finished } = await reader.read();
+        if (finished) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        lines.forEach(take);
+    }
+    take(buffer);
+    if (!done) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: the judge stream ended before the model finished`);
+    return text;
+}
+
+/** Judges each piece alone against the topic's passages. Returns every fault, labelled by piece; throws if any verdict is unreadable. */
+export async function judgeClaims(points: Point[], pieces: Piece[], call: JudgeCall = callJudge): Promise<string[]> {
+    const faults: string[] = [];
+    for (const piece of pieces) {
+        const { system, user } = claimJudgePrompt(points, [piece]);
+        for (const fault of parseClaimVerdict(await call(system, user))) faults.push(`${String(piece.pieceType)}: ${fault}`);
+    }
+    return faults;
 }
