@@ -318,7 +318,10 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 topicResult.piecesInserted = piecesInserted;
             } catch (e) {
                 if (e instanceof LocalInferencePendingError) {
-                    await supabase.from('topics').update({ status: 'draft', error_message: null }).eq('id', topic.id);
+                    // Leave error_message alone: a prior unsourced-quote fault feeds the retry prompt, and
+                    // the queued job is keyed on that prompt. Clearing it here made the next pass build
+                    // a different prompt and skip unquoteUnsourced.
+                    await supabase.from('topics').update({ status: 'draft' }).eq('id', topic.id);
                     results.push({ ...topicResult, queued: true });
                     continue;
                 }
