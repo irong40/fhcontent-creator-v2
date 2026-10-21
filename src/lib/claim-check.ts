@@ -14,6 +14,9 @@
  * rejects the draft.
  */
 
+import { createHash } from 'node:crypto';
+import { getOrEnqueueLocalInference } from '@/lib/local-inference-queue';
+
 type Point = { claim?: string | null; quote?: string | null };
 type Piece = Record<string, unknown>;
 
@@ -106,10 +109,23 @@ export function claimJudgeConfig(env: Record<string, string | undefined> = proce
 }
 
 /**
- * One judge call against Ollama, streamed. A non-streamed call sends no headers until the
+ * The production judge call. The content-generator runs on Vercel, which cannot reach the
+ * Ollama on 127.0.0.1, so the call goes through the same durable local-inference queue as the
+ * drafts and the local worker answers it with qwen3:32b. Same prompt, same job: the key is the
+ * prompt's hash, so a cron run that finds the job unfinished throws LocalInferencePendingError
+ * and the next run picks the finished verdict up.
+ */
+export async function callJudge(system: string, user: string): Promise<string> {
+    const requestKey = `claim:${createHash('sha256').update(system).update(':').update(user).digest('hex')}`;
+    return (await getOrEnqueueLocalInference({ requestKey, system, user, maxTokens: 2048, schema: CLAIM_JUDGE_TOOL_SCHEMA, model: 'qwen3:32b' })).text;
+}
+
+/**
+ * One judge call straight to an Ollama this process can reach (scripts on the local machine
+ * only, never the Vercel route), streamed. A non-streamed call sends no headers until the
  * model finishes, and undici cuts that off at 5 minutes; a stream sends headers at once.
  */
-export async function callJudge(system: string, user: string, env: Record<string, string | undefined> = process.env): Promise<string> {
+export async function callJudgeDirect(system: string, user: string, env: Record<string, string | undefined> = process.env): Promise<string> {
     const { model, endpoint } = claimJudgeConfig(env);
     const response = await fetch(`${endpoint}/api/chat`, {
         method: 'POST',
@@ -147,10 +163,18 @@ export async function callJudge(system: string, user: string, env: Record<string
 
 /** Judges each piece alone against the topic's passages. Returns every fault, labelled by piece; throws if any verdict is unreadable. */
 export async function judgeClaims(points: Point[], pieces: Piece[], call: JudgeCall = callJudge): Promise<string[]> {
-    const faults: string[] = [];
-    for (const piece of pieces) {
+    // Every piece is asked at once, so a queued judge starts all of them in one cron run
+    // instead of one piece per run. A job still waiting throws only after the rest are asked.
+    const settled = await Promise.allSettled(pieces.map(piece => {
         const { system, user } = claimJudgePrompt(points, [piece]);
-        for (const fault of parseClaimVerdict(await call(system, user))) faults.push(`${String(piece.pieceType)}: ${fault}`);
-    }
+        return call(system, user);
+    }));
+    const failure = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected' && !(r.reason instanceof Error && r.reason.name === 'LocalInferencePendingError'))
+        ?? settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failure) throw failure.reason;
+    const faults: string[] = [];
+    settled.forEach((r, i) => {
+        for (const fault of parseClaimVerdict((r as PromiseFulfilledResult<string>).value)) faults.push(`${String(pieces[i].pieceType)}: ${fault}`);
+    });
     return faults;
 }

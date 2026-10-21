@@ -9,10 +9,13 @@ const requestSchema = z.object({
     user: z.string().min(1).max(64000),
     maxTokens: z.number().int().min(1).max(8192),
     schema: z.record(z.string(), z.json()).optional(),
+    model: z.enum(['qwen3:8b', 'qwen3:32b']).default('qwen3:8b'),
 }).strict();
 export type LocalInferenceRequest = {
     requestKey: string; system: string; user: string; maxTokens: number;
     schema?: Record<string, unknown>;
+    /** Default qwen3:8b. The claim judge asks for qwen3:32b (the 8b model cannot judge claims). */
+    model?: 'qwen3:8b' | 'qwen3:32b';
 };
 type QueueRow = {
     id: string; request_key: string; system_prompt: string; user_prompt: string;
@@ -63,11 +66,11 @@ export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): 
     }
     const serializedSchema = JSON.stringify(request.schema ?? null);
     if (serializedSchema.length > 24000) throw new Error('Local response schema exceeds limit');
-    const requestKey = createHash('sha256').update(canonical({ version: 1, model: 'qwen3:8b', ...request, schema: request.schema ?? null })).digest('hex');
+    const requestKey = createHash('sha256').update(canonical({ version: 1, ...request, schema: request.schema ?? null })).digest('hex');
     const db = createAdminClient() as unknown as SupabaseClient<QueueDatabase>;
     const { error: insertError } = await db.from('local_inference_jobs').upsert({
         request_key: requestKey, system_prompt: request.system, user_prompt: request.user,
-        max_tokens: request.maxTokens, response_schema: request.schema ?? null, model: 'qwen3:8b',
+        max_tokens: request.maxTokens, response_schema: request.schema ?? null, model: request.model,
     }, { onConflict: 'request_key', ignoreDuplicates: true }).select('id');
     if (insertError) throw new Error(`Local inference enqueue failed (${insertError.code ?? 'database'}); no cloud fallback`);
     const { data: row, error } = await db.from('local_inference_jobs')

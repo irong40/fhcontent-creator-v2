@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
 import { z } from 'zod';
 
-const MODEL = 'qwen3:8b';
+const MODELS = ['qwen3:8b', 'qwen3:32b'] as const;
 const jobSchema = z.object({
   id: z.string().uuid(), lease_token: z.string().uuid(), lease_expires_at: z.string(),
-  model: z.literal(MODEL), status: z.literal('running'), system_prompt: z.string().max(24000),
+  model: z.enum(MODELS), status: z.literal('running'), system_prompt: z.string().max(24000),
   user_prompt: z.string().min(1).max(64000), max_tokens: z.number().int().min(1).max(8192),
   response_schema: z.record(z.string(), z.unknown()).nullable(),
 });
@@ -69,7 +69,7 @@ export async function inferJob(job: Job, request: typeof fetch = fetch) {
   const validator = job.response_schema ? z.fromJSONSchema(job.response_schema) : null;
   const response = await request('http://127.0.0.1:11434/api/chat',{
     method:'POST',headers:{'Content-Type':'application/json'},redirect:'error',signal:AbortSignal.timeout(240000),
-    body:JSON.stringify({model:MODEL,stream:false,think:false,keep_alive:'1m',options:{temperature:0,repeat_penalty:1.1,num_ctx:16384,num_predict:job.max_tokens},
+    body:JSON.stringify({model:job.model,stream:false,think:false,keep_alive:'1m',options:{temperature:0,repeat_penalty:1.1,num_ctx:16384,num_predict:job.max_tokens},
       ...(job.response_schema ? {format:job.response_schema}:{}),
       messages:[{role:'system',content:job.system_prompt},{role:'user',content:job.user_prompt}]}),
   });
@@ -77,7 +77,7 @@ export async function inferJob(job: Job, request: typeof fetch = fetch) {
   if (!response.ok) throw new Error('OLLAMA_HTTP_FAILURE');
   const data = await readBoundedJson(response);
   if (data.done_reason==='length') throw new Error('OLLAMA_OUTPUT_LIMIT');
-  if (data.model!==MODEL || data.done!==true || data.done_reason!=='stop' || data.message?.role!=='assistant') throw new Error('OLLAMA_INCOMPLETE_OR_WRONG_MODEL');
+  if (data.model!==job.model || data.done!==true || data.done_reason!=='stop' || data.message?.role!=='assistant') throw new Error('OLLAMA_INCOMPLETE_OR_WRONG_MODEL');
   const text=z.string().trim().min(1).max(100000).parse(data.message.content);
   if (validator) validator.parse(JSON.parse(text));
   const inputTokens=z.number().int().min(0).parse(data.prompt_eval_count);
@@ -93,6 +93,8 @@ export async function runOnce(rpc:Rpc, workerId:string, request:typeof fetch=fet
   try { result=await inferJob(job,request); }
   catch(error) {
     if (error instanceof FatalAuth) throw error; // Never loop on authorization errors.
+    // Keep the real error in the local error log (stderr); only the safe code goes to the database.
+    console.error(`${new Date().toISOString()} job=${job.id} inference failed: ${error instanceof Error ? `${error.name}: ${error.message}${error.cause ? ` cause=${String((error.cause as {code?:string}).code ?? error.cause)}` : ''}` : String(error)}`);
     const safeCode = error instanceof Error && /^[A-Z_]{3,80}$/.test(error.message) ? error.message : 'LOCAL_INFERENCE_OR_VALIDATION_FAILED';
     const accepted=await rpc('finish_local_inference_job',{p_job_id:job.id,p_lease_token:job.lease_token,p_text:'',p_input_tokens:0,p_output_tokens:0,p_error:safeCode});
     if (accepted!==true) throw new Error('Lease rejected failed-job finalization');

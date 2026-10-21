@@ -44,3 +44,9 @@ New Zod JSON Schema objects carry a non-enumerable ~standard adapter containing 
 - The production cloud app is deployed. Local source changes have not been pushed to Git; preserve this checkout when doing later releases.
 
 Rollback is explicit: set CONTENT_INFERENCE_PROVIDER=claude and redeploy if requested. Preserve queue evidence and review holds. Never silently fall back, discard uncertain jobs, or clear holds for convenience.
+
+## Claim-check judge: production path (branch feat/claim-support-check, 2026-10-20)
+
+content-generator runs on Vercel (cron in vercel.json, https://fhcontent-creator-v2.vercel.app). Vercel cannot reach 127.0.0.1, so the claim judge no longer calls Ollama directly. `callJudge` (src/lib/claim-check.ts) enqueues each piece's judgement in local_inference_jobs with model qwen3:32b; the local worker (scripts/local-inference-worker.ts) answers it; the next cron run reads the verdict. While a job is unfinished the topic stays draft (LocalInferencePendingError) and no cost row is written. A failed or unreadable verdict rejects the draft (fails closed). `callJudgeDirect` (127.0.0.1, CLAIM_JUDGE_*) is for local scripts only.
+
+Needs before deploy (Adam): apply supabase/migrations/20261020150000_local_inference_judge_model.sql (relaxes the model CHECK to allow qwen3:32b), restart the worker so it accepts the 32b model, and confirm qwen3:32b is loaded in the worker's Ollama. Unverified: a 32b judge job inside the worker's 240 s inference cap and 300 s lease; run one live job after deploy.

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { callJudge, claimJudgeConfig, claimJudgePrompt, judgeClaims, hasSourcePassages, parseClaimVerdict, unsupportedSpecifics } from './claim-check';
+import { callJudgeDirect, claimJudgeConfig, claimJudgePrompt, judgeClaims, hasSourcePassages, parseClaimVerdict, unsupportedSpecifics } from './claim-check';
 
 // The 2026-10-18 Lafayette point and the pieces that contradicted it.
 const lafayette = [{
@@ -83,17 +83,17 @@ describe('judge model settings', () => {
             'age":{"content":"orted\\":[]}"},"done":false}\n{"message":{"content":""},"done":true}\n',
         ]));
         vi.stubGlobal('fetch', fetchMock);
-        expect(await callJudge('sys', 'user', { CLAIM_JUDGE_MODEL: 'm' })).toBe('{"unsupported":[]}');
+        expect(await callJudgeDirect('sys', 'user', { CLAIM_JUDGE_MODEL: 'm' })).toBe('{"unsupported":[]}');
         const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
         expect(url).toBe('http://127.0.0.1:11434/api/chat');
         expect(JSON.parse(init.body)).toMatchObject({ model: 'm', stream: true });
     });
     it('rejects a stream that ends before the model is done', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => stream(['{"message":{"content":"{"},"done":false}\n'])));
-        await expect(callJudge('s', 'u', {})).rejects.toThrow('ended before');
+        await expect(callJudgeDirect('s', 'u', {})).rejects.toThrow('ended before');
     });
     it('rejects an HTTP failure', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => new Response('no', { status: 500 })));
-        await expect(callJudge('s', 'u', {})).rejects.toThrow('HTTP 500');
+        await expect(callJudgeDirect('s', 'u', {})).rejects.toThrow('HTTP 500');
     });
 });

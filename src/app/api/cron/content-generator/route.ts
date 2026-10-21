@@ -207,7 +207,9 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     parsed = JSON.parse(jsonText);
                 }
 
-                await supabase.from('cost_tracking').insert({
+                // The judge may still be queued (Pending). Log the draft's cost once, when the checks
+                // end, not on every cron run that finds the judge unfinished.
+                const logCost = () => supabase.from('cost_tracking').insert({
                     service: provider,
                     operation: 'content_generation',
                     topic_id: topic.id,
@@ -217,29 +219,37 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 });
 
                 const contentResult = responseSchema.safeParse(parsed);
-                if (!contentResult.success) {
-                    // Shape/validation failure (e.g. quote under the word floor).
-                    // Throw so the unified catch applies the retry circuit-breaker
-                    // rather than silently resetting to draft and looping forever.
-                    throw new Error(
-                        `Invalid content shape: ${contentResult.error.issues.map(i => i.message).join('; ')}`,
-                    );
-                }
+                let judgePending = false;
+                try {
+                    if (!contentResult.success) {
+                        // Shape/validation failure (e.g. quote under the word floor).
+                        // Throw so the unified catch applies the retry circuit-breaker
+                        // rather than silently resetting to draft and looping forever.
+                        throw new Error(
+                            `Invalid content shape: ${contentResult.error.issues.map(i => i.message).join('; ')}`,
+                        );
+                    }
 
-                const quoteFaults = sourcedQuoteFaults(topic.historical_points as HistoricalPoint[], contentResult.data.pieces as Array<Record<string, unknown>>);
-                if (quoteFaults.length > 0) {
-                    throw new Error(`${UNSOURCED_QUOTE_ERROR}: ${quoteFaults.slice(0, 2).join('; ')}`);
-                }
+                    const quoteFaults = sourcedQuoteFaults(topic.historical_points as HistoricalPoint[], contentResult.data.pieces as Array<Record<string, unknown>>);
+                    if (quoteFaults.length > 0) {
+                        throw new Error(`${UNSOURCED_QUOTE_ERROR}: ${quoteFaults.slice(0, 2).join('; ')}`);
+                    }
 
-                // A claim the source passages do not support is as fatal as a mis-quoted span
-                // (2026-10-18: Lafayette "double agent for the British", Barrett "threatened").
-                const claimPoints = topic.historical_points as HistoricalPoint[];
-                if (hasSourcePassages(claimPoints)) {
-                    const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
-                    const specifics = unsupportedSpecifics(claimPoints, generated);
-                    if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
-                    const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user));
-                    if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
+                    // A claim the source passages do not support is as fatal as a mis-quoted span
+                    // (2026-10-18: Lafayette "double agent for the British", Barrett "threatened").
+                    const claimPoints = topic.historical_points as HistoricalPoint[];
+                    if (hasSourcePassages(claimPoints)) {
+                        const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
+                        const specifics = unsupportedSpecifics(claimPoints, generated);
+                        if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
+                        const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user));
+                        if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
+                    }
+                } catch (e) {
+                    judgePending = e instanceof LocalInferencePendingError;
+                    throw e;
+                } finally {
+                    if (!judgePending) await logCost();
                 }
 
                 const pieces = contentResult.data.pieces as Array<{
