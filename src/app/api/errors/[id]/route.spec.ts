@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { insert, lastRow, errorRow } = vi.hoisted(() => ({ insert: vi.fn(), lastRow: vi.fn(), errorRow: vi.fn() }));
+const { insert, lastRow, ackRow, errorRow } = vi.hoisted(() => ({ insert: vi.fn(), lastRow: vi.fn(), ackRow: vi.fn(), errorRow: vi.fn() }));
 vi.mock('@/lib/supabase/server', () => ({
     createClient: async () => ({
         auth: { getUser: async () => ({ data: { user: { id: 'u1' } } }) },
@@ -7,8 +7,14 @@ vi.mock('@/lib/supabase/server', () => ({
     }),
     createAdminClient: () => ({
         from: () => ({
-            // Own alert_channel row by error id (maybeSingle), then recordTrailOnce's existing-row check (none).
-            select: () => { const q: Record<string, unknown> = { limit: () => Object.assign(Promise.resolve({ data: [], error: null }), { maybeSingle: async () => lastRow() }) }; q.eq = () => q; return q; },
+            // Own alert_channel row by error id (lastRow), then the newest acknowledged row for that error (ackRow, default none).
+            select: () => {
+                let stage = '';
+                const q: Record<string, unknown> = { limit: () => ({ maybeSingle: async () => (stage === 'acknowledged' ? (await ackRow()) ?? { data: null, error: null } : lastRow()) }) };
+                q.eq = (k: string, v: string) => { if (k === 'stage') stage = v; return q; };
+                q.order = () => q;
+                return q;
+            },
             insert,
         }),
     }),

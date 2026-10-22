@@ -82,7 +82,7 @@ export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): 
     }, { onConflict: 'request_key', ignoreDuplicates: true }).select('id,created_at');
     if (insertError) throw new Error(`Local inference enqueue failed (${insertError.code ?? 'database'}); no cloud fallback`);
     // HR-7: a job waiting in the queue is a recorded step, so a topic stuck there shows in the report.
-    // ignoreDuplicates returns only a row this call inserted; a repeat call (or a key another topic queued) writes nothing here.
+    // ignoreDuplicates returns only a row this call inserted; a repeat call (or a key another topic queued) is handled after the read.
     const fresh = Array.isArray(inserted) ? inserted[0] as { id?: string; created_at?: string } | undefined : undefined;
     if (trace && cid && fresh?.id) {
         await recordTrailOnce(db, { correlation_id: cid, stage: 'enqueued', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: fresh.id, ...(fresh.created_at ? { at: fresh.created_at } : {}), detail: { request_key: requestKey } }, { job_id: fresh.id });
@@ -90,7 +90,13 @@ export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): 
     const { data: row, error } = await db.from('local_inference_jobs')
         .select((trace ? 'id,status,result_text,input_tokens,output_tokens,created_at,first_claimed_at,updated_at' : 'id,status,result_text,input_tokens,output_tokens') as 'id,status,result_text,input_tokens,output_tokens,created_at,first_claimed_at,updated_at').eq('request_key', requestKey).single();
     if (error || !row) throw new Error(`Local inference read failed (${error?.code ?? 'missing'}); no cloud fallback`);
-    if (row.status === 'queued' || row.status === 'running') throw new LocalInferencePendingError(row.id);
+    if (row.status === 'queued' || row.status === 'running') {
+        // A topic whose request deduped onto a job another topic (or an earlier call) queued writes its
+        // OWN enqueued row, once per correlation id and job, stamped when it joined: it shows in the
+        // report while the job waits, not only after the job finishes.
+        if (trace && cid && !fresh?.id) await recordTrailOnce(db, { correlation_id: cid, stage: 'enqueued', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, detail: { request_key: requestKey, joined_existing_job: true } }, { job_id: row.id });
+        throw new LocalInferencePendingError(row.id);
+    }
     if (row.status === 'failed') {
         // Exhaustion is a recorded fact, not only a thrown string: the report reads it as judge_exhausted.
         // Written once per job, stamped with the job's finish time; a retry of the exhausted job writes nothing.

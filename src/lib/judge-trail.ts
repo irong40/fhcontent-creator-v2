@@ -80,9 +80,32 @@ export type TopicProgress = {
     channels_sent: AlertChannel[]; channels_failed: AlertChannel[];
     /** Channels whose record says skipped. Together with sent and failed this is every alert_channel record. */
     channels_skipped: AlertChannel[];
-    /** The earliest acknowledged row, or null when no acknowledgement is recorded. */
+    /** Channels the LATEST escalation's own alert rows say sent; the escalation reasons read these. */
+    escalation_channels_sent: AlertChannel[];
+    /**
+     * When the latest escalation's own error was acknowledged (exact detail.error_id match, and not
+     * revoked by a later un-acknowledge row), or null when no such acknowledgement is recorded.
+     */
     acknowledged_at: string | null;
 };
+
+/**
+ * Acknowledgement of the given error ids from the records. Per error id the rows are read in order:
+ * detail.revoked === true means the error was un-acknowledged, so it is open again; the first
+ * acknowledge after that closes it. Returns the earliest effective acknowledgement time among the ids, or null. Rows for other error
+ * ids (or with no error_id) never count. Duplicate rows from a concurrent repeat write read the same.
+ */
+function effectiveAcknowledgement(sorted: TrailEvent[], errorIds: Set<string>): string | null {
+    const ackedAt = new Map<string, string | null>();
+    for (const e of sorted) {
+        const id = e.detail?.error_id;
+        if (e.stage !== 'acknowledged' || typeof id !== 'string' || !errorIds.has(id)) continue;
+        if (e.detail?.revoked === true) ackedAt.set(id, null);
+        else if (!ackedAt.get(id)) ackedAt.set(id, e.at); // the first ack since the last revoke; a duplicate keeps it
+    }
+    const times = [...ackedAt.values()].filter((t): t is string => t !== null).sort();
+    return times[0] ?? null;
+}
 export type ProgressReport = { generated_at: string; advanced: TopicProgress[]; did_not_advance: TopicProgress[]; in_flight: TopicProgress[] };
 
 const secs = (a?: string, b?: string) => (a && b ? Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 1000)) : null);
@@ -110,14 +133,22 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
             if (outcome === 'sent') sent.add(ch); else if (outcome === 'failed') failed.add(ch); else if (outcome === 'skipped') skipped.add(ch);
         }
         const advanced = sorted.some(e => e.stage === 'state_changed' && e.detail?.advanced === true);
-        const escalated = sorted.some(e => e.stage === 'escalated');
-        const acknowledgedAt = sorted.find(e => e.stage === 'acknowledged')?.at ?? null;
+        // The LATEST escalation decides the reason. Its own alert rows are the alert_channel rows at or
+        // after it (the generator writes escalated, then notifyError writes one row per channel). An
+        // acknowledgement counts only when its detail.error_id is an error_id on those rows, so closing
+        // an earlier error on the same topic+version never closes a later one.
+        const latestEscalation = [...sorted].reverse().find(e => e.stage === 'escalated');
+        const escalated = latestEscalation !== undefined;
+        const ownRows = escalated ? channelRows.filter(e => Date.parse(e.at) >= Date.parse(latestEscalation.at)) : [];
+        const ownSent = new Set<AlertChannel>(ownRows.filter(e => e.detail?.outcome === 'sent').map(e => e.detail?.channel as AlertChannel));
+        const ownErrorIds = new Set(ownRows.map(e => e.detail?.error_id).filter((x): x is string => typeof x === 'string'));
+        const acknowledgedAt = escalated ? effectiveAcknowledgement(sorted, ownErrorIds) : null;
         const acknowledged = acknowledgedAt !== null;
         const exhausted = sorted.some(e => e.stage === 'inference_done' && e.detail?.exhausted === true);
         const rejected = sorted.some(e => e.stage === 'validated' && e.detail?.ok === false);
         let reason: StuckReason | null = null;
         if (!advanced) {
-            if (escalated && sent.size === 0) reason = 'escalated_no_channel_delivered';
+            if (escalated && ownSent.size === 0) reason = 'escalated_no_channel_delivered';
             else if (escalated && !acknowledged) reason = 'escalated_unacknowledged';
             else if (exhausted) reason = 'judge_exhausted';
             else if (rejected) reason = 'judge_rejected';
@@ -132,7 +163,7 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
                 ?? (typeof first('claimed')?.detail?.queue_wait_ms === 'number' ? Math.max(0, Math.round((first('claimed')!.detail!.queue_wait_ms as number) / 1000)) : null),
             inference_s: secs(first('claimed')?.at, sorted.find(e => e.stage === 'inference_done')?.at),
             advanced, stuck_reason: reason, channels_sent: [...sent], channels_failed: [...failed],
-            channels_skipped: [...skipped], acknowledged_at: acknowledgedAt,
+            channels_skipped: [...skipped], escalation_channels_sent: [...ownSent], acknowledged_at: acknowledgedAt,
         };
         // An escalation with no delivery record or no acknowledgement is reported at once; otherwise wait out stuckAfterMs.
         const urgent = reason === 'escalated_no_channel_delivered' || reason === 'escalated_unacknowledged' || reason === 'judge_exhausted';
@@ -154,7 +185,7 @@ export function reasonText(t: TopicProgress): string {
         case 'no_state_change': return `No state change recorded; last recorded step: ${t.last_stage}.`;
         case 'judge_rejected': return 'Judge rejected the claims (validation failed); no state change recorded since.';
         case 'escalated_no_channel_delivered': return 'Alert raised; no channel record says sent (no record is not proof that nothing was sent).';
-        case 'escalated_unacknowledged': return `Alert sent on ${t.channels_sent.join(', ')} (send receipt, not proof it was read); no acknowledgement recorded.`;
+        case 'escalated_unacknowledged': return `Alert sent on ${t.escalation_channels_sent.join(', ')} (send receipt, not proof it was read); no acknowledgement recorded.`;
         default: return '';
     }
 }

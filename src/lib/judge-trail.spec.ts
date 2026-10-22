@@ -87,7 +87,10 @@ describe('stuck-topic report wording (content-manager review E1 to E9)', () => {
         noBanned(rj);
     });
     it('an acknowledged topic prints acknowledged: recorded <at> (E7)', () => {
-        const l = lineFor(render([...viaDb, ev('acknowledged', 30)]), 't1');
+        // An acknowledgement counts only by exact error identity with the escalation's own alert row (HR-7 rework r2).
+        const own = [...viaDb.slice(0, -1), ev('alert_channel', 22, 't1', { channel: 'db', outcome: 'sent', error_id: 'e1' })];
+        expect(lineFor(render([...own, ev('acknowledged', 30)]), 't1')).toContain('acknowledged: no record');
+        const l = lineFor(render([...own, ev('acknowledged', 30, 't1', { error_id: 'e1' })]), 't1');
         expect(l).toContain(`acknowledged: recorded ${at(30)}`);
         expect(l).not.toContain('acknowledged: no record');
     });
