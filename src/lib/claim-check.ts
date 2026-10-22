@@ -115,9 +115,9 @@ export function claimJudgeConfig(env: Record<string, string | undefined> = proce
  * prompt's hash, so a cron run that finds the job unfinished throws LocalInferencePendingError
  * and the next run picks the finished verdict up.
  */
-export async function callJudge(system: string, user: string): Promise<string> {
+export async function callJudge(system: string, user: string, trace?: { topicId: string; topicVersion: string }): Promise<string> {
     const requestKey = `claim:${createHash('sha256').update(system).update(':').update(user).digest('hex')}`;
-    return (await getOrEnqueueLocalInference({ requestKey, system, user, maxTokens: 2048, schema: CLAIM_JUDGE_TOOL_SCHEMA, model: 'qwen3:32b' })).text;
+    return (await getOrEnqueueLocalInference({ requestKey, system, user, maxTokens: 2048, schema: CLAIM_JUDGE_TOOL_SCHEMA, model: 'qwen3:32b', ...(trace ? { trace } : {}) })).text;
 }
 
 /**
