@@ -57,7 +57,8 @@ export class LocalInferencePendingError extends Error {
 export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     // Zod-generated JSON Schema carries a non-enumerable ~standard adapter
     // containing functions. Transport only its enumerable JSON fields.
-    const request = requestSchema.parse({ ...input, schema: input.schema ? { ...input.schema } : undefined });
+    const { trace: _trace, ...untraced } = input; // trace is not part of the hashed request: a retry keeps the same key
+    const request = requestSchema.parse({ ...untraced, schema: input.schema ? { ...input.schema } : undefined });
     const promptBytes = Buffer.byteLength(request.system, 'utf8') + Buffer.byteLength(request.user, 'utf8');
     if (promptBytes > 24000) {
         throw new Error('Local inference prompts exceed the 24000-byte context budget');

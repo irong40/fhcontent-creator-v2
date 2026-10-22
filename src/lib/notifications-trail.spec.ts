@@ -5,7 +5,7 @@ vi.mock('@/lib/email', () => ({ sendErrorAlert }));
 import { notifyError } from './notifications';
 
 describe('notifyError channel records (no live send: email and database are mocks, webhook unset)', () => {
-    beforeEach(() => { vi.clearAllMocks(); delete process.env.N8N_ERROR_WEBHOOK_URL; insert.mockResolvedValue({ error: null }); });
+    beforeEach(() => { vi.clearAllMocks(); delete process.env.N8N_ERROR_WEBHOOK_URL; process.env.NOTIFICATION_EMAIL = 'ops@example.test'; insert.mockResolvedValue({ error: null }); });
     it('records which channel fired when the webhook is absent', async () => {
         sendErrorAlert.mockResolvedValue(false);
         const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -19,5 +19,12 @@ describe('notifyError channel records (no live send: email and database are mock
         sendErrorAlert.mockResolvedValue(true);
         await notifyError({ source: 's', message: 'm', topicId: 't1' });
         expect(insert.mock.calls.filter(c => c[0].stage)).toHaveLength(0);
+    });
+    it('records resend as skipped, not failed, when NOTIFICATION_EMAIL is unset', async () => {
+        delete process.env.NOTIFICATION_EMAIL;
+        await notifyError({ source: 's', message: 'm', topicId: 't1', trail: { correlationId: 'c2', topicVersion: 'v1' } });
+        const rows = insert.mock.calls.map(c => c[0]).filter(r => r.stage === 'alert_channel');
+        expect(rows.find(r => r.detail.channel === 'resend').detail.outcome).toBe('skipped');
+        expect(sendErrorAlert).not.toHaveBeenCalled();
     });
 });
