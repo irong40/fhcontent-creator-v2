@@ -76,7 +76,9 @@ describe('HR-7 trail rows on the success path', () => {
         const row = { id: 'job', status: 'succeeded', result_text: 'ok', input_tokens: 10, output_tokens: 5, created_at: '2026-10-22T10:00:00Z', first_claimed_at: '2026-10-22T10:00:30Z' };
         const eq = vi.fn().mockReturnValue({ single: vi.fn().mockResolvedValue({ data: row, error: null }) });
         const insert = vi.fn((r: Record<string, unknown>) => { inserts.push(r); return Promise.resolve({ error: null }); });
-        admin.mockReturnValue({ from: vi.fn((t: string) => t === 'judge_trail' ? { insert } : { upsert, select: vi.fn().mockReturnValue({ eq }) }) });
+        // recordTrailOnce first checks for an existing row: none yet.
+        const none: Record<string, unknown> = { limit: async () => ({ data: [], error: null }) }; none.eq = () => none;
+        admin.mockReturnValue({ from: vi.fn((t: string) => t === 'judge_trail' ? { insert, select: () => none } : { upsert, select: vi.fn().mockReturnValue({ eq }) }) });
         await getOrEnqueueLocalInference({ ...request, trace: { topicId: 't1', topicVersion: 'v1' } });
         expect(inserts.map(r => r.stage)).toEqual(['claimed', 'inference_done']);
         expect(new Set(inserts.map(r => r.correlation_id)).size).toBe(1);

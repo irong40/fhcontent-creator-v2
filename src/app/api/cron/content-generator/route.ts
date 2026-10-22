@@ -9,7 +9,7 @@ import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR } from '@/lib/quote-check';
 import { UNSUPPORTED_CLAIM_ERROR, callJudge, hasSourcePassages, judgeClaims, unsupportedSpecifics } from '@/lib/claim-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
-import { correlationId, recordTrail } from '@/lib/judge-trail';
+import { recordTrail, topicCorrelationId } from '@/lib/judge-trail';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
 import type { Database, PieceType, TopicWithPersona, HistoricalPoint } from '@/types/database';
@@ -246,7 +246,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user, { topicId: topic.id, topicVersion: (topic as { text_version?: string | null }).text_version ?? 'unversioned' }));
                         // HR-7: the verdict is a recorded fact, so a rejected topic reads as judge_rejected, not as silence.
                         const judgedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
-                        await recordTrail(supabase, { correlation_id: correlationId(topic.id, judgedVersion, 'content-generator'), stage: 'validated', topic_id: topic.id, topic_version: judgedVersion, detail: { ok: claimFaults.length === 0, faults: claimFaults.length } });
+                        await recordTrail(supabase, { correlation_id: topicCorrelationId(topic.id, judgedVersion), stage: 'validated', topic_id: topic.id, topic_version: judgedVersion, detail: { ok: claimFaults.length === 0, faults: claimFaults.length } });
                         if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
                     }
                 } catch (e) {
@@ -302,7 +302,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 if (statusError) throw new Error(statusError.message);
                 {
                     const advancedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
-                    await recordTrail(supabase, { correlation_id: correlationId(topic.id, advancedVersion, 'content-generator'), stage: 'state_changed', topic_id: topic.id, topic_version: advancedVersion, detail: { advanced: true, to: 'content_ready' } });
+                    await recordTrail(supabase, { correlation_id: topicCorrelationId(topic.id, advancedVersion), stage: 'state_changed', topic_id: topic.id, topic_version: advancedVersion, detail: { advanced: true, to: 'content_ready' } });
                 }
                 topicResult.piecesInserted = piecesInserted;
             } catch (e) {
@@ -333,7 +333,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 if (exhausted) {
                     // HR-7: the business state (held, not advanced) and the escalation join the judge trail under one id.
                     const topicVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
-                    const trail = { correlationId: correlationId(topic.id, topicVersion, 'content-generator'), topicVersion };
+                    const trail = { correlationId: topicCorrelationId(topic.id, topicVersion), topicVersion };
                     await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'state_changed', topic_id: topic.id, topic_version: topicVersion, detail: { advanced: false, to: 'held_for_review' } });
                     await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'escalated', topic_id: topic.id, topic_version: topicVersion, detail: { reason: 'retries_exhausted' } });
                     await notifyError({

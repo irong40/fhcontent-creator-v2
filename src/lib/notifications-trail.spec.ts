@@ -5,7 +5,7 @@ vi.mock('@/lib/email', () => ({ sendErrorAlert }));
 import { notifyError } from './notifications';
 
 describe('notifyError channel records (no live send: email and database are mocks, webhook unset)', () => {
-    beforeEach(() => { vi.clearAllMocks(); delete process.env.N8N_ERROR_WEBHOOK_URL; process.env.NOTIFICATION_EMAIL = 'ops@example.test'; insert.mockResolvedValue({ error: null }); });
+    beforeEach(() => { vi.clearAllMocks(); delete process.env.N8N_ERROR_WEBHOOK_URL; process.env.NOTIFICATION_EMAIL = 'ops@example.test'; insert.mockImplementation(() => Object.assign(Promise.resolve({ error: null }), { select: () => ({ maybeSingle: async () => ({ data: { id: 'err-1' }, error: null }) }) })); });
     it('records which channel fired when the webhook is absent', async () => {
         sendErrorAlert.mockResolvedValue(false);
         const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -14,6 +14,7 @@ describe('notifyError channel records (no live send: email and database are mock
         const rows = insert.mock.calls.map(c => c[0]).filter(r => r.stage === 'alert_channel');
         expect(Object.fromEntries(rows.map(r => [r.detail.channel, r.detail.outcome]))).toEqual({ webhook: 'skipped', resend: 'failed', db: 'sent' });
         expect(rows.every(r => r.correlation_id === 'c1')).toBe(true);
+        expect(rows.every(r => r.detail.error_id === 'err-1')).toBe(true);
     });
     it('writes no trail rows without a trail argument', async () => {
         sendErrorAlert.mockResolvedValue(true);
