@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { createAdminClient } from './supabase/server';
+import { correlationId, recordTrail } from './judge-trail';
 
 const requestSchema = z.object({
     requestKey: z.string().trim().min(1).max(256),
@@ -16,6 +17,8 @@ export type LocalInferenceRequest = {
     schema?: Record<string, unknown>;
     /** Default qwen3:8b. The claim judge asks for qwen3:32b (the 8b model cannot judge claims). */
     model?: 'qwen3:8b' | 'qwen3:32b';
+    /** HR-7: topic and text version this request is for. Needs migration 20261022120000 applied first. */
+    trace?: { topicId: string; topicVersion: string };
 };
 type QueueRow = {
     id: string; request_key: string; system_prompt: string; user_prompt: string;
@@ -66,17 +69,23 @@ export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): 
     }
     const serializedSchema = JSON.stringify(request.schema ?? null);
     if (serializedSchema.length > 24000) throw new Error('Local response schema exceeds limit');
+    const trace = input.trace;
     const requestKey = createHash('sha256').update(canonical({ version: 1, ...request, schema: request.schema ?? null })).digest('hex');
     const db = createAdminClient() as unknown as SupabaseClient<QueueDatabase>;
     const { error: insertError } = await db.from('local_inference_jobs').upsert({
         request_key: requestKey, system_prompt: request.system, user_prompt: request.user,
         max_tokens: request.maxTokens, response_schema: request.schema ?? null, model: request.model,
+        ...(trace ? { correlation_id: correlationId(trace.topicId, trace.topicVersion, requestKey), topic_id: trace.topicId, topic_version: trace.topicVersion } : {}),
     }, { onConflict: 'request_key', ignoreDuplicates: true }).select('id');
     if (insertError) throw new Error(`Local inference enqueue failed (${insertError.code ?? 'database'}); no cloud fallback`);
     const { data: row, error } = await db.from('local_inference_jobs')
         .select('id,status,result_text,input_tokens,output_tokens').eq('request_key', requestKey).single();
     if (error || !row) throw new Error(`Local inference read failed (${error?.code ?? 'missing'}); no cloud fallback`);
     if (row.status === 'queued' || row.status === 'running') throw new LocalInferencePendingError(row.id);
+    if (row.status === 'failed') {
+        // Exhaustion is a recorded fact, not only a thrown string: the report reads it as judge_exhausted.
+        if (trace) await recordTrail(db, { correlation_id: correlationId(trace.topicId, trace.topicVersion, requestKey), stage: 'inference_done', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, detail: { exhausted: true } });
+    }
     if (row.status === 'failed') throw new Error(`Local inference job ${row.id} exhausted its bounded attempts; human review required`);
     if (row.status !== 'succeeded' || !row.result_text?.trim() || !Number.isInteger(row.input_tokens) || !Number.isInteger(row.output_tokens) || row.input_tokens! < 0 || row.output_tokens! < 0) {
         throw new Error('Invalid local inference completion; human review required');

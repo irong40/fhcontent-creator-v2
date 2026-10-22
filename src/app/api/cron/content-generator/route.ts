@@ -9,6 +9,7 @@ import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSource
 import { UNSUPPORTED_CLAIM_ERROR, callJudge, hasSourcePassages, judgeClaims, unsupportedSpecifics } from '@/lib/claim-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
+import { correlationId, recordTrail } from '@/lib/judge-trail';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
 import type { Database, PieceType, TopicWithPersona, HistoricalPoint } from '@/types/database';
@@ -342,7 +343,13 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 }).eq('id', topic.id);
                 topicResult.error = errMsg;
                 if (exhausted) {
+                    // HR-7: the business state (held, not advanced) and the escalation join the judge trail under one id.
+                    const topicVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                    const trail = { correlationId: correlationId(topic.id, topicVersion, 'content-generator'), topicVersion };
+                    await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'state_changed', topic_id: topic.id, topic_version: topicVersion, detail: { advanced: false, to: 'held_for_review' } });
+                    await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'escalated', topic_id: topic.id, topic_version: topicVersion, detail: { reason: 'retries_exhausted' } });
                     await notifyError({
+                        trail,
                         source: 'content-generator',
                         message: `Held for review after ${nextRetry} failed attempts: ${errMsg}`,
                         topicId: topic.id,
