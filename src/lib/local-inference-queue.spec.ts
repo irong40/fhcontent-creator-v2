@@ -67,3 +67,23 @@ describe('local inference durable queue', () => {
         expect(admin).not.toHaveBeenCalled();
     });
 });
+
+describe('HR-7 trail rows on the success path', () => {
+    beforeEach(() => vi.clearAllMocks());
+    it('writes claimed and inference_done under one correlation id, and none without a trace', async () => {
+        const inserts: Array<Record<string, unknown>> = [];
+        const upsert = vi.fn().mockReturnValue({ select: vi.fn().mockResolvedValue({ error: null }) });
+        const row = { id: 'job', status: 'succeeded', result_text: 'ok', input_tokens: 10, output_tokens: 5, created_at: '2026-10-22T10:00:00Z', first_claimed_at: '2026-10-22T10:00:30Z' };
+        const eq = vi.fn().mockReturnValue({ single: vi.fn().mockResolvedValue({ data: row, error: null }) });
+        const insert = vi.fn((r: Record<string, unknown>) => { inserts.push(r); return Promise.resolve({ error: null }); });
+        admin.mockReturnValue({ from: vi.fn((t: string) => t === 'judge_trail' ? { insert } : { upsert, select: vi.fn().mockReturnValue({ eq }) }) });
+        await getOrEnqueueLocalInference({ ...request, trace: { topicId: 't1', topicVersion: 'v1' } });
+        expect(inserts.map(r => r.stage)).toEqual(['claimed', 'inference_done']);
+        expect(new Set(inserts.map(r => r.correlation_id)).size).toBe(1);
+        expect((inserts[0].detail as { queue_wait_ms: number }).queue_wait_ms).toBe(30000);
+        expect(upsert.mock.calls[0][0].correlation_id).toBe(inserts[0].correlation_id);
+        inserts.length = 0;
+        await getOrEnqueueLocalInference(request);
+        expect(inserts).toEqual([]);
+    });
+});

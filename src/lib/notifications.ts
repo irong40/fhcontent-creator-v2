@@ -51,7 +51,10 @@ export async function notifyError(context: {
     }
 
     // Email via Resend. sendErrorAlert returns false when NOTIFICATION_EMAIL is unset or Resend refused.
-    outcomes.resend = await sendErrorAlert(context).then(ok => (ok ? 'sent' : 'failed'), () => 'failed' as const);
+    // Unset NOTIFICATION_EMAIL is 'skipped' (nothing was attempted), not a failed delivery.
+    outcomes.resend = process.env.NOTIFICATION_EMAIL
+        ? await sendErrorAlert(context).then(ok => (ok ? 'sent' : 'failed'), () => 'failed' as const)
+        : 'skipped';
 
     // DB persistence for in-app notification bell + admin page.
     // Fire-and-forget: a DB outage must not silence the email/webhook channels.

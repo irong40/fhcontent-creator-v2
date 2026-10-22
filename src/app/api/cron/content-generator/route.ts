@@ -263,6 +263,9 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         const specifics = unsupportedSpecifics(claimPoints, generated);
                         if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
                         const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user, { topicId: topic.id, topicVersion: (topic as { text_version?: string | null }).text_version ?? 'unversioned' }));
+                        // HR-7: the verdict is a recorded fact, so a rejected topic reads as judge_rejected, not as silence.
+                        const judgedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                        await recordTrail(supabase, { correlation_id: correlationId(topic.id, judgedVersion, 'content-generator'), stage: 'validated', topic_id: topic.id, topic_version: judgedVersion, detail: { ok: claimFaults.length === 0, faults: claimFaults.length } });
                         if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
                     }
                 } catch (e) {
@@ -316,6 +319,10 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     coo_auto_approved_at: null,
                 }).eq('id', topic.id);
                 if (statusError) throw new Error(statusError.message);
+                {
+                    const advancedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                    await recordTrail(supabase, { correlation_id: correlationId(topic.id, advancedVersion, 'content-generator'), stage: 'state_changed', topic_id: topic.id, topic_version: advancedVersion, detail: { advanced: true, to: 'content_ready' } });
+                }
                 topicResult.piecesInserted = piecesInserted;
             } catch (e) {
                 if (e instanceof LocalInferencePendingError) {
