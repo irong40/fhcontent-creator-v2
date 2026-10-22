@@ -51,6 +51,10 @@ export type TopicProgress = {
     advanced: boolean; stuck_reason: StuckReason | null;
     /** Channels whose own record says sent. Empty means no record of delivery, not "no alert". */
     channels_sent: AlertChannel[]; channels_failed: AlertChannel[];
+    /** Channels whose record says skipped. Together with sent and failed this is every alert_channel record. */
+    channels_skipped: AlertChannel[];
+    /** The earliest acknowledged row, or null when no acknowledgement is recorded. */
+    acknowledged_at: string | null;
 };
 export type ProgressReport = { generated_at: string; advanced: TopicProgress[]; did_not_advance: TopicProgress[]; in_flight: TopicProgress[] };
 
@@ -73,14 +77,15 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
         const first = (s: TrailStage) => sorted.find(e => e.stage === s);
         const last = sorted[sorted.length - 1];
         const channelRows = sorted.filter(e => e.stage === 'alert_channel');
-        const sent = new Set<AlertChannel>(), failed = new Set<AlertChannel>();
+        const sent = new Set<AlertChannel>(), failed = new Set<AlertChannel>(), skipped = new Set<AlertChannel>();
         for (const c of channelRows) {
             const ch = c.detail?.channel as AlertChannel, outcome = c.detail?.outcome;
-            if (outcome === 'sent') sent.add(ch); else if (outcome === 'failed') failed.add(ch);
+            if (outcome === 'sent') sent.add(ch); else if (outcome === 'failed') failed.add(ch); else if (outcome === 'skipped') skipped.add(ch);
         }
         const advanced = sorted.some(e => e.stage === 'state_changed' && e.detail?.advanced === true);
         const escalated = sorted.some(e => e.stage === 'escalated');
-        const acknowledged = sorted.some(e => e.stage === 'acknowledged');
+        const acknowledgedAt = sorted.find(e => e.stage === 'acknowledged')?.at ?? null;
+        const acknowledged = acknowledgedAt !== null;
         const exhausted = sorted.some(e => e.stage === 'inference_done' && e.detail?.exhausted === true);
         const rejected = sorted.some(e => e.stage === 'validated' && e.detail?.ok === false);
         let reason: StuckReason | null = null;
@@ -98,6 +103,7 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
             queue_wait_s: secs(first('enqueued')?.at, first('claimed')?.at),
             inference_s: secs(first('claimed')?.at, sorted.find(e => e.stage === 'inference_done')?.at),
             advanced, stuck_reason: reason, channels_sent: [...sent], channels_failed: [...failed],
+            channels_skipped: [...skipped], acknowledged_at: acknowledgedAt,
         };
         // An escalation with no delivery record or no acknowledgement is reported at once; otherwise wait out stuckAfterMs.
         const urgent = reason === 'escalated_no_channel_delivered' || reason === 'escalated_unacknowledged' || reason === 'judge_exhausted';
@@ -105,11 +111,34 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
         else if (urgent || now.getTime() - Date.parse(last.at) >= stuckAfterMs) out.did_not_advance.push(row);
         else out.in_flight.push(row);
     }
+    // Oldest stuck first: longest since the last recorded step, ties by topic then version.
+    const oldestFirst = (a: TopicProgress, b: TopicProgress) => Date.parse(a.last_at) - Date.parse(b.last_at)
+        || (a.topic_id < b.topic_id ? -1 : a.topic_id > b.topic_id ? 1 : 0) || (a.topic_version < b.topic_version ? -1 : a.topic_version > b.topic_version ? 1 : 0);
+    out.advanced.sort(oldestFirst); out.did_not_advance.sort(oldestFirst); out.in_flight.sort(oldestFirst);
     return out;
 }
 
+/** Printed text for each reason (Content Manager review E1 to E5). The code stays the stable key. */
+export function reasonText(t: TopicProgress): string {
+    switch (t.stuck_reason) {
+        case 'judge_exhausted': return 'Judge job recorded as exhausted after its bounded attempts (max 3); needs human review.';
+        case 'no_state_change': return `No state change recorded; last recorded step: ${t.last_stage}.`;
+        case 'judge_rejected': return 'Judge rejected the claims (validation failed); no state change recorded since.';
+        case 'escalated_no_channel_delivered': return 'Alert raised; no channel record says sent (no record is not proof that nothing was sent).';
+        case 'escalated_unacknowledged': return `Alert sent on ${t.channels_sent.join(', ')} (send receipt, not proof it was read); no acknowledgement recorded.`;
+        default: return '';
+    }
+}
+
+/** Every alert_channel outcome from the records; 'no record' only when the topic has no alert_channel row at all (E6). */
+function channelRecords(t: TopicProgress): string {
+    const parts = ([['sent', t.channels_sent], ['failed', t.channels_failed], ['skipped', t.channels_skipped]] as const)
+        .filter(([, chs]) => chs.length > 0).map(([outcome, chs]) => `${outcome}: ${chs.join(',')}`);
+    return parts.join('; ') || 'no record';
+}
+
 export function renderProgressReport(r: ProgressReport): string {
-    const line = (t: TopicProgress) => `- topic ${t.topic_id} v${t.topic_version} | ${t.stuck_reason ?? 'advanced'} | last ${t.last_stage} at ${t.last_at} | queue wait ${t.queue_wait_s ?? 'n/a'}s, inference ${t.inference_s ?? 'n/a'}s | alert channels sent: ${t.channels_sent.join(',') || 'no record'}${t.channels_failed.length ? ` (failed: ${t.channels_failed.join(',')})` : ''} | correlation ${t.correlation_ids.join(',')}`;
+    const line = (t: TopicProgress) => `- topic ${t.topic_id} v${t.topic_version} | ${t.stuck_reason ? `${t.stuck_reason}: ${reasonText(t)}` : 'advanced'} | last ${t.last_stage} at ${t.last_at} | queue wait ${t.queue_wait_s ?? 'n/a'}s, inference ${t.inference_s ?? 'n/a'}s | alert channel records: ${channelRecords(t)} | acknowledged: ${t.acknowledged_at ? `recorded ${t.acknowledged_at}` : 'no record'} | correlation ${t.correlation_ids.join(',')}`;
     return [`# Judge progress (records only) ${r.generated_at}`, `## Did not advance (${r.did_not_advance.length})`, ...r.did_not_advance.map(line),
         `## In flight (${r.in_flight.length})`, ...r.in_flight.map(line), `## Advanced (${r.advanced.length})`, ...r.advanced.map(line)].join('\n');
 }

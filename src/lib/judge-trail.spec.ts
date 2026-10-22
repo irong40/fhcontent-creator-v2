@@ -44,6 +44,68 @@ describe('progress report', () => {
     });
 });
 
+describe('stuck-topic report wording (content-manager review E1 to E9)', () => {
+    const render = (events: TrailEvent[]) => renderProgressReport(buildProgressReport(events, now));
+    const lineFor = (out: string, topic: string) => out.split('\n').find(l => l.startsWith(`- topic ${topic} `)) ?? '';
+    // The stable code escalated_no_channel_delivered is a key, not wording; the banned-word check looks at everything else.
+    const prose = (out: string) => out.replace(/escalated_no_channel_delivered/g, '');
+    const noBanned = (out: string) => { for (const w of ['no alert', 'delivered', 'finished']) expect(prose(out).toLowerCase()).not.toContain(w); };
+    const base = [ev('inference_done', 10, 't1', { exhausted: true }), ev('escalated', 20)];
+    const viaDb = [...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped' }), ev('alert_channel', 21, 't1', { channel: 'resend', outcome: 'failed' }), ev('alert_channel', 22, 't1', { channel: 'db', outcome: 'sent' })];
+
+    it('viaDb: E5 text naming db, every outcome in the channel field, no acknowledgement (E5 E6 E7 E8)', () => {
+        const out = render(viaDb);
+        const l = lineFor(out, 't1');
+        expect(l).toContain('escalated_unacknowledged: Alert sent on db (send receipt, not proof it was read); no acknowledgement recorded.');
+        expect(l).toContain('alert channel records: sent: db; failed: resend; skipped: webhook');
+        expect(l).toContain('acknowledged: no record');
+        expect(out).not.toContain('alert channels sent:');
+        noBanned(out);
+    });
+    it('only a skipped channel row: E4 text, skipped shown, channel field is not "no record" (E4 E6)', () => {
+        const out = render([...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped' })]);
+        const l = lineFor(out, 't1');
+        expect(l).toContain('Alert raised; no channel record says sent (no record is not proof that nothing was sent).');
+        expect(l).toContain('alert channel records: skipped: webhook');
+        expect(l).not.toContain('alert channel records: no record');
+        noBanned(out);
+    });
+    it('no alert_channel row at all prints "no record" in the channel field (E6)', () => {
+        const l = lineFor(render(base), 't1');
+        expect(l).toContain('alert channel records: no record');
+    });
+    it('enqueued and claimed only, older than 30 min: E2 text with last recorded step: claimed (E2)', () => {
+        const out = render([ev('enqueued', 0), ev('claimed', 60)]);
+        expect(lineFor(out, 't1')).toContain('no_state_change: No state change recorded; last recorded step: claimed.');
+        noBanned(out);
+    });
+    it('exhausted and rejected texts (E1 E3)', () => {
+        const ex = lineFor(render([ev('enqueued', 0), ev('inference_done', 100, 't1', { exhausted: true })]), 't1');
+        expect(ex).toContain('judge_exhausted: Judge job recorded as exhausted after its bounded attempts (max 3); needs human review.');
+        const rj = render([ev('inference_done', 100), ev('validated', 101, 't1', { ok: false })]);
+        expect(lineFor(rj, 't1')).toContain('judge_rejected: Judge rejected the claims (validation failed); no state change recorded since.');
+        noBanned(rj);
+    });
+    it('an acknowledged topic prints acknowledged: recorded <at> (E7)', () => {
+        const l = lineFor(render([...viaDb, ev('acknowledged', 30)]), 't1');
+        expect(l).toContain(`acknowledged: recorded ${at(30)}`);
+        expect(l).not.toContain('acknowledged: no record');
+    });
+    it('oldest last_at first in every section, ties by topic then version (E9)', () => {
+        // first-seen order is c, a, b; last_at order is a (100), b (100, ties after a), c (900)
+        const out = render([ev('claimed', 900, 'c'), ev('claimed', 100, 'a'), ev('claimed', 100, 'b')]);
+        expect(out.indexOf('- topic a ')).toBeLessThan(out.indexOf('- topic b '));
+        expect(out.indexOf('- topic b ')).toBeLessThan(out.indexOf('- topic c '));
+        const v = (topic: string, version: string, s: number): TrailEvent => ({ ...ev('claimed', s, topic), topic_version: version });
+        const ties = render([v('a', 'v2', 100), v('a', 'v1', 100)]);
+        expect(ties.indexOf('topic a vv1 ')).toBeLessThan(ties.indexOf('topic a vv2 '));
+        const adv = render([ev('state_changed', 500, 'late', { advanced: true }), ev('state_changed', 50, 'early', { advanced: true })]);
+        expect(adv.indexOf('- topic early ')).toBeLessThan(adv.indexOf('- topic late '));
+        const fresh = render([ev('enqueued', 3 * 3600 - 10, 'newer'), ev('enqueued', 3 * 3600 - 60, 'older')]);
+        expect(fresh.indexOf('- topic older ')).toBeLessThan(fresh.indexOf('- topic newer '));
+    });
+});
+
 describe('recordTrail', () => {
     it('swallows a database failure and never throws', async () => {
         const client = { from: () => ({ insert: vi.fn().mockRejectedValue(new Error('down')) }) };
