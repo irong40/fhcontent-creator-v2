@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { createAdminClient } from './supabase/server';
-import { correlationId, recordTrail } from './judge-trail';
+import { recordTrailOnce, topicCorrelationId } from './judge-trail';
 
 const requestSchema = z.object({
     requestKey: z.string().trim().min(1).max(256),
@@ -25,7 +25,7 @@ type QueueRow = {
     max_tokens: number; response_schema: Record<string, unknown> | null; model: string;
     status: 'queued' | 'running' | 'succeeded' | 'failed'; result_text: string | null;
     input_tokens: number | null; output_tokens: number | null;
-    created_at?: string; first_claimed_at?: string | null;
+    created_at?: string; first_claimed_at?: string | null; updated_at?: string;
 };
 // This isolated migration's transport types avoid changing generated business types.
 type QueueDatabase = { public: {
@@ -74,30 +74,38 @@ export async function getOrEnqueueLocalInference(input: LocalInferenceRequest): 
     const trace = input.trace;
     const requestKey = createHash('sha256').update(canonical({ version: 1, ...request, schema: request.schema ?? null })).digest('hex');
     const db = createAdminClient() as unknown as SupabaseClient<QueueDatabase>;
-    const { error: insertError } = await db.from('local_inference_jobs').upsert({
+    const cid = trace ? topicCorrelationId(trace.topicId, trace.topicVersion) : null;
+    const { data: inserted, error: insertError } = await db.from('local_inference_jobs').upsert({
         request_key: requestKey, system_prompt: request.system, user_prompt: request.user,
         max_tokens: request.maxTokens, response_schema: request.schema ?? null, model: request.model,
-        ...(trace ? { correlation_id: correlationId(trace.topicId, trace.topicVersion, requestKey), topic_id: trace.topicId, topic_version: trace.topicVersion } : {}),
-    }, { onConflict: 'request_key', ignoreDuplicates: true }).select('id');
+        ...(trace && cid ? { correlation_id: cid, topic_id: trace.topicId, topic_version: trace.topicVersion } : {}),
+    }, { onConflict: 'request_key', ignoreDuplicates: true }).select('id,created_at');
     if (insertError) throw new Error(`Local inference enqueue failed (${insertError.code ?? 'database'}); no cloud fallback`);
+    // HR-7: a job waiting in the queue is a recorded step, so a topic stuck there shows in the report.
+    // ignoreDuplicates returns only a row this call inserted; a repeat call (or a key another topic queued) writes nothing here.
+    const fresh = Array.isArray(inserted) ? inserted[0] as { id?: string; created_at?: string } | undefined : undefined;
+    if (trace && cid && fresh?.id) {
+        await recordTrailOnce(db, { correlation_id: cid, stage: 'enqueued', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: fresh.id, ...(fresh.created_at ? { at: fresh.created_at } : {}), detail: { request_key: requestKey } }, { job_id: fresh.id });
+    }
     const { data: row, error } = await db.from('local_inference_jobs')
-        .select((trace ? 'id,status,result_text,input_tokens,output_tokens,created_at,first_claimed_at' : 'id,status,result_text,input_tokens,output_tokens') as 'id,status,result_text,input_tokens,output_tokens,created_at,first_claimed_at').eq('request_key', requestKey).single();
+        .select((trace ? 'id,status,result_text,input_tokens,output_tokens,created_at,first_claimed_at,updated_at' : 'id,status,result_text,input_tokens,output_tokens') as 'id,status,result_text,input_tokens,output_tokens,created_at,first_claimed_at,updated_at').eq('request_key', requestKey).single();
     if (error || !row) throw new Error(`Local inference read failed (${error?.code ?? 'missing'}); no cloud fallback`);
     if (row.status === 'queued' || row.status === 'running') throw new LocalInferencePendingError(row.id);
     if (row.status === 'failed') {
         // Exhaustion is a recorded fact, not only a thrown string: the report reads it as judge_exhausted.
-        if (trace) await recordTrail(db, { correlation_id: correlationId(trace.topicId, trace.topicVersion, requestKey), stage: 'inference_done', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, detail: { exhausted: true } });
+        // Written once per job, stamped with the job's finish time; a retry of the exhausted job writes nothing.
+        if (trace && cid) await recordTrailOnce(db, { correlation_id: cid, stage: 'inference_done', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, ...(row.updated_at ? { at: row.updated_at } : {}), detail: { exhausted: true, request_key: requestKey } }, { job_id: row.id });
     }
     if (row.status === 'failed') throw new Error(`Local inference job ${row.id} exhausted its bounded attempts; human review required`);
     if (row.status !== 'succeeded' || !row.result_text?.trim() || !Number.isInteger(row.input_tokens) || !Number.isInteger(row.output_tokens) || row.input_tokens! < 0 || row.output_tokens! < 0) {
         throw new Error('Invalid local inference completion; human review required');
     }
-    if (trace) {
-        // Queue wait and inference time come from the job row (first_claimed_at); the worker is unchanged.
-        const cid = correlationId(trace.topicId, trace.topicVersion, requestKey);
+    if (trace && cid) {
+        // Queue wait and inference time come from the job row (first_claimed_at, updated_at = finish); the worker is unchanged.
+        // Once per job: a cached read of a finished job writes nothing, so last_at and oldest-first order stay put.
         const waitMs = row.first_claimed_at && row.created_at ? Date.parse(row.first_claimed_at) - Date.parse(row.created_at) : null;
-        if (row.first_claimed_at) await recordTrail(db, { correlation_id: cid, stage: 'claimed', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, at: row.first_claimed_at, detail: { queue_wait_ms: waitMs } });
-        await recordTrail(db, { correlation_id: cid, stage: 'inference_done', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, detail: { exhausted: false, output_tokens: row.output_tokens } });
+        if (row.first_claimed_at) await recordTrailOnce(db, { correlation_id: cid, stage: 'claimed', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, at: row.first_claimed_at, detail: { queue_wait_ms: waitMs, request_key: requestKey } }, { job_id: row.id });
+        await recordTrailOnce(db, { correlation_id: cid, stage: 'inference_done', topic_id: trace.topicId, topic_version: trace.topicVersion, job_id: row.id, ...(row.updated_at ? { at: row.updated_at } : {}), detail: { exhausted: false, output_tokens: row.output_tokens, request_key: requestKey } }, { job_id: row.id });
     }
     return { text: row.result_text, inputTokens: row.input_tokens!, outputTokens: row.output_tokens! };
 }

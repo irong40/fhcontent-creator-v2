@@ -7,7 +7,8 @@ vi.mock('@/lib/supabase/server', () => ({
     }),
     createAdminClient: () => ({
         from: () => ({
-            select: () => ({ eq: () => ({ eq: () => ({ order: () => ({ limit: () => ({ maybeSingle: async () => lastRow() }) }) }) }) }),
+            // Own alert_channel row by error id (maybeSingle), then recordTrailOnce's existing-row check (none).
+            select: () => { const q: Record<string, unknown> = { limit: () => Object.assign(Promise.resolve({ data: [], error: null }), { maybeSingle: async () => lastRow() }) }; q.eq = () => q; return q; },
             insert,
         }),
     }),
@@ -20,7 +21,7 @@ describe('acknowledge writes the HR-7 acknowledged trail row (mocks only)', () =
     beforeEach(() => { vi.clearAllMocks(); insert.mockResolvedValue({ error: null }); });
     it('writes one acknowledged row with the topic correlation id', async () => {
         errorRow.mockResolvedValue({ data: { id: 'e1', topic_id: 't1' }, error: null });
-        lastRow.mockResolvedValue({ data: { correlation_id: 'c1', topic_version: 'v1' } });
+        lastRow.mockResolvedValue({ data: { correlation_id: 'c1', topic_id: 't1', topic_version: 'v1' } });
         const res = await call({ acknowledged: true });
         expect(res.status).toBe(200);
         expect(insert).toHaveBeenCalledTimes(1);

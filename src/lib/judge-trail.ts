@@ -30,6 +30,15 @@ export function correlationId(topicId: string, topicVersion: string, requestKey:
     return createHash('sha256').update(`${topicId}\n${topicVersion}\n${requestKey}`).digest('hex').slice(0, 24);
 }
 
+/**
+ * The ONE id every stage of a topic+version carries: queue, inference, validation, business state,
+ * escalation, alert channels and acknowledgement. A topic can send several judge requests (one per
+ * piece), so the request key is kept in each queue row's detail.request_key, not in the id.
+ */
+export function topicCorrelationId(topicId: string, topicVersion: string): string {
+    return correlationId(topicId, topicVersion, 'content-generator');
+}
+
 type TrailDatabase = { public: { Tables: { judge_trail: { Row: TrailEvent; Insert: TrailEvent; Update: Partial<TrailEvent>; Relationships: [] } };
     Views: Record<string, never>; Functions: Record<string, never> } };
 
@@ -39,6 +48,24 @@ export async function recordTrail(client: unknown, event: Omit<TrailEvent, 'at'>
         const db = client as SupabaseClient<TrailDatabase>;
         const { error } = await db.from('judge_trail').insert({ ...event, at: event.at ?? new Date().toISOString() });
         return !error;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Writes the row only if no row with the same id, stage and `key` fields exists yet, so a repeat
+ * read or a retry does not rewrite it (and move last_at). If the check itself fails nothing is
+ * written: a missing row is safer than a duplicate. Returns true only when a row was written.
+ */
+export async function recordTrailOnce(client: unknown, event: Omit<TrailEvent, 'at'> & { at?: string }, key: Record<string, string>): Promise<boolean> {
+    try {
+        const db = client as SupabaseClient<TrailDatabase>;
+        let q = db.from('judge_trail').select('stage').eq('correlation_id', event.correlation_id).eq('stage', event.stage);
+        for (const [k, v] of Object.entries(key)) q = q.eq(k as 'stage', v as TrailStage);
+        const { data, error } = await q.limit(1);
+        if (error || !Array.isArray(data) || data.length > 0) return false;
+        return await recordTrail(client, event);
     } catch {
         return false;
     }
@@ -100,7 +127,9 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
             topic_id: last.topic_id, topic_version: last.topic_version,
             correlation_ids: [...new Set(sorted.map(e => e.correlation_id))],
             last_stage: last.stage, last_at: last.at,
-            queue_wait_s: secs(first('enqueued')?.at, first('claimed')?.at),
+            // From the enqueued row; if that write was lost, from the wait the claimed row recorded off the job row.
+            queue_wait_s: secs(first('enqueued')?.at, first('claimed')?.at)
+                ?? (typeof first('claimed')?.detail?.queue_wait_ms === 'number' ? Math.max(0, Math.round((first('claimed')!.detail!.queue_wait_ms as number) / 1000)) : null),
             inference_s: secs(first('claimed')?.at, sorted.find(e => e.stage === 'inference_done')?.at),
             advanced, stuck_reason: reason, channels_sent: [...sent], channels_failed: [...failed],
             channels_skipped: [...skipped], acknowledged_at: acknowledgedAt,

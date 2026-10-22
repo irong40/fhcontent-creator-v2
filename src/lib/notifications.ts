@@ -58,17 +58,20 @@ export async function notifyError(context: {
 
     // DB persistence for in-app notification bell + admin page.
     // Fire-and-forget: a DB outage must not silence the email/webhook channels.
+    // HR-7: the errors row id goes on each alert_channel row, so an acknowledgement joins THIS alert exactly.
+    let errorId: string | null = null;
     try {
         const supabase = createAdminClient();
-        const { error: insertError } = await supabase.from('errors').insert({
+        const { data: inserted, error: insertError } = await supabase.from('errors').insert({
             source: context.source,
             message: context.message,
             topic_id: context.topicId ?? null,
             persona_name: context.personaName ?? null,
             environment,
             severity: context.severity ?? 'error',
-        });
+        }).select('id').maybeSingle();
         outcomes.db = insertError ? 'failed' : 'sent';
+        errorId = (inserted as { id?: string } | null)?.id ?? null;
         if (insertError) console.error('[notifications] DB persist failed:', insertError.message);
     } catch (e) {
         outcomes.db = 'failed';
@@ -83,7 +86,7 @@ export async function notifyError(context: {
                 await recordTrail(supabase, {
                     correlation_id: context.trail.correlationId, stage: 'alert_channel',
                     topic_id: context.topicId, topic_version: context.trail.topicVersion,
-                    detail: { channel, outcome, source: context.source },
+                    detail: { channel, outcome, source: context.source, ...(errorId ? { error_id: errorId } : {}) },
                 });
             }
         } catch { /* trail is best effort */ }
