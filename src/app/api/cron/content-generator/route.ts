@@ -259,7 +259,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     const claimPoints = topic.historical_points as HistoricalPoint[];
                     if (hasSourcePassages(claimPoints)) {
                         const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
-                        const specifics = unsupportedSpecifics(claimPoints, generated);
+                        const specifics = unsupportedSpecifics(claimPoints, generated, { title: topic.title });
                         if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
                         const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user));
                         if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
