@@ -188,8 +188,8 @@ export function reasonText(t: TopicProgress): string {
         case 'judge_exhausted': return 'Judge job recorded as exhausted after its bounded attempts (max 3); needs human review.';
         case 'no_state_change': return `No state change recorded; last recorded step: ${t.last_stage}.`;
         case 'judge_rejected': return 'Judge rejected the claims (validation failed); no state change recorded since.';
-        case 'escalated_no_channel_delivered': return 'Alert raised; no channel record says sent (no record is not proof that nothing was sent).';
-        case 'escalated_unacknowledged': return `Alert sent on ${t.escalation_channels_sent.join(', ')} (send receipt, not proof it was read); no acknowledgement recorded.`;
+        case 'escalated_no_channel_delivered': return 'Alert raised; no channel record for the latest alert says sent (no record is not proof that nothing was sent).';
+        case 'escalated_unacknowledged': return `Latest alert sent on ${t.escalation_channels_sent.join(', ')} (send receipt, not proof it was read); no acknowledgement recorded.`;
         default: return '';
     }
 }
@@ -202,7 +202,7 @@ function channelRecords(t: TopicProgress): string {
 }
 
 export function renderProgressReport(r: ProgressReport): string {
-    const line = (t: TopicProgress) => `- topic ${t.topic_id} v${t.topic_version} | ${t.stuck_reason ? `${t.stuck_reason}: ${reasonText(t)}` : 'advanced'} | last ${t.last_stage} at ${t.last_at} | queue wait ${t.queue_wait_s ?? 'n/a'}s, inference ${t.inference_s ?? 'n/a'}s | alert channel records: ${channelRecords(t)} | acknowledged: ${t.acknowledged_at ? `recorded ${t.acknowledged_at}` : 'no record'} | correlation ${t.correlation_ids.join(',')}`;
+    const line = (t: TopicProgress) => `- topic ${t.topic_id} v${t.topic_version} | ${t.stuck_reason ? `${t.stuck_reason}: ${reasonText(t)}` : 'advanced'} | last ${t.last_stage} at ${t.last_at} | queue wait ${t.queue_wait_s ?? 'n/a'}s, inference ${t.inference_s ?? 'n/a'}s | alert channel records (all alerts): ${channelRecords(t)} | acknowledged (latest alert): ${t.acknowledged_at ? `recorded ${t.acknowledged_at}` : 'no record'} | correlation ${t.correlation_ids.join(',')}`;
     return [`# Judge progress (records only) ${r.generated_at}`, `## Did not advance (${r.did_not_advance.length})`, ...r.did_not_advance.map(line),
         `## In flight (${r.in_flight.length})`, ...r.in_flight.map(line), `## Advanced (${r.advanced.length})`, ...r.advanced.map(line)].join('\n');
 }
