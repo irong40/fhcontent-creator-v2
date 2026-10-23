@@ -17,8 +17,11 @@
 import { createHash } from 'node:crypto';
 import { getOrEnqueueLocalInference } from '@/lib/local-inference-queue';
 
-type Point = { claim?: string | null; quote?: string | null };
+type Point = { claim?: string | null; quote?: string | null; source?: string | null; year?: string | number | null };
 type Piece = Record<string, unknown>;
+/** The topic's own fields a specific may also come from (2026-10-22: the quote video's on-screen
+ *  credit line is built from the title's figure name and point 1's source line and year). */
+type TopicFields = { title?: string | null };
 
 const FIELDS = ['script', 'captionLong', 'captionShort', 'title'];
 
@@ -53,16 +56,146 @@ function textFields(piece: Piece): Array<[string, string]> {
     return out;
 }
 
-/** Years and numbers in a piece that no point or source passage holds. */
-export function unsupportedSpecifics(points: Point[] | null | undefined, pieces: Piece[]): string[] {
+// ---- Specifics (years and numbers) --------------------------------------------------------
+// 2026-10-22: the first version read digits only from each point's claim and quote, so it
+// rejected numbers the topic does hold: "1967" on the quote video's own credit line (built
+// from point 1's source line and year), "87" where the passage says "eighty-seven", "1880s"
+// where the passage gives 1881-1882, "19th century" where every year is 1875-1895. A number
+// is now held when any passage, source line, year or the topic title holds it, in digits or
+// in words, or when it names a decade or century one of those years falls in. A number found
+// nowhere is still rejected.
+
+const UNITS: Record<string, number> = {
+    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+};
+const TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const ORDINAL_UNITS: Record<string, number> = {
+    first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10,
+    eleventh: 11, twelfth: 12, thirteenth: 13, fourteenth: 14, fifteenth: 15, sixteenth: 16, seventeenth: 17, eighteenth: 18, nineteenth: 19,
+};
+const ORDINAL_TENS: Record<string, number> = { twentieth: 20, thirtieth: 30, fortieth: 40, fiftieth: 50, sixtieth: 60, seventieth: 70, eightieth: 80, ninetieth: 90 };
+const SCALES: Record<string, number> = { hundred: 100, thousand: 1_000, million: 1_000_000, billion: 1_000_000_000 };
+const ORDINAL_SCALES: Record<string, number> = { hundredth: 100, thousandth: 1_000, millionth: 1_000_000 };
+
+/** The value of one number word ("eighty", "seventh"), or null. Hyphenated parts are split first. */
+function smallWord(w: string): number | null {
+    return UNITS[w] ?? TENS[w] ?? ORDINAL_UNITS[w] ?? ORDINAL_TENS[w] ?? null;
+}
+
+/** Numbers written in words ("eighty-seven", "Nineteenth", "one hundredth", "three billion"),
+ *  as digit strings. A run ending in a scale word also yields its count ("three billion" -> 3),
+ *  since "$3 billion" puts only the 3 in digits. */
+export function wordNumbers(text: string): string[] {
+    const out: string[] = [];
+    // Hyphenated words are read part by part: "eighty-seven" is 80 then 7, "five-year" is 5.
+    const tokens = text.toLowerCase().match(/[a-z]+/g) ?? [];
+    let total = 0, current = 0, count: number | null = null, inRun = false;
+    const flush = () => {
+        if (inRun) {
+            out.push(String(total + current));
+            if (count !== null) out.push(String(count));
+        }
+        total = 0; current = 0; count = null; inRun = false;
+    };
+    for (const token of tokens) {
+        const v = smallWord(token);
+        if (v !== null) {
+            // A word joins the run only where English joins it: a unit after a bare ten
+            // ("eighty seven"), or anything under 100 after a hundred ("one hundred fifty").
+            // "one two" is two numbers, not three.
+            const joins = inRun && (
+                (current === 0 && total > 0) // after a thousand, million or billion
+                || (current % 100 >= 20 && current % 10 === 0 && v < 10)
+                || (current % 100 === 0 && current > 0 && v < 100));
+            if (inRun && !joins) flush();
+            current += v;
+            inRun = true;
+            continue;
+        }
+        const scale = SCALES[token] ?? ORDINAL_SCALES[token];
+        if (scale !== undefined) {
+            const base = inRun ? current || 1 : 1;
+            if (scale >= 1_000) { count = base; total += base * scale; current = 0; } else { current = base * scale; }
+            inRun = true;
+            continue;
+        }
+        if (inRun && token === 'and') continue; // "one hundred and fifty"
+        flush();
+    }
+    flush();
+    return out;
+}
+
+const NUMBER_RE = /\d[\d,.]*\d|\d/g;
+const clean = (n: string) => n.replace(/,/g, '');
+
+/** Every number the topic holds (digits and words) and the full years among them. */
+function heldNumbers(texts: string[]): { held: Set<string>; years: number[] } {
+    const held = new Set<string>();
+    for (const t of texts) {
+        for (const n of t.match(NUMBER_RE) ?? []) held.add(clean(n));
+        for (const n of wordNumbers(t)) held.add(n);
+    }
+    const years = [...held].map(Number).filter(n => Number.isInteger(n) && n >= 1000 && n <= 2100);
+    return { held, years };
+}
+
+type Specific = { shown: string; value: string; range?: [number, number] };
+
+/** The numbers a text states, read with what follows them: a decade ("1880s"), a century
+ *  ("19th century", "early 1900s") or a year range ("1881-82", whose end year is 1882). */
+function specificsIn(text: string): Specific[] {
+    const out: Specific[] = [];
+    const re = /\d[\d,.]*\d|\d/g;
+    for (const m of text.matchAll(re)) {
+        const shown = m[0];
+        const value = clean(shown);
+        const after = text.slice(m.index + shown.length, m.index + shown.length + 16);
+        const before = text.slice(Math.max(0, m.index - 6), m.index);
+        const n = Number(value);
+        // Decade or century: "1880s", "1900s".
+        if (/^'?s\b/.test(after) && /^\d{3}0$/.test(value)) {
+            const span: [number, number] = value.endsWith('00') ? [n, n + 99] : [n, n + 9];
+            out.push({ shown: `${shown}s`, value, range: span });
+            continue;
+        }
+        // Century by ordinal: "19th century", "20th-century".
+        if (/^(st|nd|rd|th)[\s-]+centur(y|ies)\b/i.test(after) && n >= 1 && n <= 21) {
+            out.push({ shown: `${shown}${after.match(/^(st|nd|rd|th)/i)![0]} century`, value, range: [(n - 1) * 100 + 1, n * 100] });
+            continue;
+        }
+        // End of an abbreviated year range: the "82" of "1881-82" is the year 1882.
+        const start = before.match(/(\d{4})\s*[-–—]\s*$/);
+        if (start && /^\d{2}$/.test(value)) {
+            out.push({ shown, value: `${start[1].slice(0, 2)}${value}` });
+            continue;
+        }
+        out.push({ shown, value });
+    }
+    return out;
+}
+
+/** Years and numbers in a piece that no point, source line, year or topic title holds. */
+export function unsupportedSpecifics(points: Point[] | null | undefined, pieces: Piece[], topic: TopicFields = {}): string[] {
     const sources = sourcesOf(points);
     if (!sources) return [];
-    const held = new Set(sources.join(' ').match(/\d[\d,.]*\d|\d/g) ?? []);
+    const list = Array.isArray(points) ? points : [];
+    const texts = [
+        ...sources,
+        ...list.flatMap(p => [p.source ?? '', p.year == null ? '' : String(p.year)]),
+        topic.title ?? '',
+    ].filter(t => t.length > 0);
+    const { held, years } = heldNumbers(texts);
     const faults: string[] = [];
     for (const piece of pieces) {
         for (const [field, text] of textFields(piece)) {
-            for (const n of new Set(text.match(/\d[\d,.]*\d|\d/g) ?? [])) {
-                if (!held.has(n)) faults.push(`${String(piece.pieceType)} ${field} states "${n}", which no source passage holds`);
+            const seen = new Set<string>();
+            for (const s of specificsIn(text)) {
+                const ok = held.has(s.value) || (s.range !== undefined && years.some(y => y >= s.range![0] && y <= s.range![1]));
+                if (ok || seen.has(s.shown)) continue;
+                seen.add(s.shown);
+                faults.push(`${String(piece.pieceType)} ${field} states "${s.shown}", which no source passage holds`);
             }
         }
     }
