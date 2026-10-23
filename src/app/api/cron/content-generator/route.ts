@@ -8,6 +8,7 @@ import { buildContentPrompt } from '@/lib/prompts';
 import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSourceSentence, unquoteUnsourced } from '@/lib/quote-check';
 import { UNSUPPORTED_CLAIM_ERROR, callJudge, hasSourcePassages, judgeClaims, unsupportedSpecifics } from '@/lib/claim-check';
 import { estimateClaudeCost } from '@/lib/utils';
+import { releaseDraftHolds } from '@/lib/draft-hold';
 import { notifyError } from '@/lib/notifications';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
@@ -117,6 +118,7 @@ export async function GET(request: Request) {
                     content_ready_at: new Date().toISOString(),
                     coo_auto_approved_at: null,
                 }).eq('id', topic.id);
+                await releaseDraftHolds(topic.id);
                 topicResult.piecesInserted = existingCount;
                 results.push(topicResult);
                 continue;
@@ -180,6 +182,9 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
 
                     const response = await generateQueuedContent({
                         requestKey: `content:${topic.id}:captions:${topic.retry_count ?? 0}`,
+                        // Held until this attempt passes or fails, so a run that finds the claim
+                        // judge unfinished checks the same draft next run (draft-hold.ts).
+                        holdForTopic: topic.id,
                         system: captionsSystem.replace('Call the `emit_quote_captions` tool', 'Return JSON'),
                         user,
                         schema: QUOTE_CAPTIONS_TOOL_SCHEMA,
@@ -202,6 +207,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     // Standard 6-piece path: unchanged text-mode generation.
                     const response = await generateQueuedContent({
                         requestKey: `content:${topic.id}:pieces:${topic.retry_count ?? 0}`,
+                        holdForTopic: topic.id,
                         // Reserve enough input room for the actual ~9 KB source
                         // prompts. Output truncation still fails worker validation.
                         system, user, maxTokens: process.env.CONTENT_INFERENCE_PROVIDER === 'ollama' ? 6144 : 8192,
@@ -315,6 +321,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     coo_auto_approved_at: null,
                 }).eq('id', topic.id);
                 if (statusError) throw new Error(statusError.message);
+                await releaseDraftHolds(topic.id);
                 topicResult.piecesInserted = piecesInserted;
             } catch (e) {
                 if (e instanceof LocalInferencePendingError) {
@@ -326,6 +333,9 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     continue;
                 }
                 const errMsg = e instanceof Error ? e.message : 'unknown';
+                // The attempt failed: its held draft must not be reused. The next attempt
+                // (retry_count + 1, a new prompt) gets a new draft.
+                await releaseDraftHolds(topic.id);
                 // Circuit-breaker: count the attempt; once retries are exhausted
                 // hold the topic for manual review (requires_review excludes it
                 // from the draft-selection query) instead of resetting to
