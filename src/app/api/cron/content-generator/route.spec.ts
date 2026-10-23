@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), updates: [] as Record<string, unknown>[], inserts: [] as unknown[], existing: 0, topic: {} as Record<string, unknown> }));
+const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], inserts: [] as unknown[], existing: 0, topic: {} as Record<string, unknown> }));
 vi.mock('@/lib/content-inference', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/content-inference')>(), generateQueuedContent: state.generate }));
 vi.mock('@/lib/claim-check', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/claim-check')>(), callJudge: state.judge }));
 vi.mock('@/lib/local-inference-queue', () => ({ LocalInferencePendingError: class extends Error {} }));
 vi.mock('@/lib/prompts', () => ({ buildContentPrompt: () => ({ system: 'system', user: 'source' }) }));
 vi.mock('@/lib/notifications', () => ({ notifyError: vi.fn() }));
+vi.mock('@/lib/draft-hold', () => ({ releaseDraftHolds: state.release }));
 vi.mock('@/lib/workflow-lock', () => ({ acquireLock: async () => 'lock', releaseLock: vi.fn() }));
 vi.mock('../middleware', () => ({ validateCronSecret: () => true }));
 vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (table: string) => {
@@ -110,5 +111,48 @@ describe('local content consumption', () => {
         await GET(new Request('https://fixture/api/cron/content-generator'));
         expect(state.generate).not.toHaveBeenCalled();
         expect(state.updates[0]).toMatchObject({ status: 'content_ready', requires_review: true, coo_auto_approved_at: null });
+    });
+
+    // 2026-10-22: a hosted draft is held while the claim judge works, then released.
+    describe('draft holds', () => {
+        const passPieces = () => sourcedPieces().map(p => ({ ...p, captionShort: 'caption' }));
+        it('asks for a held draft, and keeps it while the judge has not answered', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { historical_points: [lafayettePoint] };
+            state.generate.mockResolvedValue({ text: JSON.stringify({ pieces: passPieces() }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+            state.judge.mockRejectedValue(Object.assign(new LocalInferencePendingError('judge'), { name: 'LocalInferencePendingError' }));
+            const body = await (await GET(new Request('https://fixture/api/cron/content-generator'))).json();
+            expect(state.generate.mock.calls[0][0]).toMatchObject({ holdForTopic: 'fixture' });
+            expect(body.results[0].queued).toBe(true);
+            expect(state.release).not.toHaveBeenCalled();
+            expect(state.inserts).toHaveLength(0);
+        });
+        it('releases the held draft when the attempt passes', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { historical_points: [lafayettePoint] };
+            state.generate.mockResolvedValue({ text: JSON.stringify({ pieces: passPieces() }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+            state.judge.mockResolvedValue('{"unsupported":[]}');
+            await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect(state.inserts).toHaveLength(1);
+            expect(state.release).toHaveBeenCalledWith('fixture');
+        });
+        it('releases the held draft when the attempt fails, so the retry gets a new one', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { historical_points: [lafayettePoint] };
+            state.generate.mockResolvedValue({ text: JSON.stringify({ pieces: passPieces() }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+            state.judge.mockResolvedValue('{"unsupported":[{"claim":"x","reason":"y"}]}');
+            await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect(state.inserts).toHaveLength(0);
+            expect(state.release).toHaveBeenCalledWith('fixture');
+            expect(state.updates.at(-1)).toMatchObject({ status: 'draft', retry_count: 1 });
+        });
+        it('holds the quote video captions draft too', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { title: 'Figure: Words', personas: { name: 'Fixture', content_format: 'quote_video' }, historical_points: [{ ...lafayettePoint, claim: 'Words spoken here.' }] };
+            state.generate.mockResolvedValue({ text: JSON.stringify({ captionLong: 'caption', captionShort: 'caption' }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+            state.judge.mockResolvedValue('{"unsupported":[]}');
+            await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect(state.generate.mock.calls[0][0]).toMatchObject({ holdForTopic: 'fixture' });
+        });
     });
 });
