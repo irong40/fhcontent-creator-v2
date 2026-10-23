@@ -161,7 +161,7 @@ export async function GET(request: Request) {
                     ? [...new Set(rejectedSpans(priorQuoteFault).map(s => closestSourceSentence(s, retrySources)).filter((s): s is string => !!s))]
                     : [];
                 const retryReasons = [
-                    priorQuoteFault ? `${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.${copyThese.length ? `
+                    priorQuoteFault ? `${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation: write titles in plain text, never in quotation marks. Never put a summary or a paraphrase in quotation marks.${copyThese.length ? `
 If you quote the speaker, copy this sentence exactly, character for character, or leave the quotation marks out and describe it in your own words:
 ${copyThese.map(s => `"${s}"`).join('\n')}` : ''}` : null,
                     priorClaimFault ? `${priorClaimFault}. State only what a SOURCE PASSAGE above says. Leave out any year, number or claim that no SOURCE PASSAGE holds.` : null,
