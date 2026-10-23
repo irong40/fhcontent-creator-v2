@@ -91,18 +91,21 @@ beforeEach(() => {
     sendErrorAlert.mockResolvedValue(true);
 });
 
-const raise = (topicId: string, topicVersion: string, msg = 'm') =>
-    notifyError({ source: 'content-generator', message: msg, topicId, trail: { correlationId: topicCorrelationId(topicId, topicVersion), topicVersion } });
-const esc = (topicId: string, topicVersion: string, at: string) =>
-    db.tables.judge_trail = [...(db.tables.judge_trail ?? []), { correlation_id: topicCorrelationId(topicId, topicVersion), stage: 'escalated', topic_id: topicId, topic_version: topicVersion, at }];
+const raise = (topicId: string, topicVersion: string, msg = 'm', errorId?: string) =>
+    notifyError({ source: 'content-generator', message: msg, topicId, trail: { correlationId: topicCorrelationId(topicId, topicVersion), topicVersion, errorId } });
+// Rework r3: like the generator, the escalated row carries the error id notifyError then inserts under.
+const esc = (topicId: string, topicVersion: string, at: string, errorId: string) => {
+    db.tables.judge_trail = [...(db.tables.judge_trail ?? []), { correlation_id: topicCorrelationId(topicId, topicVersion), stage: 'escalated', topic_id: topicId, topic_version: topicVersion, at, detail: { reason: 'retries_exhausted', error_id: errorId } }];
+    return errorId;
+};
 describe('QA r1 independent', () => {
     it('QA1 two errors on ONE topic+version: ack of A must not make later unacked escalation B read acknowledged', async () => {
         vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-22T10:30:00Z'));
-        esc('t1', 'unversioned', '2026-10-22T10:30:00.000Z'); await raise('t1', 'unversioned', 'A');
+        await raise('t1', 'unversioned', 'A', esc('t1', 'unversioned', '2026-10-22T10:30:00.000Z', 'err-A'));
         vi.setSystemTime(new Date('2026-10-22T10:40:00Z'));
         await ack(db.tables.errors[0].id as string);
         vi.setSystemTime(new Date('2026-10-22T11:30:00Z'));
-        esc('t1', 'unversioned', '2026-10-22T11:30:00.000Z'); await raise('t1', 'unversioned', 'B');
+        await raise('t1', 'unversioned', 'B', esc('t1', 'unversioned', '2026-10-22T11:30:00.000Z', 'err-B'));
         vi.useRealTimers();
         const t = buildProgressReport(trail(), new Date('2026-10-22T12:00:00Z')).did_not_advance[0];
         console.log('QA1', JSON.stringify({ reason: t.stuck_reason, ack: t.acknowledged_at, last: t.last_stage }));
@@ -150,7 +153,7 @@ describe('QA r1 independent', () => {
         await PATCH({ json: async () => ({ acknowledged: false }) } as never, { params: Promise.resolve({ id }) });
         console.log('QA5 ack rows after unack', trail().filter(e => e.stage === 'acknowledged').length);
         // Rework r2: un-ack writes a revoked row; the report reads the topic as open again.
-        esc('t1', 'v1', '2026-10-22T09:00:00.000Z');
+        esc('t1', 'v1', '2026-10-22T09:00:00.000Z', id);
         const open = () => buildProgressReport(trail(), new Date('2099-01-01T00:00:00Z')).did_not_advance[0];
         expect(open().stuck_reason).toBe('escalated_unacknowledged');
         expect(open().acknowledged_at).toBeNull();
@@ -164,9 +167,9 @@ describe('QA r1 independent', () => {
         expect(open().acknowledged_at).toBe(acks[2].at);
     });
     it('QA1b ack of B (the latest escalation) closes it; ack of A alone never does', async () => {
-        esc('t1', 'unversioned', '2026-10-22T10:30:00.000Z'); await raise('t1', 'unversioned', 'A');
+        await raise('t1', 'unversioned', 'A', esc('t1', 'unversioned', '2026-10-22T10:30:00.000Z', 'err-A'));
         db.tables.judge_trail.filter(e => e.stage === 'alert_channel').forEach(e => { e.at = '2026-10-22T10:30:01.000Z'; });
-        esc('t1', 'unversioned', '2026-10-22T11:30:00.000Z'); await raise('t1', 'unversioned', 'B');
+        await raise('t1', 'unversioned', 'B', esc('t1', 'unversioned', '2026-10-22T11:30:00.000Z', 'err-B'));
         const [a, b] = db.tables.errors.map(e => e.id as string);
         await ack(a);
         const now = new Date('2099-01-01T00:00:00Z');
@@ -183,7 +186,7 @@ describe('QA r1 independent', () => {
             { ...base, stage: 'enqueued', job_id: 'j1', at: '2026-10-22T10:00:00.000Z' },
             { ...base, stage: 'claimed', job_id: 'j1', at: '2026-10-22T10:01:00.000Z' },
             { ...base, stage: 'claimed', job_id: 'j1', at: '2026-10-22T10:01:00.000Z' },
-            { ...base, stage: 'escalated', at: '2026-10-22T10:30:00.000Z' },
+            { ...base, stage: 'escalated', at: '2026-10-22T10:30:00.000Z', detail: { error_id: 'e1' } },
             { ...base, stage: 'alert_channel', at: '2026-10-22T10:30:01.000Z', detail: { channel: 'db', outcome: 'sent', error_id: 'e1' } },
             { ...base, stage: 'acknowledged', at: '2026-10-22T10:40:00.000Z', detail: { error_id: 'e1' } },
             { ...base, stage: 'acknowledged', at: '2026-10-22T10:40:00.001Z', detail: { error_id: 'e1' } },

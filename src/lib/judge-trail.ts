@@ -80,10 +80,10 @@ export type TopicProgress = {
     channels_sent: AlertChannel[]; channels_failed: AlertChannel[];
     /** Channels whose record says skipped. Together with sent and failed this is every alert_channel record. */
     channels_skipped: AlertChannel[];
-    /** Channels the LATEST escalation's own alert rows say sent; the escalation reasons read these. */
+    /** Channels the LATEST escalation's own alert rows (same detail.error_id) say sent; the escalation reasons read these. */
     escalation_channels_sent: AlertChannel[];
     /**
-     * When the latest escalation's own error was acknowledged (exact detail.error_id match, and not
+     * When the latest escalation's own error was acknowledged (ack detail.error_id equals the escalated row's, and not
      * revoked by a later un-acknowledge row), or null when no such acknowledgement is recorded.
      */
     acknowledged_at: string | null;
@@ -133,16 +133,20 @@ export function buildProgressReport(events: TrailEvent[], now: Date, stuckAfterM
             if (outcome === 'sent') sent.add(ch); else if (outcome === 'failed') failed.add(ch); else if (outcome === 'skipped') skipped.add(ch);
         }
         const advanced = sorted.some(e => e.stage === 'state_changed' && e.detail?.advanced === true);
-        // The LATEST escalation decides the reason. Its own alert rows are the alert_channel rows at or
-        // after it (the generator writes escalated, then notifyError writes one row per channel). An
-        // acknowledgement counts only when its detail.error_id is an error_id on those rows, so closing
-        // an earlier error on the same topic+version never closes a later one.
+        // The LATEST escalation decides the reason. Ownership is by exact identity, never by time: the
+        // escalated row carries detail.error_id (the generator picks the errors row id before it writes
+        // escalated, and notifyError puts that same id on each channel row). Its delivery is the
+        // alert_channel rows with that error_id, and an acknowledgement counts only when its
+        // detail.error_id equals it. A late row from an earlier error on the same topic+version carries
+        // the earlier id, so it neither delivers nor closes this one. No error_id on the escalation =
+        // identity unknown = no delivery and no acknowledgement (fail closed).
         const latestEscalation = [...sorted].reverse().find(e => e.stage === 'escalated');
         const escalated = latestEscalation !== undefined;
-        const ownRows = escalated ? channelRows.filter(e => Date.parse(e.at) >= Date.parse(latestEscalation.at)) : [];
+        const escalationErrorId = typeof latestEscalation?.detail?.error_id === 'string' && latestEscalation.detail.error_id !== ''
+            ? latestEscalation.detail.error_id : null;
+        const ownRows = escalationErrorId !== null ? channelRows.filter(e => e.detail?.error_id === escalationErrorId) : [];
         const ownSent = new Set<AlertChannel>(ownRows.filter(e => e.detail?.outcome === 'sent').map(e => e.detail?.channel as AlertChannel));
-        const ownErrorIds = new Set(ownRows.map(e => e.detail?.error_id).filter((x): x is string => typeof x === 'string'));
-        const acknowledgedAt = escalated ? effectiveAcknowledgement(sorted, ownErrorIds) : null;
+        const acknowledgedAt = escalationErrorId !== null ? effectiveAcknowledgement(sorted, new Set([escalationErrorId])) : null;
         const acknowledged = acknowledgedAt !== null;
         const exhausted = sorted.some(e => e.stage === 'inference_done' && e.detail?.exhausted === true);
         const rejected = sorted.some(e => e.stage === 'validated' && e.detail?.ok === false);
