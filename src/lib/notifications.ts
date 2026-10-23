@@ -19,7 +19,7 @@ export async function notifyError(context: {
     personaName?: string;
     severity?: 'error' | 'warning' | 'info';
     /** HR-7: when set, each channel's own outcome is written to judge_trail under this id. */
-    trail?: { correlationId: string; topicVersion: string };
+    trail?: { correlationId: string; topicVersion: string; errorId?: string };
 }): Promise<void> {
     const outcomes: Partial<Record<AlertChannel, ChannelOutcome>> = {};
     const environment = process.env.VERCEL_ENV || 'development';
@@ -59,10 +59,12 @@ export async function notifyError(context: {
     // DB persistence for in-app notification bell + admin page.
     // Fire-and-forget: a DB outage must not silence the email/webhook channels.
     // HR-7: the errors row id goes on each alert_channel row, so an acknowledgement joins THIS alert exactly.
+    // When the escalation already picked the id (trail.errorId), the row is inserted under that id.
     let errorId: string | null = null;
     try {
         const supabase = createAdminClient();
         const { data: inserted, error: insertError } = await supabase.from('errors').insert({
+            ...(context.trail?.errorId ? { id: context.trail.errorId } : {}),
             source: context.source,
             message: context.message,
             topic_id: context.topicId ?? null,

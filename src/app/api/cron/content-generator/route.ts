@@ -333,9 +333,11 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 if (exhausted) {
                     // HR-7: the business state (held, not advanced) and the escalation join the judge trail under one id.
                     const topicVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
-                    const trail = { correlationId: topicCorrelationId(topic.id, topicVersion), topicVersion };
+                    // The errors row id is picked here, before escalated is written, so the escalation, its
+                    // channel rows and its acknowledgement all carry the same exact error_id.
+                    const trail = { correlationId: topicCorrelationId(topic.id, topicVersion), topicVersion, errorId: crypto.randomUUID() };
                     await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'state_changed', topic_id: topic.id, topic_version: topicVersion, detail: { advanced: false, to: 'held_for_review' } });
-                    await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'escalated', topic_id: topic.id, topic_version: topicVersion, detail: { reason: 'retries_exhausted' } });
+                    await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'escalated', topic_id: topic.id, topic_version: topicVersion, detail: { reason: 'retries_exhausted', error_id: trail.errorId } });
                     await notifyError({
                         trail,
                         source: 'content-generator',

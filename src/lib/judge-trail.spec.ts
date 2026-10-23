@@ -33,11 +33,11 @@ describe('progress report', () => {
         expect(r.did_not_advance[0].stuck_reason).toBe('judge_exhausted');
     });
     it('escalation: webhook silence is not proof; channels come from records', () => {
-        const base = [ev('inference_done', 10, 't1', { exhausted: true }), ev('escalated', 20)];
+        const base = [ev('inference_done', 10, 't1', { exhausted: true }), ev('escalated', 20, 't1', { error_id: 'e1' })];
         const none = buildProgressReport(base, now).did_not_advance[0];
         expect(none.stuck_reason).toBe('escalated_no_channel_delivered');
         expect(renderProgressReport(buildProgressReport(base, now))).toContain('no record');
-        const viaDb = buildProgressReport([...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped' }), ev('alert_channel', 21, 't1', { channel: 'resend', outcome: 'failed' }), ev('alert_channel', 22, 't1', { channel: 'db', outcome: 'sent' })], now).did_not_advance[0];
+        const viaDb = buildProgressReport([...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped', error_id: 'e1' }), ev('alert_channel', 21, 't1', { channel: 'resend', outcome: 'failed', error_id: 'e1' }), ev('alert_channel', 22, 't1', { channel: 'db', outcome: 'sent', error_id: 'e1' })], now).did_not_advance[0];
         expect(viaDb.channels_sent).toEqual(['db']);
         expect(viaDb.channels_failed).toEqual(['resend']);
         expect(viaDb.stuck_reason).toBe('escalated_unacknowledged');
@@ -50,8 +50,8 @@ describe('stuck-topic report wording (content-manager review E1 to E9)', () => {
     // The stable code escalated_no_channel_delivered is a key, not wording; the banned-word check looks at everything else.
     const prose = (out: string) => out.replace(/escalated_no_channel_delivered/g, '');
     const noBanned = (out: string) => { for (const w of ['no alert', 'delivered', 'finished']) expect(prose(out).toLowerCase()).not.toContain(w); };
-    const base = [ev('inference_done', 10, 't1', { exhausted: true }), ev('escalated', 20)];
-    const viaDb = [...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped' }), ev('alert_channel', 21, 't1', { channel: 'resend', outcome: 'failed' }), ev('alert_channel', 22, 't1', { channel: 'db', outcome: 'sent' })];
+    const base = [ev('inference_done', 10, 't1', { exhausted: true }), ev('escalated', 20, 't1', { error_id: 'e1' })];
+    const viaDb = [...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped', error_id: 'e1' }), ev('alert_channel', 21, 't1', { channel: 'resend', outcome: 'failed', error_id: 'e1' }), ev('alert_channel', 22, 't1', { channel: 'db', outcome: 'sent', error_id: 'e1' })];
 
     it('viaDb: E5 text naming db, every outcome in the channel field, no acknowledgement (E5 E6 E7 E8)', () => {
         const out = render(viaDb);
@@ -63,7 +63,7 @@ describe('stuck-topic report wording (content-manager review E1 to E9)', () => {
         noBanned(out);
     });
     it('only a skipped channel row: E4 text, skipped shown, channel field is not "no record" (E4 E6)', () => {
-        const out = render([...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped' })]);
+        const out = render([...base, ev('alert_channel', 21, 't1', { channel: 'webhook', outcome: 'skipped', error_id: 'e1' })]);
         const l = lineFor(out, 't1');
         expect(l).toContain('Alert raised; no channel record says sent (no record is not proof that nothing was sent).');
         expect(l).toContain('alert channel records: skipped: webhook');
