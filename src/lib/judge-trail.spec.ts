@@ -56,7 +56,7 @@ describe('stuck-topic report wording (content-manager review E1 to E9)', () => {
     it('viaDb: E5 text naming db, every outcome in the channel field, no acknowledgement (E5 E6 E7 E8)', () => {
         const out = render(viaDb);
         const l = lineFor(out, 't1');
-        expect(l).toContain('escalated_unacknowledged: Latest alert sent on db (send receipt, not proof it was read); no acknowledgement recorded.');
+        expect(l).toContain('escalated_unacknowledged: Latest alert sent on db (send receipt, not proof it was read); no acknowledgement of it recorded.');
         expect(l).toContain('alert channel records (all alerts): sent: db; failed: resend; skipped: webhook');
         expect(l).toContain('acknowledged (latest alert): no record');
         expect(out).not.toContain('alert channels sent:');
@@ -114,6 +114,46 @@ describe('stuck-topic report wording (content-manager review E1 to E9)', () => {
         const l = lineFor(render([...own, ev('acknowledged', 30, 't1', { error_id: 'e1' })]), 't1');
         expect(l).toContain(`acknowledged (latest alert): recorded ${at(30)}`);
         expect(l).not.toContain('acknowledged (latest alert): no record');
+    });
+    it('latest alert acknowledged then revoked: E5 and E7 say revoked, never "no record" (r2 fixture t6)', () => {
+        const out = render([ev('enqueued', 0, 't6'), ev('escalated', 180, 't6', { error_id: 'e2' }), ev('alert_channel', 240, 't6', { channel: 'db', outcome: 'sent', error_id: 'e2' }),
+            ev('acknowledged', 300, 't6', { error_id: 'e2' }), ev('acknowledged', 360, 't6', { error_id: 'e2', revoked: true })]);
+        const l = lineFor(out, 't6');
+        expect(l).toContain(`escalated_unacknowledged: Latest alert sent on db (send receipt, not proof it was read); its acknowledgement was revoked at ${at(360)}, none since.`);
+        expect(l).toContain(`acknowledged (latest alert): revoked ${at(360)}`);
+        expect(l).not.toContain('no acknowledgement');
+        expect(l).not.toContain('acknowledged (latest alert): no record');
+        noBanned(out);
+        // Acknowledged again after the revoke: recorded, and the revoke is no longer reported.
+        const re = lineFor(render([ev('enqueued', 0, 't6'), ev('escalated', 180, 't6', { error_id: 'e2' }), ev('alert_channel', 240, 't6', { channel: 'db', outcome: 'sent', error_id: 'e2' }),
+            ev('acknowledged', 300, 't6', { error_id: 'e2' }), ev('acknowledged', 360, 't6', { error_id: 'e2', revoked: true }), ev('acknowledged', 420, 't6', { error_id: 'e2' })]), 't6');
+        expect(re).toContain(`acknowledged (latest alert): recorded ${at(420)}`);
+        expect(re).not.toContain('revoked');
+    });
+    it('earlier alert acknowledged, latest alert sent and not: E5 says the missing acknowledgement is of the latest alert (r2 fixture t4)', () => {
+        const out = render([ev('enqueued', 0, 't4'), ev('escalated', 180, 't4', { error_id: 'e1' }), ev('alert_channel', 240, 't4', { channel: 'db', outcome: 'sent', error_id: 'e1' }),
+            ev('acknowledged', 300, 't4', { error_id: 'e1' }), ev('escalated', 600, 't4', { error_id: 'e2' }), ev('alert_channel', 660, 't4', { channel: 'resend', outcome: 'sent', error_id: 'e2' })]);
+        const l = lineFor(out, 't4');
+        expect(l).toContain('escalated_unacknowledged: Latest alert sent on resend (send receipt, not proof it was read); no acknowledgement of it recorded.');
+        expect(l).not.toContain('no acknowledgement recorded.');
+        expect(l).toContain('alert channel records (all alerts): sent: db,resend');
+        expect(l).toContain('acknowledged (latest alert): no record');
+        noBanned(out);
+    });
+    it('no escalated row: E7 says no escalation record; null timings print n/a with no unit (r2 no-escalation fixtures t3 t5)', () => {
+        const out = render([ev('enqueued', 0, 't3'), ev('claimed', 60, 't3'), ev('inference_done', 120, 't3', { exhausted: true }),
+            ev('state_changed', 30, 't5', { advanced: true })]);
+        const ex = lineFor(out, 't3');
+        expect(ex).toContain('judge_exhausted: ');
+        expect(ex).toContain('acknowledged (latest alert): no escalation record');
+        expect(ex).toContain('queue wait 60s, inference 60s');
+        const adv = lineFor(out, 't5');
+        expect(adv).toContain('| advanced |');
+        expect(adv).toContain('acknowledged (latest alert): no escalation record');
+        expect(adv).toContain('queue wait n/a, inference n/a');
+        expect(out).not.toContain('n/as');
+        expect(lineFor(render([ev('claimed', 0, 't7'), ev('inference_done', 60, 't7')]), 't7')).toContain('queue wait n/a, inference 60s');
+        noBanned(out);
     });
     it('oldest last_at first in every section, ties by topic then version (E9)', () => {
         // first-seen order is c, a, b; last_at order is a (100), b (100, ties after a), c (900)
