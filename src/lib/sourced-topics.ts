@@ -184,7 +184,8 @@ SOURCE DISCIPLINE (these points were written from real source passages, and a fa
 - Every fact, name, number, date and place in every script, caption and title must come from the points above. Add none from memory.
 - You may explain, connect and react. You may not add an event, a statistic, a quotation, a cause, or a "first", "only" or "largest" that the points do not state.
 - Do not put words in anyone's mouth. Quote a person only with words that appear in a point or a source passage.
-- Quotation marks are for exact source text only. Text inside quotation marks (a person's words, a speech title, a phrase) must be copied word for word from a point or a SOURCE PASSAGE above, including the small words. If you are not copying exactly, write it without quotation marks. A title, a summary or a paraphrase never goes inside quotation marks.
+- Quotation marks are for exact source text only: a person's words, copied word for word from a point or a SOURCE PASSAGE above, including the small words. If you are not copying exactly, write it without quotation marks. A summary or a paraphrase never goes inside quotation marks.
+- Titles of books, essays, speeches, articles and newspapers go in italics or plain text, never in quotation marks. Write The New Jacobins and Full Emancipation, not “The New Jacobins and Full Emancipation”. In scripts, captions and video titles use plain text, because those places show italic markup as stray asterisks.
 - If the points are too thin for the word count, write a shorter piece.
 - These rules come first. Where an instruction below asks for added context, background, analysis, quotations or source citations, give only what the points and their source passages hold.
 `;

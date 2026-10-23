@@ -146,7 +146,7 @@ export async function GET(request: Request) {
                 const user = priorQuoteFault
                     ? `${basePrompt}
 
-A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.${copyThese.length ? `
+A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation: write titles in plain text, never in quotation marks. Never put a summary or a paraphrase in quotation marks.${copyThese.length ? `
 If you quote the speaker, copy this sentence exactly, character for character, or leave the quotation marks out and describe it in your own words:
 ${copyThese.map(s => `"${s}"`).join('\n')}` : ''}`
                     : basePrompt;
