@@ -226,6 +226,17 @@ describe('the script prompt for a sourced topic', () => {
         expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('SOURCE DISCIPLINE');
         expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('Quotation marks are for exact source text only');
     });
+
+    it('tells the writer titles go in italics or plain text, never in quotation marks (2026-10-22)', () => {
+        const rule = sourceDiscipline([{ quote: 'A passage.' }]);
+        expect(rule).toContain('Titles of books, essays, speeches, articles and newspapers go in italics or plain text, never in quotation marks');
+        // The old line listed "a speech title" among things that may sit in quotation marks.
+        expect(rule).not.toContain('a speech title');
+        // The quote-video and standard prompts both carry it.
+        const quotePoints = [{ point: 1, claim: 'A passage.', quote: 'A passage.', source: 'James Farmer, The New Jacobins and Full Emancipation (1964)', year: '1964' }];
+        expect(buildContentPrompt({ ...persona, content_format: 'quote_video' }, topic(quotePoints)).user).toContain('never in quotation marks');
+        expect(buildContentPrompt(persona, topic(quotePoints)).user).toContain('never in quotation marks');
+    });
 });
 
 describe('releaseCandidateOfTopic', () => {

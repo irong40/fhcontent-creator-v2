@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { quotedSpans, unsourcedQuotes, sourcedQuoteFaults, rejectedSpans, closestSourceSentence, unquoteUnsourced } from './quote-check';
+import { quotedSpans, unsourcedQuotes, sourcedQuoteFaults, rejectedSpans, closestSourceSentence, unquoteUnsourced, isCitedTitle, isTitleCase } from './quote-check';
 
 // The real 2026-10-12 Hamer text (topic 5767ceaf), which failed its source check.
 const passage = 'And you can always hear this long sob story: "You know it takes time." For three hundred years, we\'ve given them time. And I\'ve been tired so long, now I am sick and tired of being sick and tired, and we want a change.';
@@ -47,6 +47,50 @@ describe('sourcedQuoteFaults', () => {
     });
 });
 
+// 2026-10-22: Farmer (cf172ba2) and Forman (a64abec8) were rejected three times each for
+// quoting the essay title from their own source line. Points trimmed from the real topics.
+describe('cited work titles (2026-10-22)', () => {
+    const farmer = [{
+        claim: 'This cannot be a sheer bootstrap operation.',
+        quote: 'The responsibility of accelerating the Negro\'s march to equality does not rest with the Negro alone. This cannot be a sheer bootstrap operation.',
+        source: 'James Farmer, The New Jacobins and Full Emancipation (1964), Civil Rights Movement Archive',
+    }];
+    const forman = [{
+        claim: 'Conflict must be created around control mechanisms.',
+        quote: 'we are quite confident that conflict must be created around control mechanisms. This is not passive action.',
+        source: 'James Forman, Control, Conflict, and Change: Underlying Concepts of the Black Manifesto (1969), Civil Rights Movement Archive',
+    }];
+
+    it('passes a title-cased title from the source line (the exact rejected captions)', () => {
+        expect(sourcedQuoteFaults(farmer, [{ pieceType: 'quote_video', captionLong: 'In his 1964 essay “The New Jacobins and Full Emancipation,” Farmer argued for help.' }])).toEqual([]);
+        expect(sourcedQuoteFaults(forman, [{ pieceType: 'quote_video', captionLong: 'From "Control, Conflict, and Change," Forman’s 1969 essay.' }])).toEqual([]);
+        // Commas and the Oxford comma do not matter, a part of a longer title still counts.
+        expect(sourcedQuoteFaults(forman, [{ pieceType: 'quote_video', captionShort: '"Control, Conflict and Change" and the "Underlying Concepts of the Black Manifesto"' }])).toEqual([]);
+    });
+
+    it('passes any span the source line holds word for word, title-cased or not (8ff831f rule)', () => {
+        expect(sourcedQuoteFaults(farmer, [{ pieceType: 'quote_video', captionLong: 'He wrote of "the new jacobins and full emancipation" as a cause.' }])).toEqual([]);
+    });
+
+    it('still flags speech that neither a passage nor the source line holds', () => {
+        expect(sourcedQuoteFaults(farmer, [{ pieceType: 'quote_video', captionLong: 'He said "we must march on to freedom" that day.' }]))
+            .toEqual(['quote_video captionLong quotes "we must march on to freedom", which no source passage holds']);
+    });
+
+    it('still flags a title-cased phrase the source line does not cite', () => {
+        expect(sourcedQuoteFaults(farmer, [{ pieceType: 'quote_video', captionLong: 'Farmer’s essay “Freedom Now For Everyone” made the case.' }]))
+            .toEqual(['quote_video captionLong quotes "Freedom Now For Everyone", which no source passage holds']);
+    });
+
+    it('reads a title only as a whole run of words in the citation, and only in title case', () => {
+        expect(isCitedTitle('The World House', ['Martin Luther King, The World House, from Where Do We Go From Here: Chaos or Community? (1967)'])).toBe(true);
+        expect(isCitedTitle('World Hous', ['Martin Luther King, The World House (1967)'])).toBe(false);
+        expect(isCitedTitle('the world house', ['Martin Luther King, The World House (1967)'])).toBe(false);
+        expect(isTitleCase('Where Do We Go From Here: Chaos or Community?')).toBe(true);
+        expect(isTitleCase('This is not passive action')).toBe(false);
+    });
+});
+
 describe('retry help', () => {
     const fault = 'quote_video captionShort quotes "I’m sick and tired of being sick and tired.", which no source passage holds';
     it('reads the rejected span back out of the fault message', () => {
@@ -69,5 +113,14 @@ describe('unquoteUnsourced', () => {
         const out = unquoteUnsourced(t, [passage]);
         expect(out).toBe(`Hamer: I’m sick and tired of being sick and tired. She said "now I am sick and tired of being sick and tired".`);
         expect(unsourcedQuotes(out, [passage])).toEqual([]);
+    });
+
+    it('unquotes every copy of a repeated span and cuts nothing else (2026-10-22)', () => {
+        // Before: "InThe New Jacobins and Full Emancipation,Farmer wrote. Read “The New ...,” today."
+        const t = 'In “The New Jacobins and Full Emancipation,” Farmer wrote. Read “The New Jacobins and Full Emancipation,” today.';
+        expect(unquoteUnsourced(t, ['nothing'])).toBe('In The New Jacobins and Full Emancipation, Farmer wrote. Read The New Jacobins and Full Emancipation, today.');
+        // A copy that was never in quotation marks is left as it is.
+        expect(unquoteUnsourced('The New Jacobins and Full Emancipation, then “The New Jacobins and Full Emancipation.”', ['nothing']))
+            .toBe('The New Jacobins and Full Emancipation, then The New Jacobins and Full Emancipation.');
     });
 });
