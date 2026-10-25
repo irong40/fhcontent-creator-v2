@@ -24,6 +24,20 @@ const MAX_TOPICS_PER_RUN = 2;
 // single malformed topic from looping forever and flooding the alert channel.
 const MAX_RETRIES = 3;
 
+// A draft that fails more than one check stores every reason in topics.error_message,
+// joined by this separator, so the retry prompt can name each one.
+const CHECK_FAULT_SEPARATOR = ' || ';
+
+/** The part of a stored error that one check wrote (from its label on), or null. */
+function priorCheckFault(errorMessage: string | null | undefined, label: string): string | null {
+    if (!errorMessage) return null;
+    for (const part of errorMessage.split(CHECK_FAULT_SEPARATOR)) {
+        const at = part.indexOf(label);
+        if (at >= 0) return part.slice(at);
+    }
+    return null;
+}
+
 // Flat scalar tool schema for the quote path: the model returns ONLY the two
 // captions. There is no array/object field for the model to (mis)serialize as a
 // JSON string, which is what kept reintroducing the parse failures. The on-
@@ -135,9 +149,10 @@ export async function GET(request: Request) {
                 // A draft rejected for an unsourced quotation is rewritten with the reason in
                 // the prompt. The local model runs at temperature 0: the same prompt would
                 // write the same caption and fail the same way three times.
-                const priorQuoteFault = topic.error_message?.includes(UNSOURCED_QUOTE_ERROR)
-                    ? topic.error_message.slice(topic.error_message.indexOf(UNSOURCED_QUOTE_ERROR))
-                    : null;
+                // Every check's reason goes back, not only the quote check's: a draft failed on a
+                // number the sources do not hold, or by the judge, came back with the same prompt.
+                const priorQuoteFault = priorCheckFault(topic.error_message, UNSOURCED_QUOTE_ERROR);
+                const priorClaimFault = priorCheckFault(topic.error_message, UNSUPPORTED_CLAIM_ERROR);
                 // Name the nearest exact source sentence for each rejected span so the retry
                 // has words to copy, not only a rule.
                 const retrySources = (topic.historical_points as HistoricalPoint[] | null ?? [])
@@ -145,12 +160,16 @@ export async function GET(request: Request) {
                 const copyThese = priorQuoteFault
                     ? [...new Set(rejectedSpans(priorQuoteFault).map(s => closestSourceSentence(s, retrySources)).filter((s): s is string => !!s))]
                     : [];
-                const user = priorQuoteFault
+                const retryReasons = [
+                    priorQuoteFault ? `${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.${copyThese.length ? `
+If you quote the speaker, copy this sentence exactly, character for character, or leave the quotation marks out and describe it in your own words:
+${copyThese.map(s => `"${s}"`).join('\n')}` : ''}` : null,
+                    priorClaimFault ? `${priorClaimFault}. State only what a SOURCE PASSAGE above says. Leave out any year, number or claim that no SOURCE PASSAGE holds.` : null,
+                ].filter((r): r is string => !!r);
+                const user = retryReasons.length
                     ? `${basePrompt}
 
-A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.${copyThese.length ? `
-If you quote the speaker, copy this sentence exactly, character for character, or leave the quotation marks out and describe it in your own words:
-${copyThese.map(s => `"${s}"`).join('\n')}` : ''}`
+A PREVIOUS DRAFT WAS REJECTED. ${retryReasons.join('\n')}`
                     : basePrompt;
                 // quote_video personas return 1 piece; standard personas return 6.
                 const isQuote = persona.content_format === 'quote_video';
@@ -255,18 +274,22 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         }
                     }
 
-                    const quoteFaults = sourcedQuoteFaults(topic.historical_points as HistoricalPoint[], contentResult.data.pieces as Array<Record<string, unknown>>);
-                    if (quoteFaults.length > 0) {
-                        throw new Error(`${UNSOURCED_QUOTE_ERROR}: ${quoteFaults.slice(0, 2).join('; ')}`);
-                    }
+                    const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
+                    const quoteFaults = sourcedQuoteFaults(topic.historical_points as HistoricalPoint[], generated);
 
                     // A claim the source passages do not support is as fatal as a mis-quoted span
                     // (2026-10-18: Lafayette "double agent for the British", Barrett "threatened").
+                    // The quote and number checks both run, so a draft failing both carries both
+                    // reasons into its retry. The judge runs only on a draft they pass.
                     const claimPoints = topic.historical_points as HistoricalPoint[];
-                    if (hasSourcePassages(claimPoints)) {
-                        const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
-                        const specifics = unsupportedSpecifics(claimPoints, generated, { title: topic.title });
-                        if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
+                    const sourced = hasSourcePassages(claimPoints);
+                    const specifics = sourced ? unsupportedSpecifics(claimPoints, generated, { title: topic.title }) : [];
+                    const checkFaults = [
+                        quoteFaults.length > 0 ? `${UNSOURCED_QUOTE_ERROR}: ${quoteFaults.slice(0, 2).join('; ')}` : null,
+                        specifics.length > 0 ? `${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}` : null,
+                    ].filter((f): f is string => !!f);
+                    if (checkFaults.length > 0) throw new Error(checkFaults.join(CHECK_FAULT_SEPARATOR));
+                    if (sourced) {
                         const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user));
                         if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
                     }
