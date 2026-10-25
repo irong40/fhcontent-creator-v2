@@ -106,6 +106,48 @@ describe('local content consumption', () => {
         await GET(new Request('https://fixture/api/cron/content-generator'));
         expect(state.generate.mock.calls.at(-1)?.[0].user).toContain('A PREVIOUS DRAFT WAS REJECTED');
     });
+    // 2026-10-25 (fix 5.3): a draft failed only by the number check came back with the same prompt.
+    it('puts a number-check reason into the retry prompt, not only quote faults', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint] };
+        const pieces = sourcedPieces().map(p => ({ ...p, captionShort: p.pieceType === 'long' ? 'James spied for Lafayette in 1799' : 'caption' }));
+        state.generate.mockResolvedValue({ text: JSON.stringify({ pieces }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        const fault = state.updates.at(-1) as { status: string; error_message: string };
+        expect(fault.error_message).toContain('Unsupported claim');
+        expect(fault.error_message).not.toContain('Unsourced quotation');
+        expect(state.judge).not.toHaveBeenCalled();
+        state.updates.length = 0;
+        state.topic = { ...state.topic, retry_count: 1, error_message: fault.error_message };
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        const retryPrompt = state.generate.mock.calls.at(-1)?.[0].user as string;
+        expect(retryPrompt).toContain('A PREVIOUS DRAFT WAS REJECTED');
+        expect(retryPrompt).toContain('long captionShort states "1799", which no source passage holds');
+    });
+    it('records both the quote and the number reason when a draft fails both, and retries with both', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint] };
+        const pieces = sourcedPieces().map(p => ({ ...p, captionShort: p.pieceType === 'long' ? 'In 1799 he said "I was a double agent."' : 'caption' }));
+        state.generate.mockResolvedValue({ text: JSON.stringify({ pieces }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        const fault = state.updates.at(-1) as { error_message: string };
+        expect(fault.error_message).toContain('Unsourced quotation');
+        expect(fault.error_message).toContain('"1799"');
+        state.topic = { ...state.topic, retry_count: 1, error_message: fault.error_message };
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        const retryPrompt = state.generate.mock.calls.at(-1)?.[0].user as string;
+        expect(retryPrompt).toContain('Unsourced quotation');
+        expect(retryPrompt).toContain('"1799", which no source passage holds');
+        expect(retryPrompt.match(/A PREVIOUS DRAFT WAS REJECTED/g)).toHaveLength(1);
+    });
+    it('puts a judge reason into the retry prompt', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint], retry_count: 1, error_message: 'Content-generator: Unsupported claim: short_1: double agent for the British (he only pretended)' };
+        gen();
+        state.judge.mockResolvedValue('{"unsupported":[]}');
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.generate.mock.calls[0][0].user).toContain('A PREVIOUS DRAFT WAS REJECTED. Unsupported claim: short_1: double agent for the British');
+    });
     it('keeps the quote fault through the local queue wait, then unquotes the consumed Hamer caption', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
         const passage = 'now I am sick and tired of being sick and tired, and we want a change.';
