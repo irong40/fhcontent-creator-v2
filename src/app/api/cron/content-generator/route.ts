@@ -23,6 +23,10 @@ const MAX_TOPICS_PER_RUN = 2;
 // (requires_review=true) instead of being re-selected every run. Prevents a
 // single malformed topic from looping forever and flooding the alert channel.
 const MAX_RETRIES = 3;
+// 2026-10-25: a topic moved out of the drain (held as failed, or approved by hand) while its
+// run was working stays where it was put. Without this, the catch block wrote status 'draft'
+// over a held row (Forman a64abec8 and Farmer cf172ba2 reverted from failed to draft on 10-24).
+const IN_DRAIN = ['draft', 'content_generating'] as const;
 
 // A draft that fails more than one check stores every reason in topics.error_message,
 // joined by this separator, so the retry prompt can name each one.
@@ -342,7 +346,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         : 'Model draft requires source check and human review',
                     content_ready_at: new Date().toISOString(),
                     coo_auto_approved_at: null,
-                }).eq('id', topic.id);
+                }).eq('id', topic.id).in('status', [...IN_DRAIN]);
                 if (statusError) throw new Error(statusError.message);
                 await releaseDraftHolds(topic.id);
                 topicResult.piecesInserted = piecesInserted;
@@ -351,7 +355,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     // Leave error_message alone: a prior unsourced-quote fault feeds the retry prompt, and
                     // the queued job is keyed on that prompt. Clearing it here made the next pass build
                     // a different prompt and skip unquoteUnsourced.
-                    await supabase.from('topics').update({ status: 'draft' }).eq('id', topic.id);
+                    await supabase.from('topics').update({ status: 'draft' }).eq('id', topic.id).in('status', [...IN_DRAIN]);
                     results.push({ ...topicResult, queued: true });
                     continue;
                 }
@@ -375,7 +379,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         ? `Content-generator failed ${nextRetry}× — needs manual review`
                         : (topic.review_reason ?? null),
                     error_message: `Content-generator: ${errMsg}`,
-                }).eq('id', topic.id);
+                }).eq('id', topic.id).in('status', [...IN_DRAIN]);
                 topicResult.error = errMsg;
                 if (exhausted) {
                     await notifyError({
