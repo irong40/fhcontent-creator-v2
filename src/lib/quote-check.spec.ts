@@ -68,6 +68,12 @@ describe('cited work titles (2026-10-22)', () => {
         expect(sourcedQuoteFaults(forman, [{ pieceType: 'quote_video', captionShort: '"Control, Conflict and Change" and the "Underlying Concepts of the Black Manifesto"' }])).toEqual([]);
     });
 
+    // 2026-10-26 (qcheck 5.4 F5): the loose title rule must not pass a speaker's title-case words.
+    it('still flags title-case words that the citation does not hold', () => {
+        expect(sourcedQuoteFaults(farmer, [{ pieceType: 'quote_video', captionLong: 'Farmer demanded "Equal Rights Now For Every Citizen" in 1964.' }]))
+            .toEqual(['quote_video captionLong quotes "Equal Rights Now For Every Citizen", which no source passage holds']);
+    });
+
     it('passes any span the source line holds word for word, title-cased or not (8ff831f rule)', () => {
         expect(sourcedQuoteFaults(farmer, [{ pieceType: 'quote_video', captionLong: 'He wrote of "the new jacobins and full emancipation" as a cause.' }])).toEqual([]);
     });

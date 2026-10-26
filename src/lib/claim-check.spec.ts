@@ -90,6 +90,19 @@ describe('unsupportedSpecifics reads the whole topic (2026-10-22)', () => {
         const point = [{ claim: 'He interviewed 5,000 people.', quote: 'Dr. Du Bois personally visited and interviewed 5,000 people.' }];
         expect(unsupportedSpecifics(point, piece('He interviewed 5000 people.'))).toEqual([]);
     });
+
+    // 2026-10-26 (qcheck Q6): prose words and head counts no longer loosen the check.
+    it('does not hold 1 or 2 because the sources say "one", "first" or "second"', () => {
+        const point = [{ claim: 'One of the first men to speak, the second time he rose.', quote: 'One of the first men to speak, the second time he rose.' }];
+        expect(unsupportedSpecifics(point, piece('He was 1 of them and spoke 2 times.'))).toHaveLength(2);
+        expect(unsupportedSpecifics([{ claim: 'He spoke two times.', quote: 'He spoke two times.' }], piece('He spoke 2 times.'))).toEqual([]);
+    });
+    it('does not read a head count as a year that opens a decade or century range', () => {
+        const point = [{ claim: 'About 1,505 people came.', quote: 'About 1,505 people came.' }];
+        expect(unsupportedSpecifics(point, piece('In the 1500s it was settled.'))).toHaveLength(1);
+        const dated = [{ claim: 'He spoke in 1505.', quote: 'He spoke in 1507.' }];
+        expect(unsupportedSpecifics(dated, piece('In the 1500s it was settled.'))).toEqual([]);
+    });
 });
 
 describe('wordNumbers', () => {
@@ -100,7 +113,9 @@ describe('wordNumbers', () => {
         expect(wordNumbers('perhaps three billion a year for a five-year period')).toEqual(['3000000000', '3', '5']);
         expect(wordNumbers('one hundred and fifty delegates')).toEqual(['150']);
         expect(wordNumbers('in two thousand twenty')).toEqual(['2020', '2']);
-        expect(wordNumbers('one two')).toEqual(['1', '2']);
+        expect(wordNumbers('one two')).toEqual(['2']); // a lone "one" is prose (2026-10-26)
+        expect(wordNumbers('one of the first, the second time')).toEqual([]);
+        expect(wordNumbers('twenty-one')).toEqual(['21']);
         expect(wordNumbers('no numbers here')).toEqual([]);
     });
 });

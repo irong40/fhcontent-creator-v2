@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], guards: [] as Array<[string, unknown]>, inserts: [] as unknown[], existing: 0, topic: {} as Record<string, unknown> }));
+const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], guards: [] as Array<[string, unknown]>, inserts: [] as unknown[], deletes: [] as string[], heldOn: null as string | null, existing: 0, topic: {} as Record<string, unknown> }));
 vi.mock('@/lib/content-inference', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/content-inference')>(), generateQueuedContent: state.generate }));
 vi.mock('@/lib/claim-check', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/claim-check')>(), callJudge: state.judge }));
 vi.mock('@/lib/local-inference-queue', () => ({ LocalInferencePendingError: class extends Error {} }));
@@ -14,14 +14,15 @@ vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (tab
         select: (_fields?: string, options?: unknown) => { if (options) response = { count: state.existing }; return chain; },
         eq: () => chain, in: (col: string, vals: unknown) => { state.guards.push([col, vals]); return chain; }, not: () => chain, or: () => chain, order: () => chain,
         limit: () => { response = { data: [{ id: 'fixture', title: 'Source', retry_count: 0, personas: { name: 'Fixture', content_format: 'standard' }, ...state.topic }], error: null }; return chain; },
-        update: (value: Record<string, unknown>) => { state.updates.push(value); return chain; },
+        update: (value: Record<string, unknown>) => { state.updates.push(value); response = { data: state.heldOn !== null && value.status === state.heldOn ? [] : [{ id: 'fixture' }], error: null }; return chain; },
+        delete: () => { state.deletes.push(table); return chain; },
         insert: (value: unknown) => { if (table === 'content_pieces') state.inserts.push(value); return chain; },
         then: (resolve: (value: unknown) => unknown) => Promise.resolve(response).then(resolve),
     }; return chain;
 } }) }));
 import { GET } from './route';
 import { LocalInferencePendingError } from '@/lib/local-inference-queue';
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.guards.length = 0; state.inserts.length = 0; state.existing = 0; state.topic = {}; });
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.guards.length = 0; state.inserts.length = 0; state.deletes.length = 0; state.heldOn = null; state.existing = 0; state.topic = {}; });
 describe('local content consumption', () => {
     it('leaves queued work selectable without charging retries or inserting content', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
@@ -222,6 +223,40 @@ describe('local content consumption', () => {
             await GET(new Request('https://fixture/api/cron/content-generator'));
             expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready' });
             expect(state.guards).toContainEqual(['status', ['draft', 'content_generating']]);
+        });
+        // 2026-10-26 (qcheck 5.4 F1, F2, F3 and 5.2 Q5): a held topic stays held at every write.
+        it('does not claim a topic that was held after the select, and writes nothing else', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { historical_points: [lafayettePoint] };
+            state.heldOn = 'content_generating';
+            const response = await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect((await response.json()).results[0].skipped).toBe('topic left the drain');
+            expect(state.generate).not.toHaveBeenCalled();
+            expect(state.inserts).toHaveLength(0);
+            expect(state.updates).toEqual([{ status: 'content_generating' }]);
+        });
+        it('removes the pieces and reports a skip when the topic was held during the run', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { historical_points: [lafayettePoint] };
+            state.generate.mockResolvedValue({ text: JSON.stringify({ pieces: passPieces() }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+            state.judge.mockResolvedValue('{"unsupported":[]}');
+            state.heldOn = 'content_ready';
+            const response = await GET(new Request('https://fixture/api/cron/content-generator'));
+            const result = (await response.json()).results[0];
+            expect(result.skipped).toBe('topic left the drain during the run');
+            expect(result.piecesInserted).toBe(0);
+            expect(state.deletes).toEqual(['content_pieces']);
+            expect(state.release).toHaveBeenCalledWith('fixture');
+            expect(state.updates.some(u => u.status === 'draft')).toBe(false);
+        });
+        it('guards the recovery write too, and keeps the hold when that write changes nothing', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.existing = 3;
+            state.heldOn = 'content_ready';
+            const response = await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect((await response.json()).results[0].skipped).toBe('topic left the drain');
+            expect(state.guards).toContainEqual(['status', ['draft', 'content_generating']]);
+            expect(state.release).not.toHaveBeenCalled();
         });
         it('holds the quote video captions draft too', async () => {
             vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');

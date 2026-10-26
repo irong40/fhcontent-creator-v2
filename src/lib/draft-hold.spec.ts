@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const table = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>>, fail: false as false | 'error' | 'throw' }));
 vi.mock('./supabase/server', () => ({ createAdminClient: () => ({ from: () => {
     if (table.fail === 'throw') throw new Error('relation "content_draft_holds" does not exist');
-    const err = table.fail === 'error' ? { code: '42P01' } : null;
+    const err = table.fail === 'error' ? { code: '42P01', message: 'relation "content_draft_holds" does not exist' } : null;
     let filter: [string, unknown] | null = null;
     let op: 'select' | 'delete' = 'select';
     const chain = {
@@ -23,7 +23,7 @@ vi.mock('./supabase/server', () => ({ createAdminClient: () => ({ from: () => {
     };
     return chain;
 } }) }));
-import { holdDraft, holdKey, readHeldDraft, releaseDraftHolds } from './draft-hold';
+import { HOLD_MAX_AGE_MS, holdDraft, holdKey, readHeldDraft, releaseDraftHolds } from './draft-hold';
 
 const request = { requestKey: 'content:t1:pieces:0', system: 'system', user: 'source', maxTokens: 8192 };
 const draft = { text: '{"pieces":[]}', inputTokens: 900, outputTokens: 1200 };
@@ -61,5 +61,33 @@ describe('draft holds (2026-10-22)', () => {
             await expect(holdDraft(holdKey(request), 't1', draft)).resolves.toBeUndefined();
             await expect(releaseDraftHolds('t1')).resolves.toBeUndefined();
         }
+    });
+
+    // 2026-10-26 (qcheck Q1, Q2, Q4)
+    it('logs the code and the message when a read, hold or release fails', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        table.fail = 'error';
+        await readHeldDraft(holdKey(request));
+        await holdDraft(holdKey(request), 't1', draft);
+        await releaseDraftHolds('t1');
+        expect(warn).toHaveBeenCalledTimes(3);
+        for (const [line] of warn.mock.calls) expect(line).toContain('42P01 relation "content_draft_holds" does not exist');
+        warn.mockClear();
+        table.fail = 'throw';
+        await readHeldDraft(holdKey(request));
+        await holdDraft(holdKey(request), 't1', draft);
+        await releaseDraftHolds('t1');
+        expect(warn).toHaveBeenCalledTimes(3);
+        for (const [line] of warn.mock.calls) expect(line).toContain('does not exist');
+    });
+
+    it('ignores a hold older than the cap, so an unfinished judge cannot pin one draft', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const key = holdKey(request);
+        table.rows.push({ request_key: key, topic_id: 't1', result_text: draft.text, input_tokens: 1, output_tokens: 2, created_at: new Date(Date.now() - HOLD_MAX_AGE_MS - 60_000).toISOString() });
+        expect(await readHeldDraft(key)).toBeNull();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('expired'));
+        table.rows[0].created_at = new Date(Date.now() - 60_000).toISOString();
+        expect(await readHeldDraft(key)).toMatchObject({ text: draft.text });
     });
 });

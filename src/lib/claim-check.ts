@@ -78,6 +78,8 @@ const ORDINAL_TENS: Record<string, number> = { twentieth: 20, thirtieth: 30, for
 const SCALES: Record<string, number> = { hundred: 100, thousand: 1_000, million: 1_000_000, billion: 1_000_000_000 };
 const ORDINAL_SCALES: Record<string, number> = { hundredth: 100, thousandth: 1_000, millionth: 1_000_000 };
 
+const PROSE_WORDS = new Set(['one', 'first', 'second']);
+
 /** The value of one number word ("eighty", "seventh"), or null. Hyphenated parts are split first. */
 function smallWord(w: string): number | null {
     return UNITS[w] ?? TENS[w] ?? ORDINAL_UNITS[w] ?? ORDINAL_TENS[w] ?? null;
@@ -91,12 +93,16 @@ export function wordNumbers(text: string): string[] {
     // Hyphenated words are read part by part: "eighty-seven" is 80 then 7, "five-year" is 5.
     const tokens = text.toLowerCase().match(/[a-z]+/g) ?? [];
     let total = 0, current = 0, count: number | null = null, inRun = false;
+    let runTokens: string[] = [];
     const flush = () => {
-        if (inRun) {
+        // A lone "one", "first" or "second" is ordinary prose ("one of the", "the second time"),
+        // not a stated number: it must not make 1 or 2 count as held (qcheck Q6).
+        const prose = runTokens.length === 1 && PROSE_WORDS.has(runTokens[0]);
+        if (inRun && !prose) {
             out.push(String(total + current));
             if (count !== null) out.push(String(count));
         }
-        total = 0; current = 0; count = null; inRun = false;
+        total = 0; current = 0; count = null; inRun = false; runTokens = [];
     };
     for (const token of tokens) {
         const v = smallWord(token);
@@ -111,6 +117,7 @@ export function wordNumbers(text: string): string[] {
             if (inRun && !joins) flush();
             current += v;
             inRun = true;
+            runTokens.push(token);
             continue;
         }
         const scale = SCALES[token] ?? ORDINAL_SCALES[token];
@@ -118,6 +125,7 @@ export function wordNumbers(text: string): string[] {
             const base = inRun ? current || 1 : 1;
             if (scale >= 1_000) { count = base; total += base * scale; current = 0; } else { current = base * scale; }
             inRun = true;
+            runTokens.push(token);
             continue;
         }
         if (inRun && token === 'and') continue; // "one hundred and fifty"
@@ -137,7 +145,9 @@ function heldNumbers(texts: string[]): { held: Set<string>; years: number[] } {
         for (const n of t.match(NUMBER_RE) ?? []) held.add(clean(n));
         for (const n of wordNumbers(t)) held.add(n);
     }
-    const years = [...held].map(Number).filter(n => Number.isInteger(n) && n >= 1000 && n <= 2100);
+    // Only a plain four-digit number written as a year (no comma, so not a head count like
+    // "1,500", and not a number read from words) opens a decade or century range (qcheck Q6).
+    const years = texts.flatMap(t => t.match(/(?<![\d,.])\d{4}(?![\d,]|\.\d)/g) ?? []).map(Number).filter(n => n >= 1000 && n <= 2100);
     return { held, years };
 }
 

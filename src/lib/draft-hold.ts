@@ -25,6 +25,17 @@ type HoldDatabase = { public: {
     Views: Record<string, never>; Functions: Record<string, never>;
 } };
 
+/** A hold older than this is ignored, so an unfinished judge cannot pin one draft forever (qcheck Q4). */
+export const HOLD_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+function describe(e: unknown): string {
+    if (e && typeof e === 'object') {
+        const { code, message } = e as { code?: string; message?: string };
+        return [code, message].filter(Boolean).join(' ') || 'unknown error';
+    }
+    return String(e);
+}
+
 export type HeldDraft = { text: string; inputTokens: number; outputTokens: number };
 
 function db() {
@@ -43,10 +54,20 @@ export function holdKey(request: { requestKey: string; system: string; user: str
 export async function readHeldDraft(key: string): Promise<HeldDraft | null> {
     try {
         const { data, error } = await db().from('content_draft_holds')
-            .select('result_text,input_tokens,output_tokens').eq('request_key', key).maybeSingle();
-        if (error || !data?.result_text) return null;
+            .select('result_text,input_tokens,output_tokens,created_at').eq('request_key', key).maybeSingle();
+        if (error) {
+            console.warn(`draft hold not read (${describe(error)}); writing a new draft`);
+            return null;
+        }
+        if (!data?.result_text) return null;
+        const age = Date.now() - new Date(data.created_at).getTime();
+        if (Number.isFinite(age) && age > HOLD_MAX_AGE_MS) {
+            console.warn(`draft hold expired (${Math.round(age / 3_600_000)}h old); writing a new draft`);
+            return null;
+        }
         return { text: data.result_text, inputTokens: data.input_tokens, outputTokens: data.output_tokens };
-    } catch {
+    } catch (e) {
+        console.warn(`draft hold not read (${describe(e)}); writing a new draft`);
         return null;
     }
 }
@@ -58,9 +79,9 @@ export async function holdDraft(key: string, topicId: string, draft: HeldDraft):
             request_key: key, topic_id: topicId, provider: 'claude',
             result_text: draft.text, input_tokens: draft.inputTokens, output_tokens: draft.outputTokens,
         }, { onConflict: 'request_key', ignoreDuplicates: true });
-        if (error) console.warn(`draft hold not saved (${error.code ?? 'database'}); next run writes a new draft`);
-    } catch {
-        console.warn('draft hold not saved; next run writes a new draft');
+        if (error) console.warn(`draft hold not saved (${describe(error)}); next run writes a new draft`);
+    } catch (e) {
+        console.warn(`draft hold not saved (${describe(e)}); next run writes a new draft`);
     }
 }
 
@@ -68,8 +89,8 @@ export async function holdDraft(key: string, topicId: string, draft: HeldDraft):
 export async function releaseDraftHolds(topicId: string): Promise<void> {
     try {
         const { error } = await db().from('content_draft_holds').delete().eq('topic_id', topicId);
-        if (error) console.warn(`draft hold not released (${error.code ?? 'database'})`);
-    } catch {
-        console.warn('draft hold not released');
+        if (error) console.warn(`draft hold not released (${describe(error)})`);
+    } catch (e) {
+        console.warn(`draft hold not released (${describe(e)})`);
     }
 }

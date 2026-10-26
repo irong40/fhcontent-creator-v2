@@ -130,13 +130,24 @@ export async function GET(request: Request) {
             if (existingCount && existingCount > 0) {
                 // A prior insert may have completed before its status update.
                 // Provider/approval is uncertain, so recovery always requires review.
-                await supabase.from('topics').update({
+                // Guarded like the result writes (a held or failed topic stays held), and checked
+                // before the hold is released: a failed update must not look like a recovery.
+                const { data: recovered, error: recoverError } = await supabase.from('topics').update({
                     status: 'content_ready',
                     requires_review: true,
                     review_reason: 'Recovered existing content; review before approval',
                     content_ready_at: new Date().toISOString(),
                     coo_auto_approved_at: null,
-                }).eq('id', topic.id);
+                }).eq('id', topic.id).in('status', [...IN_DRAIN]).select('id');
+                if (recoverError) {
+                    console.error(`Content-generator: recovery write failed for ${topic.id}: ${recoverError.message}`);
+                    results.push({ ...topicResult, error: `Recovery write failed: ${recoverError.message}` });
+                    continue;
+                }
+                if (Array.isArray(recovered) && recovered.length === 0) {
+                    results.push({ ...topicResult, skipped: 'topic left the drain' });
+                    continue;
+                }
                 await releaseDraftHolds(topic.id);
                 topicResult.piecesInserted = existingCount;
                 results.push(topicResult);
@@ -146,7 +157,17 @@ export async function GET(request: Request) {
             // Local work survives a serverless timeout as a durable job. Keep
             // its topic selectable until a completed response is consumed.
             if (process.env.CONTENT_INFERENCE_PROVIDER !== 'ollama') {
-                await supabase.from('topics').update({ status: 'content_generating' }).eq('id', topic.id);
+                // Guarded: a topic held as failed or approved since the select above is not claimed.
+                const { data: claimed, error: claimError } = await supabase.from('topics').update({ status: 'content_generating' }).eq('id', topic.id).in('status', [...IN_DRAIN]).select('id');
+                if (claimError) {
+                    console.error(`Content-generator: claim write failed for ${topic.id}: ${claimError.message}`);
+                    results.push({ ...topicResult, error: `Claim write failed: ${claimError.message}` });
+                    continue;
+                }
+                if (Array.isArray(claimed) && claimed.length === 0) {
+                    results.push({ ...topicResult, skipped: 'topic left the drain' });
+                    continue;
+                }
             }
 
             try {
@@ -342,7 +363,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 // the database refuses 'scheduled' without a passing source check,
                 // so the old Claude path to 'scheduled' only ever failed after the
                 // paid call. The source check and the text review come first.
-                const { error: statusError } = await supabase.from('topics').update({
+                const { data: advanced, error: statusError } = await supabase.from('topics').update({
                     status: 'content_ready',
                     requires_review: true,
                     review_reason: provider === 'ollama'
@@ -350,8 +371,18 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         : 'Model draft requires source check and human review',
                     content_ready_at: new Date().toISOString(),
                     coo_auto_approved_at: null,
-                }).eq('id', topic.id).in('status', [...IN_DRAIN]);
+                }).eq('id', topic.id).in('status', [...IN_DRAIN]).select('id');
                 if (statusError) throw new Error(statusError.message);
+                if (Array.isArray(advanced) && advanced.length === 0) {
+                    // The topic was held or moved while this run worked. The guarded write changed
+                    // nothing, so the pieces inserted above belong to no live topic: remove them
+                    // (this run created every one; existingCount was 0) and report a skip, not a success.
+                    const { error: cleanupError } = await supabase.from('content_pieces').delete().eq('topic_id', topic.id).eq('status', 'pending');
+                    if (cleanupError) console.error(`Content-generator: could not remove pieces of held topic ${topic.id}: ${cleanupError.message}`);
+                    await releaseDraftHolds(topic.id);
+                    results.push({ ...topicResult, skipped: 'topic left the drain during the run' });
+                    continue;
+                }
                 {
                     const advancedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
                     await recordTrail(supabase, { correlation_id: topicCorrelationId(topic.id, advancedVersion), stage: 'state_changed', topic_id: topic.id, topic_version: advancedVersion, detail: { advanced: true, to: 'content_ready' } });
