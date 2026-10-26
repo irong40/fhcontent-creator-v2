@@ -170,6 +170,9 @@ export interface BlotatoPublishedPostListItem {
     /** Numeric published-post id — the key for GET /posts/{id}/analytics.
      *  NOT the postSubmissionId UUID returned by POST /posts. */
     id: string;
+    /** The connected account the post went out on. A Facebook connection
+     *  carries several pages: the page id is `subaccount.id`. */
+    account?: { id: string; name?: string; subaccount?: { id: string; name?: string } | null };
     platform: Platform | 'other';
     text: string;
     mediaUrls: string[];

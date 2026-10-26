@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/blotato', () => ({
     blotato: {
         listTopPosts: vi.fn(),
+        listPublishedPosts: vi.fn(),
         getPostStatus: vi.fn(),
     },
 }));
@@ -19,10 +20,14 @@ import {
     buildAnalyticsIndex,
     snapshotMatchedMetrics,
     snapshotUnmatchedAccounts,
+    accountKey,
+    resolveHandle,
+    buildAccountResolver,
 } from './analytics-pull';
 
 const listTopPosts = vi.mocked(blotato.listTopPosts);
 const getPostStatus = vi.mocked(blotato.getPostStatus);
+const listPublishedPosts = vi.mocked(blotato.listPublishedPosts);
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -330,6 +335,91 @@ describe('snapshotUnmatchedAccounts', () => {
             { content_piece_id: null, platform: 'tiktok', handle: '@x', blotato_post_id: '905', published_at: null, views: 0, likes: 0, ...zero },
             { content_piece_id: null, platform: 'instagram', handle: null, blotato_post_id: '906', published_at: null, views: 40, likes: 0, ...zero },
             { content_piece_id: null, platform: 'facebook', handle: null, blotato_post_id: '907', published_at: null, views: 0, likes: 0, ...zero },
+        ]);
+    });
+});
+
+describe('account attribution', () => {
+    const handles = new Map([
+        ['59689', '@sentinelaerialinspector'],
+        ['4346', '@faithharmony4045'],
+        ['3684', 'Adam Pierce (pages)'],
+        ['3684/1063375450183829', 'The North East Corner (facebook)'],
+        ['3684/899526466587385', 'Sentinel Aerial Inspections (facebook)'],
+    ]);
+
+    it('keys a page-level post by account/page and everything else by account', () => {
+        expect(accountKey({ id: '3684', subaccount: { id: '1063375450183829' } })).toBe('3684/1063375450183829');
+        expect(accountKey({ id: '59689', subaccount: null })).toBe('59689');
+        expect(accountKey(null)).toBeNull();
+    });
+
+    it('lets the page id decide the handle, falling back to the account id', () => {
+        expect(resolveHandle('3684/1063375450183829', handles)).toBe('The North East Corner (facebook)');
+        expect(resolveHandle('3684/899526466587385', handles)).toBe('Sentinel Aerial Inspections (facebook)');
+        expect(resolveHandle('3684/777', handles)).toBe('Adam Pierce (pages)');
+        expect(resolveHandle('59689', handles)).toBe('@sentinelaerialinspector');
+        expect(resolveHandle('99999', handles)).toBeNull();
+        expect(resolveHandle(null, handles)).toBeNull();
+    });
+
+    it('buildAccountResolver walks cursors and joins registry handles to post urls', async () => {
+        const supabase = {
+            from: () => ({ select: () => Promise.resolve({ data: [
+                { account_id: '59689', handle: '@sentinelaerialinspector' },
+                { account_id: '3684/1063375450183829', handle: 'The North East Corner (facebook)' },
+            ], error: null }) }),
+        } as never;
+        listPublishedPosts
+            .mockResolvedValueOnce({ items: [
+                { id: '1', account: { id: '59689', subaccount: null }, platform: 'instagram', state: { type: 'published', postUrl: 'https://www.instagram.com/reel/IGabc/' } },
+            ], cursor: 'c2' } as never)
+            .mockResolvedValueOnce({ items: [
+                { id: '2', account: { id: '3684', subaccount: { id: '1063375450183829' } }, platform: 'facebook', state: { type: 'published', postUrl: 'https://facebook.com/reel/42/' } },
+            ] } as never);
+
+        const r = await buildAccountResolver(supabase, '2026-08-01T00:00:00Z');
+
+        expect(listPublishedPosts).toHaveBeenCalledTimes(2);
+        expect(listPublishedPosts.mock.calls[1][1]).toBe('c2');
+        expect(r.keyByUrl.get(normalizeUrl('https://instagram.com/reel/IGabc'))).toBe('59689');
+        expect(r.keyByUrl.get(normalizeUrl('https://www.facebook.com/reel/42'))).toBe('3684/1063375450183829');
+        expect(r.handles.get('59689')).toBe('@sentinelaerialinspector');
+    });
+
+    it('buildAccountResolver returns an empty resolver when Blotato fails', async () => {
+        const supabase = { from: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) } as never;
+        listPublishedPosts.mockRejectedValueOnce(new Error('boom'));
+        const r = await buildAccountResolver(supabase, '2026-08-01T00:00:00Z');
+        expect(r.keyByUrl.size).toBe(0);
+    });
+
+    it('snapshotUnmatchedAccounts stores Instagram and Facebook rows under their account handle', async () => {
+        const inserts: Array<Record<string, unknown>> = [];
+        const supabase = {
+            from: () => ({ insert: (row: Record<string, unknown>) => { inserts.push(row); return Promise.resolve({ error: null }); } }),
+        } as never;
+        const e = (url: string, platform: string, id: string) =>
+            [normalizeUrl(url), { metrics: { viewsCount: '5' }, platform, id, url, postedAt: null }] as const;
+        const index = new Map([
+            e('https://www.instagram.com/reel/A/', 'instagram', '1'),
+            e('https://facebook.com/reel/B/', 'facebook', '2'),
+            e('https://facebook.com/reel/C/', 'facebook', '3'),
+            e('https://www.instagram.com/reel/D/', 'instagram', '4'), // not in /v2/posts
+        ]) as never;
+        const keyByUrl = new Map([
+            [normalizeUrl('https://www.instagram.com/reel/A/'), '59689'],
+            [normalizeUrl('https://facebook.com/reel/B/'), '3684/1063375450183829'],
+            [normalizeUrl('https://facebook.com/reel/C/'), '3684/899526466587385'],
+        ]);
+
+        await snapshotUnmatchedAccounts(supabase, index, new Set(), { keyByUrl, handles });
+
+        expect(inserts.map((r) => [r.blotato_post_id, r.handle])).toEqual([
+            ['1', '@sentinelaerialinspector'],
+            ['2', 'The North East Corner (facebook)'],
+            ['3', 'Sentinel Aerial Inspections (facebook)'],
+            ['4', null],
         ]);
     });
 });
