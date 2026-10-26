@@ -47,8 +47,10 @@ export async function recordTrail(client: unknown, event: Omit<TrailEvent, 'at'>
     try {
         const db = client as SupabaseClient<TrailDatabase>;
         const { error } = await db.from('judge_trail').insert({ ...event, at: event.at ?? new Date().toISOString() });
+        if (error) console.error(`[judge-trail] insert ${event.stage} failed for ${event.correlation_id}:`, error.message);
         return !error;
-    } catch {
+    } catch (e) {
+        console.error(`[judge-trail] insert ${event.stage} threw for ${event.correlation_id}:`, (e as Error).message);
         return false;
     }
 }
@@ -64,9 +66,11 @@ export async function recordTrailOnce(client: unknown, event: Omit<TrailEvent, '
         let q = db.from('judge_trail').select('stage').eq('correlation_id', event.correlation_id).eq('stage', event.stage);
         for (const [k, v] of Object.entries(key)) q = q.eq(k as 'stage', v as TrailStage);
         const { data, error } = await q.limit(1);
+        if (error) console.error(`[judge-trail] check ${event.stage} failed for ${event.correlation_id}:`, error.message);
         if (error || !Array.isArray(data) || data.length > 0) return false;
         return await recordTrail(client, event);
-    } catch {
+    } catch (e) {
+        console.error(`[judge-trail] check ${event.stage} threw for ${event.correlation_id}:`, (e as Error).message);
         return false;
     }
 }

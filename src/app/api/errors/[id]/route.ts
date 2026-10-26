@@ -63,7 +63,7 @@ export async function PATCH(
                     });
                 }
             }
-        } catch { /* trail is best effort */ }
+        } catch (e) { console.error(`[judge-trail] acknowledged row for error ${id} failed:`, (e as Error).message); /* trail is best effort */ }
     }
 
     return NextResponse.json({ error: data });
