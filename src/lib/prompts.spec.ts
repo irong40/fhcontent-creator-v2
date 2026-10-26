@@ -408,3 +408,29 @@ describe('style brief injection', () => {
         });
     });
 });
+
+describe('human-writer rules', () => {
+    const quotePersona = { ...mockPersona, content_format: 'quote_video' as const };
+
+    it('appends the rules to the standard script and caption prompt', () => {
+        const { system } = buildContentPrompt(mockPersona, mockTopic);
+        expect(system).toContain('HUMAN WRITER RULES');
+        expect(system).toContain('No em dashes');
+        expect(system).toContain('valid JSON only');
+    });
+
+    it('appends the rules to the quote caption prompt', () => {
+        const { system } = buildContentPrompt(quotePersona, mockTopic);
+        expect(system).toContain('HUMAN WRITER RULES');
+    });
+
+    it('keeps the source rules in charge', () => {
+        const { system } = buildContentPrompt(mockPersona, mockTopic);
+        expect(system).toContain('the source rules always win');
+    });
+
+    it('leaves topic generation untouched', () => {
+        const { system } = buildTopicPrompt(mockPersona, [], 1);
+        expect(system).not.toContain('HUMAN WRITER RULES');
+    });
+});

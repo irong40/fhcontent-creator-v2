@@ -73,6 +73,23 @@ function buildBrandVoiceBlock(persona: Persona): string {
     return parts.join('\n\n');
 }
 
+/**
+ * Human-writer rules (2026-10-25): short-form version of the office
+ * human-writer skill (~/.claude/skills/human-writer/SKILL.md), from the
+ * StoryScope study of AI writing signs. Appended to every script and
+ * caption system prompt. Source rules always win over these.
+ */
+export const HUMAN_WRITER_RULES = `HUMAN WRITER RULES (apply to every script, caption, slide and draft; the source rules always win, so never add a fact, name, quote or detail that is not in the material provided):
+- Open on a specific fact, number, name or moment, not on general background or scene-setting.
+- Do not state the lesson or moral. No closing line that explains what the story means or what it "reminds us" of. End on a fact, an open question, or the call to action.
+- No em dashes. Use commas, colons or periods.
+- No "not X, it's Y" or "it wasn't X, it was Y" frames.
+- Never use these words: delve, tapestry, testament, realm, intricate, nuanced, multifaceted, seamlessly, robust, leverage, navigate, unlock, transformative, game-changer, "at the end of the day".
+- No emojis or icons.
+- When an emotion matters, name it plainly ("he was afraid"). Do not use body cues such as a tight throat, cold sweat or a racing heart, and do not invent smells, weather or atmosphere.
+- Use the specific names, places, documents and dates from the material instead of vague allusions.
+- Vary sentence length. Do not default to lists of three.`;
+
 const STYLE_BRIEF_MAX_CHARS = 1500;
 
 /**
@@ -257,6 +274,8 @@ IMPORTANT RULES:
 - NEVER alter the quote. It is reproduced verbatim in the video; your captions surround it.
 - When quoting words inside any JSON string value, use typographic curly quotes (“ ”) — NEVER straight double quotes, which break the JSON.
 
+${HUMAN_WRITER_RULES}
+
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `TOPIC: ${topic.title}
@@ -304,6 +323,8 @@ ${persona.content_guidelines ? `Guidelines: ${persona.content_guidelines}` : ''}
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
 - NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.
+
+${HUMAN_WRITER_RULES}
 
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
@@ -375,6 +396,8 @@ IMPORTANT RULES:
 - Each slide must be visually focused — short, punchy text that works on a 1080x1080 image.
 - Cite primary sources where applicable (inline, e.g. "— Library of Congress, 1922").
 - NEVER use a corrective/contrarian pattern. Lead with the truth directly.
+${HUMAN_WRITER_RULES}
+
 - You MUST respond with valid JSON only. No markdown, no code fences, no explanation.${imageSubjectConstraint ? `\n\nIMAGE-PROMPT SUBJECT RULE — every image_prompt you write MUST follow this constraint:\n${imageSubjectConstraint}` : ''}`;
 
     const user = `TOPIC: ${topic.title}
@@ -423,6 +446,8 @@ IMPORTANT RULES:
 - NEVER mention the host's name — write in first person
 - Target 20-35 minutes of spoken content (approximately 3000-5000 words at 150 wpm)
 - Mark exactly ONE mid-roll call-to-action insertion point as [MID_ROLL_CTA] between segments 2 and 3
+
+${HUMAN_WRITER_RULES}
 
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
@@ -481,6 +506,8 @@ IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}"). Write in first person.
 - Format for Substack: use markdown headings (##), bold, italics, blockquotes for source citations.
 - Include a compelling subject line that drives opens.
+${HUMAN_WRITER_RULES}
+
 - You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
     const user = `TOPIC: ${topic.title}
@@ -559,6 +586,8 @@ ${voiceBlock ? `\n${voiceBlock}\n` : ''}${styleBlock ? `\n${styleBlock}\n` : ''}
 IMPORTANT RULES:
 - NEVER mention the creator's name ("${persona.name}") anywhere in scripts or captions. Write in first person without self-identifying by name.
 - NEVER use a corrective/contrarian pattern like "No, it wasn't X — it was actually Y" or "You might think X, but that's wrong." Instead, lead with the truth directly as a compelling statement or surprising fact.
+
+${HUMAN_WRITER_RULES}
 
 You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
 
