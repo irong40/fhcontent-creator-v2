@@ -366,8 +366,13 @@ export async function buildAccountResolver(
     const keyByUrl = new Map<string, string>();
     const handles = new Map<string, string>();
     try {
-        const { data } = await supabase.from('blotato_accounts').select('account_id, handle');
-        for (const r of (data ?? []) as Array<{ account_id: string; handle: string }>) {
+        // blotato_accounts is not in the generated Database types, so go through
+        // a minimal structural type rather than the typed client.
+        const registry = supabase as unknown as {
+            from: (t: string) => { select: (c: string) => PromiseLike<{ data: Array<{ account_id: string; handle: string }> | null }> };
+        };
+        const { data } = await registry.from('blotato_accounts').select('account_id, handle');
+        for (const r of data ?? []) {
             if (r.account_id && r.handle) handles.set(r.account_id, r.handle);
         }
         let cursor: string | undefined;
