@@ -1,4 +1,5 @@
 import { pointLines, sourceDiscipline } from './sourced-topics';
+import { buildSourcedQuotePieces, DVB_ATTRIBUTION } from './sourced-quote';
 import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/database';
 
 export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
@@ -286,12 +287,57 @@ OUTPUT FORMAT (JSON only):
     return { system, user };
 }
 
+/**
+ * Content prompt for sourced_quote personas (History Unveiled VA): one piece per point,
+ * modeled on quote_video. The scripts are the points' source passages plus the Dictionary
+ * of Virginia Biography, assembled in code (lib/sourced-quote.ts); the model writes only
+ * captions, and the captions may say nothing the passages do not say.
+ */
+function buildSourcedQuoteContentPrompt(
+    persona: Persona,
+    topic: Topic,
+): { system: string; user: string } {
+    const points = topic.historical_points as HistoricalPoint[];
+    const pieces = buildSourcedQuotePieces(points);
+
+    const system = `You are a content writer creating captions for ${persona.brand}.
+
+IMPORTANT RULES:
+- NEVER mention the creator's name ("${persona.name}") anywhere in captions.
+- Each piece states ONE sourced point in the source's own words. NEVER alter the passage.
+- Add nothing else: no legacy or impact lines, no "first" or rank the passage does not give, no dropped hedge (keep "possibly", "about", "temporary"), no changed verb, no date, number or place the passage does not have, and never say what the ${DVB_ATTRIBUTION} "highlights" or thinks.
+- When quoting words inside any JSON string value, use typographic curly quotes (“ ”), never straight double quotes.
+
+You MUST respond with valid JSON only. No markdown, no code fences, no explanation.`;
+
+    const user = `TOPIC: ${topic.title}
+
+${pieces.map(p => `PIECE ${p.point} (appears on screen exactly as written):\n${p.script}`).join('\n\n')}
+${sourceDiscipline(points)}
+For EACH piece above, provide:
+- point: the piece number
+- captionLong: the passage word for word, then "Source: ${DVB_ATTRIBUTION}", then a follow line for ${persona.brand}, then EXACTLY 3 hashtags. Nothing else.
+- captionShort: 280 character max. The passage (cut only at a sentence end), then "${DVB_ATTRIBUTION}", then EXACTLY 2 hashtags.
+
+OUTPUT FORMAT (JSON only):
+{
+  "pieces": [
+    {"point": 1, "captionLong": "...", "captionShort": "..."}
+  ]
+}`;
+
+    return { system, user };
+}
+
 export function buildContentPrompt(
     persona: Persona,
     topic: Topic,
 ): { system: string; user: string } {
     if (persona.content_format === 'quote_video') {
         return buildQuoteContentPrompt(persona, topic);
+    }
+    if (persona.content_format === 'sourced_quote') {
+        return buildSourcedQuoteContentPrompt(persona, topic);
     }
 
     const points = topic.historical_points as HistoricalPoint[];

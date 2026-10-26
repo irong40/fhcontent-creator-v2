@@ -1090,7 +1090,7 @@ export type TopicStatus =
 export type PieceType = 'long' | 'short_1' | 'short_2' | 'short_3' | 'short_4' | 'carousel' | 'lecture' | 'quote_video';
 
 /** Persona production format — see migration 016. */
-export type ContentFormat = 'standard' | 'quote_video';
+export type ContentFormat = 'standard' | 'quote_video' | 'sourced_quote';
 
 export type PieceStatus =
     | 'pending'
