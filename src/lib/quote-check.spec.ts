@@ -36,6 +36,15 @@ describe('sourcedQuoteFaults', () => {
     it('does not check a topic with no source passages', () => {
         expect(sourcedQuoteFaults([{ claim: 'x', quote: null }], [{ pieceType: 'long', captionShort: failedCaption }])).toEqual([]);
     });
+    it('passes a quoted title that appears word for word in the cited page title', () => {
+        const pts = [{ claim: 'King wrote from jail.', quote: 'Injustice anywhere is a threat to justice everywhere.', source: 'Letter from Birmingham Jail, April 16, 1963' }];
+        expect(sourcedQuoteFaults(pts, [{ pieceType: 'long', captionShort: 'King wrote "Letter from Birmingham Jail" in 1963.' }])).toEqual([]);
+    });
+    it('still fails a quoted title that is not on the cited page', () => {
+        const pts = [{ claim: 'King wrote from jail.', quote: 'Injustice anywhere is a threat to justice everywhere.', source: 'Letter from Birmingham Jail, April 16, 1963' }];
+        expect(sourcedQuoteFaults(pts, [{ pieceType: 'long', captionShort: 'King wrote "Why We Cannot Wait Any Longer" in 1963.' }]))
+            .toEqual(['long captionShort quotes "Why We Cannot Wait Any Longer", which no source passage holds']);
+    });
 });
 
 describe('retry help', () => {

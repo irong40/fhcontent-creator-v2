@@ -54,10 +54,12 @@ export const UNSOURCED_QUOTE_ERROR = 'Unsourced quotation';
 
 /** Quoted spans in a sourced topic's pieces that no point or source passage holds. A topic
  *  with no source passages (an unsourced persona) is not checked. */
-export function sourcedQuoteFaults(points: Array<{ claim?: string | null; quote?: string | null }> | null | undefined, pieces: Array<Record<string, unknown>>): string[] {
+export function sourcedQuoteFaults(points: Array<{ claim?: string | null; quote?: string | null; source?: string | null }> | null | undefined, pieces: Array<Record<string, unknown>>): string[] {
     const list = Array.isArray(points) ? points : [];
     if (!list.some(p => typeof p?.quote === 'string' && p.quote.trim())) return [];
-    const sources = list.flatMap(p => [p.claim, p.quote ?? '']).filter((t): t is string => typeof t === 'string' && t.length > 0);
+    // `source` is the cited page's title: a quoted title of a work (Forman, two King topics) is
+    // sourced when it appears word for word there. The speaker's own words still need a passage.
+    const sources = list.flatMap(p => [p.claim, p.quote ?? '', p.source ?? '']).filter((t): t is string => typeof t === 'string' && t.length > 0);
     const faults: string[] = [];
     for (const piece of pieces) {
         for (const field of ['script', 'captionLong', 'captionShort', 'title']) {

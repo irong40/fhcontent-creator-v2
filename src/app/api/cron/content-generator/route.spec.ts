@@ -27,7 +27,7 @@ describe('local content consumption', () => {
         state.generate.mockRejectedValue(new LocalInferencePendingError('fixture'));
         const response = await GET(new Request('https://fixture/api/cron/content-generator'));
         expect((await response.json()).results[0].queued).toBe(true);
-        expect(state.updates).toEqual([{ status: 'draft', error_message: null }]);
+        expect(state.updates).toEqual([{ status: 'draft' }]);
         expect(state.inserts).toHaveLength(0);
     });
     it('inserts a complete batch together and holds local output for review', async () => {
@@ -104,6 +104,28 @@ describe('local content consumption', () => {
         state.topic = { ...state.topic, retry_count: 1, error_message: fault.error_message };
         await GET(new Request('https://fixture/api/cron/content-generator'));
         expect(state.generate.mock.calls.at(-1)?.[0].user).toContain('A PREVIOUS DRAFT WAS REJECTED');
+    });
+    it('keeps the quote fault through the local queue wait, then unquotes the consumed Hamer caption', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        const passage = 'now I am sick and tired of being sick and tired, and we want a change.';
+        state.topic = { historical_points: [{ claim: passage, quote: passage, source: 'Speech', year: '1964' }], retry_count: 1, error_message: "Content-generator: Unsourced quotation: \"I'm sick and tired of being sick and tired.\"" };
+        state.generate.mockRejectedValueOnce(new LocalInferencePendingError('fixture'));
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        const queuedPrompt = state.generate.mock.calls[0][0].user;
+        expect(queuedPrompt).toContain('A PREVIOUS DRAFT WAS REJECTED');
+        expect(state.updates).toEqual([{ status: 'draft' }]);
+        expect(state.updates[0]).not.toHaveProperty('error_message');
+        // Next pass: the topic row still carries the fault, so the prompt (the job key) matches.
+        state.updates.length = 0;
+        const pieces = ['long', 'short_1', 'short_2', 'short_3', 'short_4', 'carousel'].map(pieceType => ({ pieceType, script: 'source draft', captionLong: 'caption', captionShort: pieceType === 'long' ? `Her words: "I'm sick and tired of being sick and tired."` : 'caption' }));
+        state.generate.mockResolvedValueOnce({ text: JSON.stringify({ pieces }), inputTokens: 5, outputTokens: 20, provider: 'ollama' });
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.generate.mock.calls[1][0].user).toBe(queuedPrompt);
+        expect(state.inserts).toHaveLength(1);
+        const long = (state.inserts[0] as Array<{ piece_type: string; caption_short: string }>).find(r => r.piece_type === 'long');
+        expect(long?.caption_short).not.toContain('"');
+        expect(long?.caption_short).toContain("I'm sick and tired of being sick and tired.");
+        expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready' });
     });
     it('recovers existing pieces to review without generating or autoapproving', async () => {
         state.existing = 6;
