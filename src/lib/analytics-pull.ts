@@ -43,6 +43,8 @@ const ANALYTICS_SORT_KEYS: BlotatoAnalyticsSortBy[] = [
     'reach_count',
 ];
 const ANALYTICS_PAGE_LIMIT = 100;
+/** Bound on GET /v2/posts pages (250 each) walked per run to attribute accounts. */
+const MAX_POST_PAGES = 8;
 
 function sleep(ms: number) {
     return new Promise((r) => setTimeout(r, ms));
@@ -328,15 +330,75 @@ export async function snapshotMatchedMetrics(
     return out;
 }
 
+/** Registry key for a Blotato account. A Facebook connection carries several
+ *  pages, so a page-level post is keyed `<account>/<page id>` and the page id
+ *  decides the handle; everything else is keyed by the bare account id. */
+export function accountKey(account: { id: string; subaccount?: { id: string } | null } | null | undefined): string | null {
+    if (!account?.id) return null;
+    return account.subaccount?.id ? `${account.id}/${account.subaccount.id}` : account.id;
+}
+
+/** Resolve a post to its registered handle: the page-level key first, then the
+ *  bare account id. Null when the account is not in blotato_accounts. */
+export function resolveHandle(
+    keyOf: string | null,
+    handles: Map<string, string>,
+): string | null {
+    if (!keyOf) return null;
+    return handles.get(keyOf) ?? handles.get(keyOf.split('/')[0]) ?? null;
+}
+
+export interface AccountResolver {
+    /** normalized post URL → account key, from GET /v2/posts */
+    keyByUrl: Map<string, string>;
+    /** account key → handle, from blotato_accounts */
+    handles: Map<string, string>;
+}
+
+/** Analytics items carry no account, so Instagram and Facebook posts (whose
+ *  URLs carry no handle) are attributed by joining on the post URL to
+ *  GET /v2/posts, which does. Bounded to one page walk per run; a failure
+ *  leaves the resolver empty and the rows null-handled, as before. */
+export async function buildAccountResolver(
+    supabase: AdminClient,
+    sinceIso: string,
+): Promise<AccountResolver> {
+    const keyByUrl = new Map<string, string>();
+    const handles = new Map<string, string>();
+    try {
+        const { data } = await supabase.from('blotato_accounts').select('account_id, handle');
+        for (const r of (data ?? []) as Array<{ account_id: string; handle: string }>) {
+            if (r.account_id && r.handle) handles.set(r.account_id, r.handle);
+        }
+        let cursor: string | undefined;
+        for (let page = 0; page < MAX_POST_PAGES; page++) {
+            const res = await blotato.listPublishedPosts(sinceIso, cursor);
+            for (const item of res.items ?? []) {
+                const key = accountKey(item.account);
+                const url = normalizeUrl(item.state?.postUrl);
+                if (key && url) keyByUrl.set(url, key);
+            }
+            cursor = res.cursor;
+            if (!cursor) break;
+            await sleep(150);
+        }
+    } catch (e) {
+        console.error('[analytics-pull] buildAccountResolver failed:', (e as Error).message);
+    }
+    return { keyByUrl, handles };
+}
+
 /** Step 4: snapshot analytics items that matched no content_piece — the
  *  separate-pipeline accounts (e.g. Sentinel's Part 107 TikTok, NorthEast Corner
  *  Instagram/Facebook). Attributed by the @handle in the URL when it has one;
- *  Instagram/Facebook URLs carry none, so they are stored with a null handle and
- *  identified by blotato_post_id. YouTube stays with the yt-dlp collector. */
+ *  Instagram/Facebook URLs carry none, so they are attributed through the
+ *  Blotato account (see buildAccountResolver) and fall back to a null handle,
+ *  identified by blotato_post_id, only when the account is not registered. YouTube stays with the yt-dlp collector. */
 export async function snapshotUnmatchedAccounts(
     supabase: AdminClient,
     index: Map<string, AnalyticsIndexEntry>,
     matchedUrls: Set<string>,
+    accounts?: AccountResolver,
 ): Promise<{ capturedAccounts: number; insertErrors: number }> {
     let capturedAccounts = 0;
     let insertErrors = 0;
@@ -344,7 +406,8 @@ export async function snapshotUnmatchedAccounts(
     for (const [key, hit] of index) {
         if (matchedUrls.has(key)) continue;
         if (BLOTATO_EXCLUDED_PLATFORMS.has(hit.platform)) continue;
-        const handle = handleFromUrl(hit.url);
+        const handle = handleFromUrl(hit.url)
+            ?? (accounts ? resolveHandle(accounts.keyByUrl.get(key) ?? null, accounts.handles) : null);
         const mapped = mapMetrics(hit.metrics);
 
         const { error } = await supabase.from('performance_metrics').insert({
@@ -399,7 +462,8 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
     const resolved = await resolvePostUrls(supabase, rows);
     const index = await buildAnalyticsIndex(sinceIso);
     const snap = await snapshotMatchedMetrics(supabase, rows, index);
-    const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls);
+    const accounts = await buildAccountResolver(supabase, sinceIso);
+    const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls, accounts);
 
     // Attribute the just-inserted content_piece snapshots to their account
     // (via persona → platform_accounts → blotato_accounts). Non-fatal.
