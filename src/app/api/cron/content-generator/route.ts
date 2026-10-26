@@ -9,6 +9,7 @@ import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSource
 import { UNSUPPORTED_CLAIM_ERROR, callJudge, hasSourcePassages, judgeClaims, unsupportedSpecifics } from '@/lib/claim-check';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
+import { recordTrail, topicCorrelationId } from '@/lib/judge-trail';
 import { acquireLock, releaseLock } from '@/lib/workflow-lock';
 import { validateCronSecret } from '../middleware';
 import type { Database, PieceType, TopicWithPersona, HistoricalPoint } from '@/types/database';
@@ -261,7 +262,10 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         const generated = contentResult.data.pieces as Array<Record<string, unknown>>;
                         const specifics = unsupportedSpecifics(claimPoints, generated);
                         if (specifics.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${specifics.slice(0, 2).join('; ')}`);
-                        const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user));
+                        const claimFaults = await judgeClaims(claimPoints, generated, (system, user) => callJudge(system, user, { topicId: topic.id, topicVersion: (topic as { text_version?: string | null }).text_version ?? 'unversioned' }));
+                        // HR-7: the verdict is a recorded fact, so a rejected topic reads as judge_rejected, not as silence.
+                        const judgedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                        await recordTrail(supabase, { correlation_id: topicCorrelationId(topic.id, judgedVersion), stage: 'validated', topic_id: topic.id, topic_version: judgedVersion, detail: { ok: claimFaults.length === 0, faults: claimFaults.length } });
                         if (claimFaults.length > 0) throw new Error(`${UNSUPPORTED_CLAIM_ERROR}: ${claimFaults.slice(0, 2).join('; ')}`);
                     }
                 } catch (e) {
@@ -315,6 +319,10 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     coo_auto_approved_at: null,
                 }).eq('id', topic.id);
                 if (statusError) throw new Error(statusError.message);
+                {
+                    const advancedVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                    await recordTrail(supabase, { correlation_id: topicCorrelationId(topic.id, advancedVersion), stage: 'state_changed', topic_id: topic.id, topic_version: advancedVersion, detail: { advanced: true, to: 'content_ready' } });
+                }
                 topicResult.piecesInserted = piecesInserted;
             } catch (e) {
                 if (e instanceof LocalInferencePendingError) {
@@ -345,7 +353,15 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 }).eq('id', topic.id);
                 topicResult.error = errMsg;
                 if (exhausted) {
+                    // HR-7: the business state (held, not advanced) and the escalation join the judge trail under one id.
+                    const topicVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                    // The errors row id is picked here, before escalated is written, so the escalation, its
+                    // channel rows and its acknowledgement all carry the same exact error_id.
+                    const trail = { correlationId: topicCorrelationId(topic.id, topicVersion), topicVersion, errorId: crypto.randomUUID() };
+                    await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'state_changed', topic_id: topic.id, topic_version: topicVersion, detail: { advanced: false, to: 'held_for_review' } });
+                    await recordTrail(supabase, { correlation_id: trail.correlationId, stage: 'escalated', topic_id: topic.id, topic_version: topicVersion, detail: { reason: 'retries_exhausted', error_id: trail.errorId } });
                     await notifyError({
+                        trail,
                         source: 'content-generator',
                         message: `Held for review after ${nextRetry} failed attempts: ${errMsg}`,
                         topicId: topic.id,
