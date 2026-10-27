@@ -63,6 +63,11 @@ export async function readHeldDraft(key: string): Promise<HeldDraft | null> {
         const age = Date.now() - new Date(data.created_at).getTime();
         if (Number.isFinite(age) && age > HOLD_MAX_AGE_MS) {
             console.warn(`draft hold expired (${Math.round(age / 3_600_000)}h old); writing a new draft`);
+            // Drop the expired row, or holdDraft's DO NOTHING upsert keeps it and the next
+            // draft is never held (qcheck R1). Matching created_at leaves a newer hold alone.
+            const { error: dropError } = await db().from('content_draft_holds').delete()
+                .eq('request_key', key).eq('created_at', data.created_at);
+            if (dropError) console.warn(`expired draft hold not dropped (${describe(dropError)})`);
             return null;
         }
         return { text: data.result_text, inputTokens: data.input_tokens, outputTokens: data.output_tokens };

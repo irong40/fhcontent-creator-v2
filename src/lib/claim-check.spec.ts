@@ -196,3 +196,20 @@ describe('judge model settings', () => {
         await expect(callJudgeDirect('s', 'u', {})).rejects.toThrow('HTTP 500');
     });
 });
+
+// 2026-10-27 (Codex C4, C5 on fh-sourced-checks r2)
+describe('number check: abbreviated ranges and sentence boundaries', () => {
+    const piece = (text: string) => [{ pieceType: 'short_1', script: text }];
+    const point = (quote: string) => [{ claim: 'x', quote, source: 'Fixture source' }];
+    it('accepts an exact copy of an abbreviated year range in the source', () => {
+        expect(unsupportedSpecifics(point('He served the 1881-82 term.'), piece('He served the 1881-82 term.'))).toEqual([]);
+        expect(unsupportedSpecifics(point('He served the 1881-82 term.'), piece('He served the 1881-83 term.')))
+            .toEqual(['short_1 script states "83", which no source passage holds']);
+    });
+    it('does not join number words across a sentence boundary', () => {
+        expect(wordNumbers('He served twenty. Seven more arrived.')).toEqual(['20', '7']);
+        expect(wordNumbers('twenty-seven')).toEqual(['27']);
+        expect(unsupportedSpecifics(point('He served twenty. Seven more arrived.'), piece('He served 27 years.')))
+            .toEqual(['short_1 script states "27", which no source passage holds']);
+    });
+});

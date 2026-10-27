@@ -5,19 +5,21 @@ const table = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>>, fa
 vi.mock('./supabase/server', () => ({ createAdminClient: () => ({ from: () => {
     if (table.fail === 'throw') throw new Error('relation "content_draft_holds" does not exist');
     const err = table.fail === 'error' ? { code: '42P01', message: 'relation "content_draft_holds" does not exist' } : null;
-    let filter: [string, unknown] | null = null;
+    const filters: Array<[string, unknown]> = [];
+    const matches = (r: Record<string, unknown>) => filters.length > 0 && filters.every(([c, v]) => r[c] === v);
     let op: 'select' | 'delete' = 'select';
     const chain = {
         select: () => chain,
-        eq: (col: string, val: unknown) => { filter = [col, val]; return chain; },
-        maybeSingle: async () => ({ data: err ? null : table.rows.find(r => filter && r[filter[0]] === filter[1]) ?? null, error: err }),
+        eq: (col: string, val: unknown) => { filters.push([col, val]); return chain; },
+        maybeSingle: async () => ({ data: err ? null : table.rows.find(matches) ?? null, error: err }),
+        // ignoreDuplicates: ON CONFLICT DO NOTHING, as Postgres does it.
         upsert: async (row: Record<string, unknown>) => {
-            if (!err && !table.rows.some(r => r.request_key === row.request_key)) table.rows.push(row);
+            if (!err && !table.rows.some(r => r.request_key === row.request_key)) table.rows.push({ ...row, created_at: new Date().toISOString() });
             return { error: err };
         },
         delete: () => { op = 'delete'; return chain; },
         then: (resolve: (v: unknown) => unknown) => {
-            if (op === 'delete' && !err && filter) table.rows = table.rows.filter(r => r[filter![0]] !== filter![1]);
+            if (op === 'delete' && !err) table.rows = table.rows.filter(r => !matches(r));
             return Promise.resolve({ error: err }).then(resolve);
         },
     };
@@ -87,7 +89,34 @@ describe('draft holds (2026-10-22)', () => {
         table.rows.push({ request_key: key, topic_id: 't1', result_text: draft.text, input_tokens: 1, output_tokens: 2, created_at: new Date(Date.now() - HOLD_MAX_AGE_MS - 60_000).toISOString() });
         expect(await readHeldDraft(key)).toBeNull();
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('expired'));
-        table.rows[0].created_at = new Date(Date.now() - 60_000).toISOString();
+        table.rows.push({ request_key: key, topic_id: 't1', result_text: draft.text, input_tokens: 1, output_tokens: 2, created_at: new Date(Date.now() - 60_000).toISOString() });
         expect(await readHeldDraft(key)).toMatchObject({ text: draft.text });
+    });
+
+    // 2026-10-27 (qcheck R1, Codex C1): DO NOTHING on the same key kept the expired row, so
+    // every later run bought a fresh draft that was never held.
+    it('after a hold expires, the next run holds its new draft and the run after reuses it', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const key = holdKey(request);
+        table.rows.push({ request_key: key, topic_id: 't1', result_text: 'old draft', input_tokens: 1, output_tokens: 2, created_at: new Date(Date.now() - HOLD_MAX_AGE_MS - 60_000).toISOString() });
+        // Run 1 after expiry: no usable hold, so it buys a draft and holds it.
+        expect(await readHeldDraft(key)).toBeNull();
+        expect(table.rows).toHaveLength(0);
+        const fresh = { text: 'new draft', inputTokens: 10, outputTokens: 20 };
+        await holdDraft(key, 't1', fresh);
+        // Run 2: reuses that draft instead of buying another.
+        expect(await readHeldDraft(key)).toEqual(fresh);
+        expect(await readHeldDraft(key)).toEqual(fresh);
+        expect(table.rows).toHaveLength(1);
+    });
+
+    it('leaves a newer hold in place when dropping an expired one', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const key = holdKey(request);
+        const old = new Date(Date.now() - HOLD_MAX_AGE_MS - 60_000).toISOString();
+        table.rows.push({ request_key: key, topic_id: 't1', result_text: 'old', input_tokens: 1, output_tokens: 2, created_at: old });
+        table.rows.push({ request_key: 'other', topic_id: 't1', result_text: 'other', input_tokens: 1, output_tokens: 2, created_at: old });
+        expect(await readHeldDraft(key)).toBeNull();
+        expect(table.rows.map(r => r.request_key)).toEqual(['other']);
     });
 });

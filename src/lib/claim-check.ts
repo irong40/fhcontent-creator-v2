@@ -91,7 +91,9 @@ function smallWord(w: string): number | null {
 export function wordNumbers(text: string): string[] {
     const out: string[] = [];
     // Hyphenated words are read part by part: "eighty-seven" is 80 then 7, "five-year" is 5.
-    const tokens = text.toLowerCase().match(/[a-z]+/g) ?? [];
+    // Sentence punctuation is kept as a token so a run stops there: "twenty. Seven" is 20 and 7,
+    // not 27 (Codex C5, 2026-10-27).
+    const tokens = text.toLowerCase().match(/[a-z]+|[.!?;]/g) ?? [];
     let total = 0, current = 0, count: number | null = null, inRun = false;
     let runTokens: string[] = [];
     const flush = () => {
@@ -144,6 +146,9 @@ function heldNumbers(texts: string[]): { held: Set<string>; years: number[] } {
     for (const t of texts) {
         for (const n of t.match(NUMBER_RE) ?? []) held.add(clean(n));
         for (const n of wordNumbers(t)) held.add(n);
+        // The end year of an abbreviated range ("1881-82" holds 1882), read the same way as the
+        // generated text, so an exact copy of the source passes (Codex C4, 2026-10-27).
+        for (const s of specificsIn(t)) held.add(s.value);
     }
     // Only a plain four-digit number written as a year (no comma, so not a head count like
     // "1,500", and not a number read from words) opens a decade or century range (qcheck Q6).

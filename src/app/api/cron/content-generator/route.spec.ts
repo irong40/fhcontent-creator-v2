@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], guards: [] as Array<[string, unknown]>, inserts: [] as unknown[], deletes: [] as string[], heldOn: null as string | null, existing: 0, topic: {} as Record<string, unknown> }));
+const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], guards: [] as Array<[string, unknown]>, inserts: [] as unknown[], deletes: [] as string[], trails: [] as unknown[], heldOn: null as string | null, existing: 0, topic: {} as Record<string, unknown> }));
 vi.mock('@/lib/content-inference', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/content-inference')>(), generateQueuedContent: state.generate }));
 vi.mock('@/lib/claim-check', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/claim-check')>(), callJudge: state.judge }));
 vi.mock('@/lib/local-inference-queue', () => ({ LocalInferencePendingError: class extends Error {} }));
@@ -16,13 +16,17 @@ vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (tab
         limit: () => { response = { data: [{ id: 'fixture', title: 'Source', retry_count: 0, personas: { name: 'Fixture', content_format: 'standard' }, ...state.topic }], error: null }; return chain; },
         update: (value: Record<string, unknown>) => { state.updates.push(value); response = { data: state.heldOn !== null && value.status === state.heldOn ? [] : [{ id: 'fixture' }], error: null }; return chain; },
         delete: () => { state.deletes.push(table); return chain; },
-        insert: (value: unknown) => { if (table === 'content_pieces') state.inserts.push(value); return chain; },
+        insert: (value: unknown) => {
+            if (table === 'content_pieces') { state.inserts.push(value); response = { data: (value as unknown[]).map((_, i) => ({ id: `piece-${i}` })), error: null }; }
+            if (table === 'judge_trail') state.trails.push(value);
+            return chain;
+        },
         then: (resolve: (value: unknown) => unknown) => Promise.resolve(response).then(resolve),
     }; return chain;
 } }) }));
 import { GET } from './route';
 import { LocalInferencePendingError } from '@/lib/local-inference-queue';
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.guards.length = 0; state.inserts.length = 0; state.deletes.length = 0; state.heldOn = null; state.existing = 0; state.topic = {}; });
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.guards.length = 0; state.inserts.length = 0; state.deletes.length = 0; state.trails.length = 0; state.heldOn = null; state.existing = 0; state.topic = {}; });
 describe('local content consumption', () => {
     it('leaves queued work selectable without charging retries or inserting content', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
@@ -246,8 +250,28 @@ describe('local content consumption', () => {
             expect(result.skipped).toBe('topic left the drain during the run');
             expect(result.piecesInserted).toBe(0);
             expect(state.deletes).toEqual(['content_pieces']);
+            // Codex C2 (2026-10-27): only the ids this run inserted, not every pending piece of the topic.
+            expect(state.guards).toContainEqual(['id', ['piece-0', 'piece-1', 'piece-2', 'piece-3', 'piece-4', 'piece-5']]);
             expect(state.release).toHaveBeenCalledWith('fixture');
             expect(state.updates.some(u => u.status === 'draft')).toBe(false);
+        });
+        // 2026-10-27 (qcheck R2, Codex C3)
+        it('does not page or write the held_for_review trail when an exhausted retry finds the topic gone from the drain', async () => {
+            vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+            state.topic = { historical_points: [lafayettePoint], retry_count: 2 };
+            state.generate.mockResolvedValue({ text: JSON.stringify({ pieces: passPieces() }), inputTokens: 5, outputTokens: 20, provider: 'claude' });
+            state.judge.mockResolvedValue('{"unsupported":[{"claim":"x","reason":"y"}]}');
+            const { notifyError } = await import('@/lib/notifications');
+            state.heldOn = 'draft';
+            await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect(state.updates.at(-1)).toMatchObject({ status: 'draft', retry_count: 3, requires_review: true });
+            expect(state.trails.some(t => ['escalated', 'state_changed'].includes((t as { stage: string }).stage))).toBe(false);
+            expect(notifyError).not.toHaveBeenCalled();
+            // Control: the same exhausted failure with the topic still in the drain pages and writes the trail.
+            state.heldOn = null;
+            await GET(new Request('https://fixture/api/cron/content-generator'));
+            expect(state.trails.map(t => (t as { stage: string }).stage)).toEqual(expect.arrayContaining(['state_changed', 'escalated']));
+            expect(notifyError).toHaveBeenCalledTimes(1);
         });
         it('guards the recovery write too, and keeps the hold when that write changes nothing', async () => {
             vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');

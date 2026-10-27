@@ -355,7 +355,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         status: 'pending' as const,
                     };
                 });
-                const { error: insertError } = await supabase.from('content_pieces').insert(rows);
+                const { data: insertedRows, error: insertError } = await supabase.from('content_pieces').insert(rows).select('id');
                 if (insertError) throw new Error(insertError.message);
                 const piecesInserted = rows.length;
 
@@ -375,10 +375,14 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 if (statusError) throw new Error(statusError.message);
                 if (Array.isArray(advanced) && advanced.length === 0) {
                     // The topic was held or moved while this run worked. The guarded write changed
-                    // nothing, so the pieces inserted above belong to no live topic: remove them
-                    // (this run created every one; existingCount was 0) and report a skip, not a success.
-                    const { error: cleanupError } = await supabase.from('content_pieces').delete().eq('topic_id', topic.id).eq('status', 'pending');
-                    if (cleanupError) console.error(`Content-generator: could not remove pieces of held topic ${topic.id}: ${cleanupError.message}`);
+                    // nothing, so the pieces inserted above belong to no live topic: remove them by id
+                    // and report a skip, not a success. Only this run's ids: a hand regeneration or a
+                    // dashboard write is not under the workflow lock (Codex C2, 2026-10-27).
+                    const insertedIds = (insertedRows ?? []).map(r => r.id);
+                    if (insertedIds.length > 0) {
+                        const { error: cleanupError } = await supabase.from('content_pieces').delete().in('id', insertedIds);
+                        if (cleanupError) console.error(`Content-generator: could not remove pieces of held topic ${topic.id}: ${cleanupError.message}`);
+                    }
                     await releaseDraftHolds(topic.id);
                     results.push({ ...topicResult, skipped: 'topic left the drain during the run' });
                     continue;
@@ -410,7 +414,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 // so one bad topic can no longer flood the alert channel.
                 const nextRetry = (topic.retry_count ?? 0) + 1;
                 const exhausted = nextRetry >= MAX_RETRIES;
-                await supabase.from('topics').update({
+                const { data: failedRows } = await supabase.from('topics').update({
                     status: 'draft',
                     retry_count: nextRetry,
                     requires_review: exhausted ? true : (topic.requires_review ?? false),
@@ -418,9 +422,12 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                         ? `Content-generator failed ${nextRetry}× — needs manual review`
                         : (topic.review_reason ?? null),
                     error_message: `Content-generator: ${errMsg}`,
-                }).eq('id', topic.id).in('status', [...IN_DRAIN]);
+                }).eq('id', topic.id).in('status', [...IN_DRAIN]).select('id');
                 topicResult.error = errMsg;
-                if (exhausted) {
+                // 0 rows: the topic left the drain during the run, so nothing was held here. No
+                // trail and no page for a state change that did not happen (qcheck R2, 2026-10-27).
+                const leftDrain = Array.isArray(failedRows) && failedRows.length === 0;
+                if (exhausted && !leftDrain) {
                     // HR-7: the business state (held, not advanced) and the escalation join the judge trail under one id.
                     const topicVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
                     // The errors row id is picked here, before escalated is written, so the escalation, its
