@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], guards: [] as Array<[string, unknown]>, inserts: [] as unknown[], deletes: [] as string[], trails: [] as unknown[], heldOn: null as string | null, existing: 0, topic: {} as Record<string, unknown> }));
+const state = vi.hoisted(() => ({ generate: vi.fn(), judge: vi.fn(), release: vi.fn(), updates: [] as Record<string, unknown>[], guards: [] as Array<[string, unknown]>, inserts: [] as unknown[], deletes: [] as string[], deleteFilters: [] as Array<[string, unknown]>, trails: [] as unknown[], heldOn: null as string | null, existing: 0, topic: {} as Record<string, unknown> }));
 vi.mock('@/lib/content-inference', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/content-inference')>(), generateQueuedContent: state.generate }));
 vi.mock('@/lib/claim-check', async importOriginal => ({ ...await importOriginal<typeof import('@/lib/claim-check')>(), callJudge: state.judge }));
 vi.mock('@/lib/local-inference-queue', () => ({ LocalInferencePendingError: class extends Error {} }));
@@ -10,12 +10,14 @@ vi.mock('@/lib/workflow-lock', () => ({ acquireLock: async () => 'lock', release
 vi.mock('../middleware', () => ({ validateCronSecret: () => true }));
 vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (table: string) => {
     let response: unknown = { error: null };
+    let deleting = false;
     const chain = {
         select: (_fields?: string, options?: unknown) => { if (options) response = { count: state.existing }; return chain; },
-        eq: () => chain, in: (col: string, vals: unknown) => { state.guards.push([col, vals]); return chain; }, not: () => chain, or: () => chain, order: () => chain,
+        eq: (col: string, val: unknown) => { if (deleting) state.deleteFilters.push([col, val]); return chain; },
+        in: (col: string, vals: unknown) => { state.guards.push([col, vals]); if (deleting) state.deleteFilters.push([col, vals]); return chain; }, not: () => chain, or: () => chain, order: () => chain,
         limit: () => { response = { data: [{ id: 'fixture', title: 'Source', retry_count: 0, personas: { name: 'Fixture', content_format: 'standard' }, ...state.topic }], error: null }; return chain; },
         update: (value: Record<string, unknown>) => { state.updates.push(value); response = { data: state.heldOn !== null && value.status === state.heldOn ? [] : [{ id: 'fixture' }], error: null }; return chain; },
-        delete: () => { state.deletes.push(table); return chain; },
+        delete: () => { state.deletes.push(table); deleting = true; return chain; },
         insert: (value: unknown) => {
             if (table === 'content_pieces') { state.inserts.push(value); response = { data: (value as unknown[]).map((_, i) => ({ id: `piece-${i}` })), error: null }; }
             if (table === 'judge_trail') state.trails.push(value);
@@ -26,7 +28,7 @@ vi.mock('@/lib/supabase/server', () => ({ createAdminClient: () => ({ from: (tab
 } }) }));
 import { GET } from './route';
 import { LocalInferencePendingError } from '@/lib/local-inference-queue';
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.guards.length = 0; state.inserts.length = 0; state.deletes.length = 0; state.trails.length = 0; state.heldOn = null; state.existing = 0; state.topic = {}; });
+afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); state.updates.length = 0; state.guards.length = 0; state.inserts.length = 0; state.deletes.length = 0; state.deleteFilters.length = 0; state.trails.length = 0; state.heldOn = null; state.existing = 0; state.topic = {}; });
 describe('local content consumption', () => {
     it('leaves queued work selectable without charging retries or inserting content', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
@@ -251,7 +253,8 @@ describe('local content consumption', () => {
             expect(result.piecesInserted).toBe(0);
             expect(state.deletes).toEqual(['content_pieces']);
             // Codex C2 (2026-10-27): only the ids this run inserted, not every pending piece of the topic.
-            expect(state.guards).toContainEqual(['id', ['piece-0', 'piece-1', 'piece-2', 'piece-3', 'piece-4', 'piece-5']]);
+            // Codex X2 (2026-10-27): and still only pieces nobody advanced from the dashboard meanwhile.
+            expect(state.deleteFilters).toEqual([['id', ['piece-0', 'piece-1', 'piece-2', 'piece-3', 'piece-4', 'piece-5']], ['status', 'pending']]);
             expect(state.release).toHaveBeenCalledWith('fixture');
             expect(state.updates.some(u => u.status === 'draft')).toBe(false);
         });

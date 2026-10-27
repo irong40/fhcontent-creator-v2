@@ -208,6 +208,7 @@ describe('number check: abbreviated ranges and sentence boundaries', () => {
     });
     it('does not join number words across a sentence boundary', () => {
         expect(wordNumbers('He served twenty. Seven more arrived.')).toEqual(['20', '7']);
+        expect(wordNumbers('twenty… Seven')).toEqual(['20', '7']);
         expect(wordNumbers('twenty-seven')).toEqual(['27']);
         expect(unsupportedSpecifics(point('He served twenty. Seven more arrived.'), piece('He served 27 years.')))
             .toEqual(['short_1 script states "27", which no source passage holds']);

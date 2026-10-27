@@ -92,8 +92,8 @@ export function wordNumbers(text: string): string[] {
     const out: string[] = [];
     // Hyphenated words are read part by part: "eighty-seven" is 80 then 7, "five-year" is 5.
     // Sentence punctuation is kept as a token so a run stops there: "twenty. Seven" is 20 and 7,
-    // not 27 (Codex C5, 2026-10-27).
-    const tokens = text.toLowerCase().match(/[a-z]+|[.!?;]/g) ?? [];
+    // not 27 (Codex C5, 2026-10-27). The Unicode ellipsis counts too: the generator writes it (Codex X3).
+    const tokens = text.toLowerCase().match(/[a-z]+|[.!?;…]/g) ?? [];
     let total = 0, current = 0, count: number | null = null, inRun = false;
     let runTokens: string[] = [];
     const flush = () => {

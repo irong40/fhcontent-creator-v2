@@ -380,7 +380,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     // dashboard write is not under the workflow lock (Codex C2, 2026-10-27).
                     const insertedIds = (insertedRows ?? []).map(r => r.id);
                     if (insertedIds.length > 0) {
-                        const { error: cleanupError } = await supabase.from('content_pieces').delete().in('id', insertedIds);
+                        const { error: cleanupError } = await supabase.from('content_pieces').delete().in('id', insertedIds).eq('status', 'pending');
                         if (cleanupError) console.error(`Content-generator: could not remove pieces of held topic ${topic.id}: ${cleanupError.message}`);
                     }
                     await releaseDraftHolds(topic.id);
