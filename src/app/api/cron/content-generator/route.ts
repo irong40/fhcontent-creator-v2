@@ -144,13 +144,22 @@ export async function GET(request: Request) {
                 const copyThese = priorQuoteFault
                     ? [...new Set(rejectedSpans(priorQuoteFault).map(s => closestSourceSentence(s, retrySources)).filter((s): s is string => !!s))]
                     : [];
+                // Same for an unsupported number or claim: without the reason the model repeats the
+                // year it recalled from memory and the draft fails the claim check three times.
+                const priorClaimFault = topic.error_message?.includes(UNSUPPORTED_CLAIM_ERROR)
+                    ? topic.error_message.slice(topic.error_message.indexOf(UNSUPPORTED_CLAIM_ERROR))
+                    : null;
                 const user = priorQuoteFault
                     ? `${basePrompt}
 
 A PREVIOUS DRAFT WAS REJECTED. ${priorQuoteFault}. Inside quotation marks use only words copied exactly from THE QUOTE or a SOURCE PASSAGE above. A title is not a quotation. Never put a title, a summary or a paraphrase in quotation marks.${copyThese.length ? `
 If you quote the speaker, copy this sentence exactly, character for character, or leave the quotation marks out and describe it in your own words:
 ${copyThese.map(s => `"${s}"`).join('\n')}` : ''}`
-                    : basePrompt;
+                    : priorClaimFault
+                        ? `${basePrompt}
+
+A PREVIOUS DRAFT WAS REJECTED. ${priorClaimFault}. Write no number, year, date or count that does not appear in a SOURCE PASSAGE above, and make no claim a passage does not state. Leave the figure out rather than recall it.`
+                        : basePrompt;
                 // quote_video personas return 1 piece; standard personas return 6.
                 const isQuote = persona.content_format === 'quote_video';
                 const responseSchema = isQuote
