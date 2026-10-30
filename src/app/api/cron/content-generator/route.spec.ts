@@ -105,6 +105,20 @@ describe('local content consumption', () => {
         await GET(new Request('https://fixture/api/cron/content-generator'));
         expect(state.generate.mock.calls.at(-1)?.[0].user).toContain('A PREVIOUS DRAFT WAS REJECTED');
     });
+    it('tells the writer why an unsupported claim was rejected, but not when the judge was down', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint], retry_count: 1, error_message: "Unsupported claim: states '1967'" };
+        gen();
+        state.judge.mockResolvedValue('{"unsupported":[]}');
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        const rejected = state.generate.mock.calls.at(-1)?.[0].user as string;
+        expect(rejected).toContain('A PREVIOUS DRAFT WAS REJECTED');
+        expect(rejected).toContain("states '1967'");
+        state.topic = { historical_points: [lafayettePoint], retry_count: 1, error_message: 'Unsupported claim: the claim check could not reach the judge model (HTTP 502)' };
+        gen();
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.generate.mock.calls.at(-1)?.[0].user).not.toContain('A PREVIOUS DRAFT WAS REJECTED');
+    });
     it('recovers existing pieces to review without generating or autoapproving', async () => {
         state.existing = 6;
         await GET(new Request('https://fixture/api/cron/content-generator'));
