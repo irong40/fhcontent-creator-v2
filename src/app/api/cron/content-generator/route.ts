@@ -146,7 +146,9 @@ export async function GET(request: Request) {
                     : [];
                 // Same for an unsupported number or claim: without the reason the model repeats the
                 // year it recalled from memory and the draft fails the claim check three times.
-                const priorClaimFault = topic.error_message?.includes(UNSUPPORTED_CLAIM_ERROR)
+                // The judge's own outages share the prefix but say nothing about the draft.
+                const judgeOutage = /could not reach the judge|judge model failed|judge stream ended|returned no verdict/;
+                const priorClaimFault = topic.error_message?.includes(UNSUPPORTED_CLAIM_ERROR) && !judgeOutage.test(topic.error_message)
                     ? topic.error_message.slice(topic.error_message.indexOf(UNSUPPORTED_CLAIM_ERROR))
                     : null;
                 const user = priorQuoteFault
