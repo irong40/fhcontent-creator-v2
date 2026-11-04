@@ -184,6 +184,19 @@ describe('buildTopicPrompt', () => {
     });
 });
 
+describe('quote_video caption source rule', () => {
+    const quotePersona = { ...mockPersona, content_format: 'quote_video' as const };
+    it('tells the model to add no line its sources do not state', () => {
+        const { user } = buildContentPrompt(quotePersona, mockTopic);
+        expect(user).toContain('CAPTION SOURCE RULE');
+        expect(user).toContain('Add no chapter, book section, speech title');
+    });
+    it('leaves the 6-piece prompt without the rule', () => {
+        const { user } = buildContentPrompt(mockPersona, mockTopic);
+        expect(user).not.toContain('CAPTION SOURCE RULE');
+    });
+});
+
 describe('buildContentPrompt', () => {
     it('returns system and user strings', () => {
         const result = buildContentPrompt(mockPersona, mockTopic);

@@ -271,6 +271,8 @@ ${contextFacts.map(p => `- ${p.claim} (${p.source}, ${p.year})${p.quote && p.quo
 ${sourceDiscipline(points)}
 Generate content for 1 piece — a short looping quote video:
 
+- CAPTION SOURCE RULE: every sentence in captionLong and captionShort, apart from the follow CTA and hashtags, must restate something the TOPIC, CONTEXT, THE QUOTE or a SUPPORTING FACT above states. Add no chapter, book section, speech title, date, place or other detail that is not written above, even if you remember it. Say less rather than add a line the sources do not state.
+
 FOR THE PIECE, PROVIDE:
 - script: The exact on-screen text — the verbatim quote, then a line break, then the attribution line (figure name, source, year). Do not add anything else.
 - captionLong: 2200 character max caption. Open with the historical context, weave in 1-2 supporting facts, close with a follow CTA for the ${persona.brand} brand. End with EXACTLY 3 high-relevance hashtags — no more, no fewer (Instagram rejects posts with more than 5 hashtags, so 3 is the hard ceiling).
