@@ -225,9 +225,46 @@ describe('snapshotMatchedMetrics', () => {
         expect(res.sampleUnmatchedUrl).toBe('https://instagram.com/reel/zzz');
         expect(res.matchedUrls.has('tiktok.com/@x/video/1')).toBe(true);
         expect(inserts).toEqual([
-            { content_piece_id: 'p1', platform: 'tiktok', blotato_post_id: '901', published_at: null, views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
-            { content_piece_id: 'p1', platform: 'twitter', blotato_post_id: '902', published_at: null, views: 0, likes: 0, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'tiktok', handle: '@x', blotato_post_id: '901', published_at: null, views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'twitter', handle: '@x', blotato_post_id: '902', published_at: null, views: 0, likes: 0, comments: 0, shares: 0, saves: 0 },
         ]);
+    });
+
+    it('ties a piece by blotato post id when its post_url never resolved', async () => {
+        const pieces = [{
+            id: 'p9',
+            published_platforms: { instagram: { status: 'published', post_id: '977' } },
+        }] as never[];
+        const index = idx([['https://instagram.com/reel/q9', { viewsCount: '12' }, 'instagram', '977']]);
+        const { supabase, inserts } = fakeClient();
+
+        const res = await snapshotMatchedMetrics(supabase, pieces, index);
+
+        expect(res.snapshots).toBe(1);
+        expect(res.matchedUrls.has(normalizeUrl('https://instagram.com/reel/q9'))).toBe(true);
+        expect(inserts[0]).toMatchObject({ content_piece_id: 'p9', blotato_post_id: '977', views: 12 });
+    });
+
+    it('writes the handle on piece-tied rows, from the URL or the Blotato account', async () => {
+        const pieces = [{
+            id: 'p1',
+            published_platforms: {
+                tiktok: { status: 'published', post_url: 'https://www.tiktok.com/@necorner/video/5' },
+                facebook: { status: 'published', post_url: 'https://facebook.com/posts/6' },
+            },
+        }] as never[];
+        const index = idx([
+            ['https://www.tiktok.com/@necorner/video/5', { viewsCount: '3' }, 'tiktok', '905'],
+            ['https://facebook.com/posts/6', { viewsCount: '4' }, 'facebook', '906'],
+        ]);
+        const keyByUrl = new Map([[normalizeUrl('https://facebook.com/posts/6'), 'acct1/page7']]);
+        const handles = new Map([['acct1/page7', '@northeastcorner']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByUrl, handles } as never);
+
+        expect(inserts[0]).toMatchObject({ platform: 'tiktok', handle: '@necorner' });
+        expect(inserts[1]).toMatchObject({ platform: 'facebook', handle: '@northeastcorner' });
     });
 
     it('writes published_at from Blotato postedAt', async () => {

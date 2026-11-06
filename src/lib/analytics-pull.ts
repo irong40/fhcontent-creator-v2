@@ -290,19 +290,27 @@ export async function snapshotMatchedMetrics(
     supabase: AdminClient,
     pieces: PieceRow[],
     index: Map<string, AnalyticsIndexEntry>,
+    accounts?: AccountResolver,
 ): Promise<SnapshotResult> {
     const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0, youtubeSkipped: 0, matchedUrls: new Set() };
+    // Second key: a publish record whose post_url never resolved still carries
+    // the Blotato post id, so the piece tie does not depend on the URL alone.
+    const keyById = new Map<string, string>();
+    for (const [key, hit] of index) if (hit.id) keyById.set(hit.id, key);
 
     for (const piece of pieces) {
         const platforms = piece.published_platforms;
         if (!platforms) continue;
 
         for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
-            if (!entry || entry.status !== 'published' || !entry.post_url) continue;
+            if (!entry || entry.status !== 'published') continue;
+            const idKey = entry.post_id ? keyById.get(entry.post_id) : undefined;
+            if (!entry.post_url && !idKey) continue;
             if (BLOTATO_EXCLUDED_PLATFORMS.has(platform)) { out.youtubeSkipped++; continue; }
-            const key = normalizeUrl(entry.post_url);
-            const hit = index.get(key);
-            if (!hit) {
+            const urlKey = entry.post_url ? normalizeUrl(entry.post_url) : undefined;
+            const key = urlKey && index.has(urlKey) ? urlKey : idKey;
+            const hit = key ? index.get(key) : undefined;
+            if (!key || !hit) {
                 out.unmatched++;
                 if (!out.sampleUnmatchedUrl) out.sampleUnmatchedUrl = entry.post_url;
                 continue;
@@ -310,10 +318,13 @@ export async function snapshotMatchedMetrics(
             out.matchedUrls.add(key);
             const mapped = mapMetrics(hit.metrics);
             if (!hasSignal(mapped)) out.matchedNoSignal++;
+            const handle = handleFromUrl(hit.url)
+                ?? (accounts ? resolveHandle(accounts.keyByUrl.get(key) ?? null, accounts.handles) : null);
 
             const { error: insertError } = await supabase.from('performance_metrics').insert({
                 content_piece_id: piece.id,
                 platform,
+                handle,
                 blotato_post_id: hit.id,
                 published_at: hit.postedAt,
                 ...mapped,
@@ -466,8 +477,8 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
     const rows = pieces as PieceRow[];
     const resolved = await resolvePostUrls(supabase, rows);
     const index = await buildAnalyticsIndex(sinceIso);
-    const snap = await snapshotMatchedMetrics(supabase, rows, index);
     const accounts = await buildAccountResolver(supabase, sinceIso);
+    const snap = await snapshotMatchedMetrics(supabase, rows, index, accounts);
     const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls, accounts);
 
     // Attribute the just-inserted content_piece snapshots to their account
