@@ -76,23 +76,20 @@ export function youtubeVideoKey(host: string, u: URL): string | null {
 }
 
 const FB_HOSTS = new Set(['facebook.com', 'm.facebook.com', 'web.facebook.com']);
-/** Facebook query-string paths and the params that identify the post on each. */
-const FB_IDENTITY_PARAMS: Record<string, string[]> = {
-    '/permalink.php': ['story_fbid', 'id'],
-    '/story.php': ['story_fbid', 'id'],
-    '/watch': ['v'],
-    '/photo.php': ['fbid'],
-};
+/** Query params that carry a Facebook post's identity, in key order. Checked
+ *  on EVERY Facebook path, not a path list: a list missed /photo/?fbid= and
+ *  /video.php?v=, and two such posts took each other's id and metrics.
+ *  Tracking params (ref, __cft__, __tn__, mibextid, s) are not in it. */
+const FB_IDENTITY_PARAMS = ['story_fbid', 'fbid', 'v', 'id'];
 
 /** Facebook, like YouTube, keeps some post identities in the QUERY STRING
- *  (permalink.php?story_fbid=..&id=..). Dropping it collapsed every such post
- *  onto one key, so the last page's handle and metrics won. Keep only the
- *  identifying params, in a fixed order. Empty for every other URL. */
-function facebookIdentityQuery(host: string, path: string, u: URL): string {
+ *  (permalink.php?story_fbid=..&id=.., photo/?fbid=.., video.php?v=..).
+ *  Dropping it collapsed every such post onto one key, so the last page's
+ *  handle and metrics won. Keep only the identifying params, in a fixed
+ *  order. Empty for non-Facebook hosts and for URLs without them. */
+function facebookIdentityQuery(host: string, u: URL): string {
     if (!FB_HOSTS.has(host)) return '';
-    const names = FB_IDENTITY_PARAMS[path.toLowerCase()];
-    if (!names) return '';
-    const parts = names
+    const parts = FB_IDENTITY_PARAMS
         .map((n) => [n, u.searchParams.get(n)] as const)
         .filter(([, v]) => v)
         .map(([n, v]) => `${n}=${v}`);
@@ -111,7 +108,7 @@ export function normalizeUrl(raw: string | null | undefined): string {
         const ytId = youtubeVideoKey(host, u);
         if (ytId) return `youtube.com/video/${ytId}`;
         const path = u.pathname.replace(/\/+$/, '');
-        const fbQuery = facebookIdentityQuery(host, path, u);
+        const fbQuery = facebookIdentityQuery(host, u);
         return `${host}${path}${fbQuery}`;
     } catch {
         return raw

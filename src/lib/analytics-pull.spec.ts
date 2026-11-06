@@ -279,6 +279,36 @@ describe('snapshotMatchedMetrics', () => {
         ]);
     });
 
+    it.each([
+        ['photo/?fbid=', 'https://www.facebook.com/photo/?fbid=111&set=a.9', 'https://www.facebook.com/photo/?fbid=222&set=a.9', 'facebook.com/photo?fbid=111'],
+        ['photo.php?fbid=', 'https://facebook.com/photo.php?fbid=111&ref=share', 'https://facebook.com/photo.php?fbid=222', 'facebook.com/photo.php?fbid=111'],
+        ['video.php?v=', 'https://www.facebook.com/video.php?v=111', 'https://www.facebook.com/video.php?v=222', 'facebook.com/video.php?v=111'],
+        ['watch/?v=', 'https://www.facebook.com/watch/?v=111&mibextid=x', 'https://www.facebook.com/watch/?v=222', 'facebook.com/watch?v=111'],
+        ['story.php?story_fbid=', 'https://m.facebook.com/story.php?story_fbid=111&id=101', 'https://m.facebook.com/story.php?story_fbid=222&id=101', 'm.facebook.com/story.php?story_fbid=111&id=101'],
+    ])('keeps two Facebook %s posts apart', async (_shape, a, b, keyA) => {
+        expect(normalizeUrl(a)).toBe(keyA);
+        expect(normalizeUrl(a)).not.toBe(normalizeUrl(b));
+
+        const pieces = [
+            { id: 'pa', published_platforms: { facebook: { status: 'published', post_id: 'uuid-a', post_url: a } } },
+            { id: 'pb', published_platforms: { facebook: { status: 'published', post_id: 'uuid-b', post_url: b } } },
+        ] as never[];
+        const index = idx([
+            [a, { likesCount: '7' }, 'facebook', '1'],
+            [b, { likesCount: '9' }, 'facebook', '2'],
+        ]);
+        const keyByPostId = new Map([['1', '3684/101'], ['2', '3684/202']]);
+        const handles = new Map([['3684/101', 'Page A (facebook)'], ['3684/202', 'Page B (facebook)']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByPostId, handles });
+
+        expect(inserts.map((r) => [r.content_piece_id, r.blotato_post_id, r.handle, r.likes])).toEqual([
+            ['pa', '1', 'Page A (facebook)', 7],
+            ['pb', '2', 'Page B (facebook)', 9],
+        ]);
+    });
+
     it('writes the handle on piece-tied rows, from the URL or the Blotato account', async () => {
         const pieces = [{
             id: 'p1',

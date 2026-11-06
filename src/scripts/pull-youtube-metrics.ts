@@ -234,8 +234,11 @@ export function toMetricRow(input: {
 }
 
 export interface PriorEngagement {
-    likes: number;
-    comments: number;
+    /** Absent when the only prior rows with engagement had shares alone. */
+    likes?: number;
+    comments?: number;
+    /** Latest prior shares > 0; absent when no snapshot ever had shares. */
+    shares?: number;
 }
 
 /** Fill likes/comments the flat tabs don't provide (null/undefined = NOT
@@ -258,17 +261,33 @@ export function carryForwardEngagement(
     };
 }
 
+/** null = Blotato's item did not carry the field. Never 0 for absent: a
+ *  0 here would be written and would skip carry-forward. */
 export interface BlotatoYouTubeEngagement {
-    likes: number;
-    comments: number;
-    shares: number;
+    likes: number | null;
+    comments: number | null;
+    shares: number | null;
+}
+
+/** A Blotato metric that is present and numeric, else null (unlike nMetric,
+ *  which turns an absent field into 0). */
+function presentMetric(v: unknown): number | null {
+    const x = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+    return typeof x === 'number' && Number.isFinite(x) ? x : null;
+}
+
+/** Larger of two values, ignoring absent ones; null when both are absent. */
+function maxPresent(a: number | null | undefined, b: number | null | undefined): number | null {
+    if (a == null) return b ?? null;
+    if (b == null) return a;
+    return Math.max(a, b);
 }
 
 /** Index Blotato GET /v2/analytics items by YouTube video id. Blotato reads
  *  the channel through its own YouTube connection, so it carries likes,
  *  comments and shares for videos beyond the yt-dlp --detail budget (and
  *  shares, which yt-dlp never has). Items from several sort keys overlap, so
- *  keep the largest value per field. */
+ *  keep the largest value per field. A field Blotato did not send stays null. */
 export function blotatoYouTubeEngagement(
     items: Array<{ platform: string; postUrl: string | null; latestMetrics: { metrics: Record<string, unknown> | null } | null }>,
 ): Map<string, BlotatoYouTubeEngagement> {
@@ -279,18 +298,44 @@ export function blotatoYouTubeEngagement(
         const m = it.latestMetrics?.metrics;
         if (!id || !m) continue;
         const next = {
-            likes: nMetric(m.likesCount as number | string | null | undefined),
-            comments: nMetric(m.commentsCount as number | string | null | undefined),
-            shares: nMetric(m.sharesCount as number | string | null | undefined),
+            likes: presentMetric(m.likesCount),
+            comments: presentMetric(m.commentsCount),
+            shares: presentMetric(m.sharesCount),
         };
         const prev = out.get(id);
         out.set(id, prev ? {
-            likes: Math.max(prev.likes, next.likes),
-            comments: Math.max(prev.comments, next.comments),
-            shares: Math.max(prev.shares, next.shares),
+            likes: maxPresent(prev.likes, next.likes),
+            comments: maxPresent(prev.comments, next.comments),
+            shares: maxPresent(prev.shares, next.shares),
         } : next);
     }
     return out;
+}
+
+/** Fill what yt-dlp did not fetch (null/undefined) from Blotato and the
+ *  latest prior real snapshot. Blotato counts are stored snapshots of unknown
+ *  age (fetchedAt is not read), so where both exist the larger wins: a stale
+ *  Blotato count must never undercut the prior baseline. A field neither
+ *  source has stays null and carryForwardEngagement's rules apply. Shares
+ *  come only from Blotato and prior rows, so a video that drops out of
+ *  Blotato's top-100 lists or its 30-day window keeps its prior shares
+ *  instead of falling to 0. Fetched yt-dlp values (a real 0 too) always win. */
+export function fillEngagement(
+    fresh: { likes: number | null | undefined; comments: number | null | undefined },
+    bl: BlotatoYouTubeEngagement | undefined,
+    prior: PriorEngagement | undefined,
+): { likes: number | null; comments: number | null; shares: number | null; carried: boolean } {
+    let carried = false;
+    const fill = (v: number | null | undefined, b: number | null | undefined, p: number | undefined): number | null => {
+        if (v != null) return v;
+        const out = maxPresent(b, p);
+        if (p != null && out === p && (b == null || p > b)) carried = true;
+        return out;
+    };
+    const likes = fill(fresh.likes, bl?.likes, prior?.likes);
+    const comments = fill(fresh.comments, bl?.comments, prior?.comments);
+    const shares = fill(null, bl?.shares, prior?.shares);
+    return { likes, comments, shares, carried };
 }
 
 /** analytics-pull skips zero-signal rows (matchedNoSignal); mirror it. */
@@ -662,15 +707,15 @@ async function main() {
     );
 
     // Latest known REAL engagement per video id — the carry-forward source for
-    // Shorts beyond the --detail budget (see carryForwardEngagement). Newest
+    // Shorts beyond the --detail budget (see fillEngagement). Newest
     // first + first-wins = latest positive engagement; zeroed views-only rows
     // are excluded by the or-filter so they can never poison the baseline.
     const { data: engData, error: engErr } = await sb
         .from('performance_metrics')
-        .select('blotato_post_id, likes, comments')
+        .select('blotato_post_id, likes, comments, shares')
         .eq('platform', 'youtube')
         .not('blotato_post_id', 'is', null)
-        .or('likes.gt.0,comments.gt.0')
+        .or('likes.gt.0,comments.gt.0,shares.gt.0')
         .order('captured_at', { ascending: false })
         .limit(ENGAGEMENT_SCAN_LIMIT);
     if (engErr) {
@@ -678,10 +723,19 @@ async function main() {
         process.exit(1);
     }
     const priorEngagement = new Map<string, PriorEngagement>();
-    for (const r of (engData ?? []) as Array<{ blotato_post_id: string; likes: number | null; comments: number | null }>) {
-        if (!priorEngagement.has(r.blotato_post_id)) {
-            priorEngagement.set(r.blotato_post_id, { likes: nMetric(r.likes), comments: nMetric(r.comments) });
+    // Shares are tracked apart: the latest row with likes or comments may
+    // predate shares being collected, so take the latest row with shares > 0.
+    const priorLikesComments = new Map<string, { likes: number; comments: number }>();
+    const priorShares = new Map<string, number>();
+    for (const r of (engData ?? []) as Array<{ blotato_post_id: string; likes: number | null; comments: number | null; shares: number | null }>) {
+        const id = r.blotato_post_id;
+        if (!priorLikesComments.has(id) && (nMetric(r.likes) > 0 || nMetric(r.comments) > 0)) {
+            priorLikesComments.set(id, { likes: nMetric(r.likes), comments: nMetric(r.comments) });
         }
+        if (!priorShares.has(id) && nMetric(r.shares) > 0) priorShares.set(id, nMetric(r.shares));
+    }
+    for (const id of new Set([...priorLikesComments.keys(), ...priorShares.keys()])) {
+        priorEngagement.set(id, { ...priorLikesComments.get(id), shares: priorShares.get(id) });
     }
     console.log(`[ok] ${priorEngagement.size} video(s) with prior engagement (carry-forward baseline)`);
 
@@ -766,19 +820,12 @@ async function main() {
             // a detail fetch) inherit the latest prior REAL engagement — a
             // views-only snapshot must never zero-overwrite engagement in the
             // latest-snapshot-wins winners RPCs.
-            const bl = blotatoEngagement.get(entry.id);
-            if (bl) {
-                likes ??= bl.likes;
-                comments ??= bl.comments;
-            }
-            if (likes == null || comments == null) {
-                const cf = carryForwardEngagement({ likes, comments }, priorEngagement.get(entry.id));
-                if (cf.carried) {
-                    likes = cf.likes;
-                    comments = cf.comments;
-                    s.carried++;
-                }
-            }
+            // Blotato fills only fields it actually sent, and never below the
+            // prior baseline; shares carry forward the same way.
+            const filled = fillEngagement({ likes, comments }, blotatoEngagement.get(entry.id), priorEngagement.get(entry.id));
+            likes = filled.likes;
+            comments = filled.comments;
+            if (filled.carried) s.carried++;
 
             const pieceId = videoToPiece.get(entry.id) ?? null;
             if (pieceId) s.matched++;
@@ -787,7 +834,7 @@ async function main() {
                 handle: account.handle,
                 pieceId,
                 views, likes, comments,
-                shares: bl?.shares,
+                shares: filled.shares,
             });
 
             // Re-attribution: this video has historic piece-less snapshots and

@@ -13,6 +13,7 @@ import {
     nMetric,
     carryForwardEngagement,
     blotatoYouTubeEngagement,
+    fillEngagement,
 } from './pull-youtube-metrics';
 
 describe('parseCliArgs', () => {
@@ -232,10 +233,50 @@ describe('blotatoYouTubeEngagement', () => {
         expect(m.get('abcDEF12345')).toEqual({ likes: 7, comments: 1, shares: 4 });
     });
 
-    it('toMetricRow writes Blotato shares and keeps 0 when absent', () => {
-        const base = { videoId: 'abcDEF12345', handle: 'Faith Harmony (SAI)', pieceId: null, views: 10, likes: 1, comments: 0 };
-        expect(toMetricRow({ ...base, shares: 3 }).shares).toBe(3);
-        expect(toMetricRow(base).shares).toBe(0);
+    it('keeps null for fields Blotato did not send, never 0', () => {
+        const m = blotatoYouTubeEngagement([
+            item('youtube', 'https://www.youtube.com/shorts/abcDEF12345', { viewsCount: 900 }),
+        ]);
+        expect(m.get('abcDEF12345')).toEqual({ likes: null, comments: null, shares: null });
+    });
+});
+
+describe('fillEngagement', () => {
+    const blFor = (metrics: Record<string, unknown>) => blotatoYouTubeEngagement([
+        { platform: 'youtube', postUrl: 'https://youtu.be/abcDEF12345', latestMetrics: { metrics } },
+    ]).get('abcDEF12345');
+    const base = { videoId: 'abcDEF12345', handle: 'Faith Harmony (SAI)', pieceId: null, views: 10 };
+
+    it('carries prior likes and comments when Blotato sent views only', () => {
+        const f = fillEngagement({ likes: null, comments: null }, blFor({ viewsCount: '900' }), { likes: 40, comments: 12 });
+        expect(f).toMatchObject({ likes: 40, comments: 12, carried: true });
+        expect(toMetricRow({ ...base, ...f })).toMatchObject({ likes: 40, comments: 12 });
+    });
+
+    it('carries prior shares when Blotato no longer returns the video', () => {
+        const f = fillEngagement({ likes: 5, comments: 1 }, undefined, { likes: 4, comments: 1, shares: 9 });
+        expect(f.shares).toBe(9);
+        expect(toMetricRow({ ...base, ...f }).shares).toBe(9);
+    });
+
+    it('never lets a stale Blotato count undercut the prior baseline', () => {
+        const f = fillEngagement({ likes: null, comments: null }, blFor({ likesCount: 30, commentsCount: 20, sharesCount: 2 }), { likes: 40, comments: 12, shares: 5 });
+        expect(f).toMatchObject({ likes: 40, comments: 20, shares: 5, carried: true });
+    });
+
+    it('fills from Blotato when it is ahead of the prior baseline', () => {
+        const f = fillEngagement({ likes: null, comments: null }, blFor({ likesCount: 50, commentsCount: 13, sharesCount: 6 }), { likes: 40, comments: 12, shares: 5 });
+        expect(f).toEqual({ likes: 50, comments: 13, shares: 6, carried: false });
+    });
+
+    it('keeps fetched yt-dlp values, a real 0 included', () => {
+        const f = fillEngagement({ likes: 0, comments: 3 }, blFor({ likesCount: 50, commentsCount: 13 }), { likes: 40, comments: 12 });
+        expect(f).toMatchObject({ likes: 0, comments: 3 });
+    });
+
+    it('leaves null when neither source has a value', () => {
+        expect(fillEngagement({ likes: null, comments: null }, undefined, undefined))
+            .toEqual({ likes: null, comments: null, shares: null, carried: false });
         expect(toMetricRow(base).saves).toBe(0);
     });
 });
