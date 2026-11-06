@@ -14,6 +14,8 @@ import {
     carryForwardEngagement,
     blotatoYouTubeEngagement,
     fillEngagement,
+    priorEngagementFromRows,
+    fetchAllPages,
 } from './pull-youtube-metrics';
 
 describe('parseCliArgs', () => {
@@ -278,5 +280,82 @@ describe('fillEngagement', () => {
         expect(fillEngagement({ likes: null, comments: null }, undefined, undefined))
             .toEqual({ likes: null, comments: null, shares: null, carried: false });
         expect(toMetricRow(base).saves).toBe(0);
+    });
+});
+
+describe('priorEngagementFromRows', () => {
+    const row = (likes: number | null, comments: number | null, shares: number | null, id = 'vid1') =>
+        ({ blotato_post_id: id, likes, comments, shares });
+
+    it('takes each field from its own latest row > 0 (newer {50,0} does not hide older comments 12)', () => {
+        const m = priorEngagementFromRows([row(50, 0, null), row(40, 12, null)]);
+        expect(m.get('vid1')).toEqual({ likes: 50, comments: 12 });
+    });
+
+    it('takes shares from its own latest row, apart from likes/comments', () => {
+        const m = priorEngagementFromRows([row(9, 2, 0), row(5, 1, 3), row(4, 0, 7)]);
+        expect(m.get('vid1')).toEqual({ likes: 9, comments: 2, shares: 3 });
+    });
+
+    it('leaves a field absent when no row has it > 0, and keeps videos apart', () => {
+        const m = priorEngagementFromRows([row(0, 0, 4, 'a'), row(6, null, null, 'b')]);
+        expect(m.get('a')).toEqual({ shares: 4 });
+        expect(m.get('b')).toEqual({ likes: 6 });
+    });
+
+    it('skips a video whose rows carry no engagement at all', () => {
+        expect(priorEngagementFromRows([row(0, null, 0)]).has('vid1')).toBe(false);
+    });
+});
+
+describe('fetchAllPages', () => {
+    // Fake PostgREST: never returns more than 1000 rows per call, whatever is asked.
+    const API_CAP = 1000;
+    const fakeTable = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
+    const fakeClient = (table: Array<{ i: number }>, calls: Array<[number, number]>) =>
+        async (from: number, to: number) => {
+            calls.push([from, to]);
+            return { data: table.slice(from, Math.min(to + 1, from + API_CAP)), error: null };
+        };
+
+    it('reads past the 1000-row API cap until a short page', async () => {
+        const calls: Array<[number, number]> = [];
+        const res = await fetchAllPages(fakeClient(fakeTable(2285), calls), 1000, 50);
+        expect(res.rows).toHaveLength(2285);
+        expect(res.rows[2284]).toEqual({ i: 2284 });
+        expect(res.error).toBeNull();
+        expect(res.capped).toBe(false);
+        expect(calls).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+    });
+
+    it('a baseline row past row 1000 still reaches priorEngagementFromRows', async () => {
+        const rows = Array.from({ length: 1500 }, (_, i) => ({
+            blotato_post_id: `v${i}`, likes: 1, comments: 0, shares: null as number | null,
+        }));
+        const res = await fetchAllPages(async (from, to) => ({ data: rows.slice(from, Math.min(to + 1, from + API_CAP)), error: null }), 1000, 50);
+        expect(priorEngagementFromRows(res.rows).get('v1499')).toEqual({ likes: 1 });
+    });
+
+    it('reads one extra call when the total is an exact multiple of the page size', async () => {
+        const calls: Array<[number, number]> = [];
+        const res = await fetchAllPages(fakeClient(fakeTable(2000), calls), 1000, 50);
+        expect(res.rows).toHaveLength(2000);
+        expect(calls).toHaveLength(3);
+        expect(res.capped).toBe(false);
+    });
+
+    it('reports capped when maxPages full pages were read', async () => {
+        const res = await fetchAllPages(fakeClient(fakeTable(5000), []), 1000, 2);
+        expect(res.rows).toHaveLength(2000);
+        expect(res.capped).toBe(true);
+    });
+
+    it('returns the error with the page it failed on', async () => {
+        let n = 0;
+        const res = await fetchAllPages(async () => (n++ === 0
+            ? { data: fakeTable(1000), error: null }
+            : { data: null, error: { message: 'boom' } }), 1000, 50);
+        expect(res.error).toBe('page 1: boom');
+        expect(res.rows).toHaveLength(1000);
     });
 });

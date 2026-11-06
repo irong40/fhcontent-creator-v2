@@ -89,7 +89,9 @@ const DEFAULT_PER_CHANNEL = 50;
 const DEFAULT_DETAIL = 15;
 const PIECE_PAGE_SIZE = 1000;
 const MAX_PIECE_PAGES = 20;
-const ENGAGEMENT_SCAN_LIMIT = 5000;
+/** performance_metrics scans page at the PostgREST row cap (1000 per call). */
+const METRICS_PAGE_SIZE = 1000;
+const MAX_METRICS_PAGES = 50;
 const RESOLVE_ATTEMPTS = 3;
 /** yt-dlp child-process kill timers — execFileSync without a timeout waits
  *  FOREVER, so one hung yt-dlp (throttled response that trickles bytes) would
@@ -336,6 +338,44 @@ export function fillEngagement(
     const comments = fill(fresh.comments, bl?.comments, prior?.comments);
     const shares = fill(null, bl?.shares, prior?.shares);
     return { likes, comments, shares, carried };
+}
+
+/** Per-video carry-forward baseline from performance_metrics rows ordered
+ *  newest first. Each field comes from its own latest row with that field
+ *  > 0: a newer {likes 50, comments 0} must not hide an older {comments 12},
+ *  or the next views-only snapshot would write comments 0. */
+export function priorEngagementFromRows(
+    rows: ReadonlyArray<{ blotato_post_id: string; likes: number | null; comments: number | null; shares: number | null }>,
+): Map<string, PriorEngagement> {
+    const out = new Map<string, PriorEngagement>();
+    for (const r of rows) {
+        const prior = out.get(r.blotato_post_id) ?? {};
+        for (const field of ['likes', 'comments', 'shares'] as const) {
+            if (prior[field] === undefined && nMetric(r[field]) > 0) prior[field] = nMetric(r[field]);
+        }
+        if (Object.keys(prior).length > 0) out.set(r.blotato_post_id, prior);
+    }
+    return out;
+}
+
+/** Read every row of a query, page by page. PostgREST caps one response at
+ *  1000 rows whatever .limit() asks for, so a single call silently drops the
+ *  rest. Stops on a short page; `capped` = maxPages full pages were read. */
+export async function fetchAllPages<T>(
+    fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+    pageSize: number,
+    maxPages: number,
+): Promise<{ rows: T[]; error: string | null; capped: boolean }> {
+    const rows: T[] = [];
+    for (let page = 0; page < maxPages; page++) {
+        const from = page * pageSize;
+        const { data, error } = await fetchPage(from, from + pageSize - 1);
+        if (error) return { rows, error: `page ${page}: ${error.message}`, capped: false };
+        const batch = data ?? [];
+        rows.push(...batch);
+        if (batch.length < pageSize) return { rows, error: null, capped: false };
+    }
+    return { rows, error: null, capped: true };
 }
 
 /** analytics-pull skips zero-signal rows (matchedNoSignal); mirror it. */
@@ -678,65 +718,69 @@ async function main() {
     }
 
     // 4. Same-day dedupe sets from today's stored snapshots (both collectors).
-    const { data: todayRows, error: todayErr } = await sb
-        .from('performance_metrics')
-        .select('content_piece_id, blotato_post_id, handle')
-        .eq('platform', 'youtube')
-        .gte('captured_at', todayUtcStartIso());
-    if (todayErr) {
-        console.error(`[ERR] today's performance_metrics query failed: ${todayErr.message} — refusing to write without dedupe data`);
+    const today = await fetchAllPages<{ content_piece_id: string | null; blotato_post_id: string | null; handle: string | null }>(
+        (from, to) => sb
+            .from('performance_metrics')
+            .select('content_piece_id, blotato_post_id, handle')
+            .eq('platform', 'youtube')
+            .gte('captured_at', todayUtcStartIso())
+            .order('id', { ascending: true })
+            .range(from, to),
+        METRICS_PAGE_SIZE, MAX_METRICS_PAGES,
+    );
+    if (today.error || today.capped) {
+        console.error(`[ERR] today's performance_metrics query failed: ${today.error ?? `hit the ${MAX_METRICS_PAGES * METRICS_PAGE_SIZE}-row cap`} — refusing to write without dedupe data`);
         process.exit(1);
     }
+    const todayRows = today.rows;
     const piecesToday = new Set<string>();
     const videoKeysToday = new Set<string>();
-    for (const r of (todayRows ?? []) as Array<{ content_piece_id: string | null; blotato_post_id: string | null; handle: string | null }>) {
+    for (const r of todayRows) {
         if (r.content_piece_id) piecesToday.add(r.content_piece_id);
         if (r.handle && r.blotato_post_id) videoKeysToday.add(videoDupKey(r.handle, r.blotato_post_id));
     }
-    console.log(`[ok] ${(todayRows ?? []).length} youtube snapshot(s) already captured today (dedupe baseline)\n`);
+    console.log(`[ok] ${todayRows.length} youtube snapshot(s) already captured today (dedupe baseline)\n`);
 
     // Historic piece-less rows, for re-attribution when a video now matches.
-    const { data: orphanRows } = await sb
-        .from('performance_metrics')
-        .select('blotato_post_id')
-        .eq('platform', 'youtube')
-        .is('content_piece_id', null)
-        .not('blotato_post_id', 'is', null);
-    const orphanVideoIds = new Set(
-        ((orphanRows ?? []) as Array<{ blotato_post_id: string }>).map((r) => r.blotato_post_id),
+    // Optional, as before: a failed read only skips healing.
+    const orphans = await fetchAllPages<{ blotato_post_id: string }>(
+        (from, to) => sb
+            .from('performance_metrics')
+            .select('blotato_post_id')
+            .eq('platform', 'youtube')
+            .is('content_piece_id', null)
+            .not('blotato_post_id', 'is', null)
+            .order('id', { ascending: true })
+            .range(from, to),
+        METRICS_PAGE_SIZE, MAX_METRICS_PAGES,
     );
+    if (orphans.error) console.warn(`[WARN] piece-less row scan failed, healing only what was read: ${orphans.error}`);
+    if (orphans.capped) console.warn(`[WARN] piece-less row scan hit the ${MAX_METRICS_PAGES * METRICS_PAGE_SIZE}-row cap — older orphans are not healed this run`);
+    const orphanVideoIds = new Set(orphans.rows.map((r) => r.blotato_post_id));
 
     // Latest known REAL engagement per video id — the carry-forward source for
-    // Shorts beyond the --detail budget (see fillEngagement). Newest
-    // first + first-wins = latest positive engagement; zeroed views-only rows
-    // are excluded by the or-filter so they can never poison the baseline.
-    const { data: engData, error: engErr } = await sb
-        .from('performance_metrics')
-        .select('blotato_post_id, likes, comments, shares')
-        .eq('platform', 'youtube')
-        .not('blotato_post_id', 'is', null)
-        .or('likes.gt.0,comments.gt.0,shares.gt.0')
-        .order('captured_at', { ascending: false })
-        .limit(ENGAGEMENT_SCAN_LIMIT);
-    if (engErr) {
-        console.error(`[ERR] prior-engagement query failed: ${engErr.message} — refusing to write snapshots that could zero-overwrite engagement`);
+    // Shorts beyond the --detail budget (see fillEngagement). Newest first,
+    // each field from its own latest row > 0 (priorEngagementFromRows); zeroed
+    // views-only rows are excluded by the or-filter so they can never poison
+    // the baseline. Paged: one PostgREST call returns at most 1000 rows, and a
+    // video past that window would get no baseline and be zero-overwritten.
+    const eng = await fetchAllPages<{ blotato_post_id: string; likes: number | null; comments: number | null; shares: number | null }>(
+        (from, to) => sb
+            .from('performance_metrics')
+            .select('blotato_post_id, likes, comments, shares')
+            .eq('platform', 'youtube')
+            .not('blotato_post_id', 'is', null)
+            .or('likes.gt.0,comments.gt.0,shares.gt.0')
+            .order('captured_at', { ascending: false })
+            .order('id', { ascending: true }) // stable page order on captured_at ties
+            .range(from, to),
+        METRICS_PAGE_SIZE, MAX_METRICS_PAGES,
+    );
+    if (eng.error || eng.capped) {
+        console.error(`[ERR] prior-engagement query failed: ${eng.error ?? `hit the ${MAX_METRICS_PAGES * METRICS_PAGE_SIZE}-row cap`} — refusing to write snapshots that could zero-overwrite engagement`);
         process.exit(1);
     }
-    const priorEngagement = new Map<string, PriorEngagement>();
-    // Shares are tracked apart: the latest row with likes or comments may
-    // predate shares being collected, so take the latest row with shares > 0.
-    const priorLikesComments = new Map<string, { likes: number; comments: number }>();
-    const priorShares = new Map<string, number>();
-    for (const r of (engData ?? []) as Array<{ blotato_post_id: string; likes: number | null; comments: number | null; shares: number | null }>) {
-        const id = r.blotato_post_id;
-        if (!priorLikesComments.has(id) && (nMetric(r.likes) > 0 || nMetric(r.comments) > 0)) {
-            priorLikesComments.set(id, { likes: nMetric(r.likes), comments: nMetric(r.comments) });
-        }
-        if (!priorShares.has(id) && nMetric(r.shares) > 0) priorShares.set(id, nMetric(r.shares));
-    }
-    for (const id of new Set([...priorLikesComments.keys(), ...priorShares.keys()])) {
-        priorEngagement.set(id, { ...priorLikesComments.get(id), shares: priorShares.get(id) });
-    }
+    const priorEngagement = priorEngagementFromRows(eng.rows);
     console.log(`[ok] ${priorEngagement.size} video(s) with prior engagement (carry-forward baseline)`);
 
     // Blotato's YouTube engagement, the source for shares and for likes and
