@@ -12,6 +12,7 @@ import {
     todayUtcStartIso,
     nMetric,
     carryForwardEngagement,
+    blotatoYouTubeEngagement,
 } from './pull-youtube-metrics';
 
 describe('parseCliArgs', () => {
@@ -205,5 +206,36 @@ describe('todayUtcStartIso', () => {
     it('returns midnight UTC of the given instant', () => {
         expect(todayUtcStartIso(new Date('2026-07-24T20:30:15.123Z'))).toBe('2026-07-24T00:00:00.000Z');
         expect(todayUtcStartIso(new Date('2026-07-24T00:00:00.000Z'))).toBe('2026-07-24T00:00:00.000Z');
+    });
+});
+
+describe('blotatoYouTubeEngagement', () => {
+    const item = (platform: string, postUrl: string | null, metrics: Record<string, unknown> | null) =>
+        ({ platform, postUrl, latestMetrics: metrics ? { metrics } : null });
+
+    it('indexes YouTube items by video id with likes, comments and shares', () => {
+        const m = blotatoYouTubeEngagement([
+            item('youtube', 'https://www.youtube.com/shorts/abcDEF12345', { likesCount: 7, commentsCount: 2, sharesCount: 3, viewsCount: 900 }),
+            item('instagram', 'https://www.instagram.com/p/xyz/', { likesCount: 50 }),
+            item('youtube', null, { likesCount: 1 }),
+            item('youtube', 'https://youtu.be/zzzzzz99999', null),
+        ]);
+        expect([...m.keys()]).toEqual(['abcDEF12345']);
+        expect(m.get('abcDEF12345')).toEqual({ likes: 7, comments: 2, shares: 3 });
+    });
+
+    it('keeps the largest value per field when sort keys return the same video', () => {
+        const m = blotatoYouTubeEngagement([
+            item('youtube', 'https://www.youtube.com/watch?v=abcDEF12345', { likesCount: 7, commentsCount: 0, sharesCount: '4' }),
+            item('youtube', 'https://youtu.be/abcDEF12345', { likesCount: 5, commentsCount: 1, sharesCount: 'junk' }),
+        ]);
+        expect(m.get('abcDEF12345')).toEqual({ likes: 7, comments: 1, shares: 4 });
+    });
+
+    it('toMetricRow writes Blotato shares and keeps 0 when absent', () => {
+        const base = { videoId: 'abcDEF12345', handle: 'Faith Harmony (SAI)', pieceId: null, views: 10, likes: 1, comments: 0 };
+        expect(toMetricRow({ ...base, shares: 3 }).shares).toBe(3);
+        expect(toMetricRow(base).shares).toBe(0);
+        expect(toMetricRow(base).saves).toBe(0);
     });
 });
