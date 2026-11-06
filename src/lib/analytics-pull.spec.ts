@@ -230,19 +230,53 @@ describe('snapshotMatchedMetrics', () => {
         ]);
     });
 
-    it('ties a piece by blotato post id when its post_url never resolved', async () => {
-        const pieces = [{
-            id: 'p9',
-            published_platforms: { instagram: { status: 'published', post_id: '977' } },
-        }] as never[];
-        const index = idx([['https://instagram.com/reel/q9', { viewsCount: '12' }, 'instagram', '977']]);
+    it('ties a piece with a submission UUID post_id by its URL, and leaves an unresolved one for a later run', async () => {
+        // Live contract: post_id is the POST /posts submission UUID, never the
+        // numeric analytics id, so only the resolved post_url can tie a piece.
+        const pieces = [
+            { id: 'p9', published_platforms: { instagram: { status: 'published', post_id: '336e9842-f040-4a53-9e4d-4d7324a8308b', post_url: 'https://www.instagram.com/reel/q9/' } } },
+            { id: 'p10', published_platforms: { instagram: { status: 'published', post_id: '8c45119e-e5b2-4f45-aa8e-2659cf40e08f' } } },
+        ] as never[];
+        const index = idx([
+            ['https://instagram.com/reel/q9', { viewsCount: '12' }, 'instagram', '977'],
+            ['https://instagram.com/reel/q10', { viewsCount: '5' }, 'instagram', '978'],
+        ]);
         const { supabase, inserts } = fakeClient();
 
         const res = await snapshotMatchedMetrics(supabase, pieces, index);
 
         expect(res.snapshots).toBe(1);
         expect(res.matchedUrls.has(normalizeUrl('https://instagram.com/reel/q9'))).toBe(true);
+        expect(inserts).toHaveLength(1);
         expect(inserts[0]).toMatchObject({ content_piece_id: 'p9', blotato_post_id: '977', views: 12 });
+    });
+
+    it('keeps Facebook permalink.php posts from two pages apart', async () => {
+        const a = 'https://www.facebook.com/permalink.php?story_fbid=111&id=101';
+        const b = 'https://www.facebook.com/permalink.php?story_fbid=222&id=202';
+        expect(normalizeUrl(a)).not.toBe(normalizeUrl(b));
+        expect(normalizeUrl(a)).toBe('facebook.com/permalink.php?story_fbid=111&id=101');
+        expect(normalizeUrl('https://facebook.com/permalink.php?id=101&story_fbid=111&ref=share')).toBe(normalizeUrl(a));
+        expect(normalizeUrl('https://facebook.com/reel/42/?s=1')).toBe('facebook.com/reel/42');
+
+        const pieces = [
+            { id: 'pa', published_platforms: { facebook: { status: 'published', post_id: 'uuid-a', post_url: a } } },
+            { id: 'pb', published_platforms: { facebook: { status: 'published', post_id: 'uuid-b', post_url: b } } },
+        ] as never[];
+        const index = idx([
+            [a, { likesCount: '7' }, 'facebook', '1'],
+            [b, { likesCount: '9' }, 'facebook', '2'],
+        ]);
+        const keyByPostId = new Map([['1', '3684/101'], ['2', '3684/202']]);
+        const handles = new Map([['3684/101', 'Page A (facebook)'], ['3684/202', 'Page B (facebook)']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByPostId, handles });
+
+        expect(inserts.map((r) => [r.content_piece_id, r.blotato_post_id, r.handle, r.likes])).toEqual([
+            ['pa', '1', 'Page A (facebook)', 7],
+            ['pb', '2', 'Page B (facebook)', 9],
+        ]);
     });
 
     it('writes the handle on piece-tied rows, from the URL or the Blotato account', async () => {
@@ -257,11 +291,11 @@ describe('snapshotMatchedMetrics', () => {
             ['https://www.tiktok.com/@necorner/video/5', { viewsCount: '3' }, 'tiktok', '905'],
             ['https://facebook.com/posts/6', { viewsCount: '4' }, 'facebook', '906'],
         ]);
-        const keyByUrl = new Map([[normalizeUrl('https://facebook.com/posts/6'), 'acct1/page7']]);
+        const keyByPostId = new Map([['906', 'acct1/page7']]);
         const handles = new Map([['acct1/page7', '@northeastcorner']]);
         const { supabase, inserts } = fakeClient();
 
-        await snapshotMatchedMetrics(supabase, pieces, index, { keyByUrl, handles } as never);
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByPostId, handles });
 
         expect(inserts[0]).toMatchObject({ platform: 'tiktok', handle: '@necorner' });
         expect(inserts[1]).toMatchObject({ platform: 'facebook', handle: '@northeastcorner' });
@@ -391,16 +425,17 @@ describe('account attribution', () => {
         expect(accountKey(null)).toBeNull();
     });
 
-    it('lets the page id decide the handle, falling back to the account id', () => {
+    it('lets the page id decide the handle; an unregistered page stays null', () => {
         expect(resolveHandle('3684/1063375450183829', handles)).toBe('The North East Corner (facebook)');
         expect(resolveHandle('3684/899526466587385', handles)).toBe('Sentinel Aerial Inspections (facebook)');
-        expect(resolveHandle('3684/777', handles)).toBe('Adam Pierce (pages)');
+        expect(resolveHandle('3684/777', handles)).toBeNull();
+        expect(resolveHandle('3684', handles)).toBe('Adam Pierce (pages)');
         expect(resolveHandle('59689', handles)).toBe('@sentinelaerialinspector');
         expect(resolveHandle('99999', handles)).toBeNull();
         expect(resolveHandle(null, handles)).toBeNull();
     });
 
-    it('buildAccountResolver walks cursors and joins registry handles to post urls', async () => {
+    it('buildAccountResolver walks cursors and keys accounts by published-post id', async () => {
         const supabase = {
             from: () => ({ select: () => Promise.resolve({ data: [
                 { account_id: '59689', handle: '@sentinelaerialinspector' },
@@ -419,8 +454,8 @@ describe('account attribution', () => {
 
         expect(listPublishedPosts).toHaveBeenCalledTimes(2);
         expect(listPublishedPosts.mock.calls[1][1]).toBe('c2');
-        expect(r.keyByUrl.get(normalizeUrl('https://instagram.com/reel/IGabc'))).toBe('59689');
-        expect(r.keyByUrl.get(normalizeUrl('https://www.facebook.com/reel/42'))).toBe('3684/1063375450183829');
+        expect(r.keyByPostId.get('1')).toBe('59689');
+        expect(r.keyByPostId.get('2')).toBe('3684/1063375450183829');
         expect(r.handles.get('59689')).toBe('@sentinelaerialinspector');
     });
 
@@ -428,7 +463,7 @@ describe('account attribution', () => {
         const supabase = { from: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) } as never;
         listPublishedPosts.mockRejectedValueOnce(new Error('boom'));
         const r = await buildAccountResolver(supabase, '2026-08-01T00:00:00Z');
-        expect(r.keyByUrl.size).toBe(0);
+        expect(r.keyByPostId.size).toBe(0);
     });
 
     it('snapshotUnmatchedAccounts stores Instagram and Facebook rows under their account handle', async () => {
@@ -444,13 +479,13 @@ describe('account attribution', () => {
             e('https://facebook.com/reel/C/', 'facebook', '3'),
             e('https://www.instagram.com/reel/D/', 'instagram', '4'), // not in /v2/posts
         ]) as never;
-        const keyByUrl = new Map([
-            [normalizeUrl('https://www.instagram.com/reel/A/'), '59689'],
-            [normalizeUrl('https://facebook.com/reel/B/'), '3684/1063375450183829'],
-            [normalizeUrl('https://facebook.com/reel/C/'), '3684/899526466587385'],
+        const keyByPostId = new Map([
+            ['1', '59689'],
+            ['2', '3684/1063375450183829'],
+            ['3', '3684/899526466587385'],
         ]);
 
-        await snapshotUnmatchedAccounts(supabase, index, new Set(), { keyByUrl, handles });
+        await snapshotUnmatchedAccounts(supabase, index, new Set(), { keyByPostId, handles });
 
         expect(inserts.map((r) => [r.blotato_post_id, r.handle])).toEqual([
             ['1', '@sentinelaerialinspector'],

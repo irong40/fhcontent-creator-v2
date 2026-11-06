@@ -75,6 +75,30 @@ export function youtubeVideoKey(host: string, u: URL): string | null {
     return m ? m[1] : null;
 }
 
+const FB_HOSTS = new Set(['facebook.com', 'm.facebook.com', 'web.facebook.com']);
+/** Facebook query-string paths and the params that identify the post on each. */
+const FB_IDENTITY_PARAMS: Record<string, string[]> = {
+    '/permalink.php': ['story_fbid', 'id'],
+    '/story.php': ['story_fbid', 'id'],
+    '/watch': ['v'],
+    '/photo.php': ['fbid'],
+};
+
+/** Facebook, like YouTube, keeps some post identities in the QUERY STRING
+ *  (permalink.php?story_fbid=..&id=..). Dropping it collapsed every such post
+ *  onto one key, so the last page's handle and metrics won. Keep only the
+ *  identifying params, in a fixed order. Empty for every other URL. */
+function facebookIdentityQuery(host: string, path: string, u: URL): string {
+    if (!FB_HOSTS.has(host)) return '';
+    const names = FB_IDENTITY_PARAMS[path.toLowerCase()];
+    if (!names) return '';
+    const parts = names
+        .map((n) => [n, u.searchParams.get(n)] as const)
+        .filter(([, v]) => v)
+        .map(([n, v]) => `${n}=${v}`);
+    return parts.length ? `?${parts.join('&')}` : '';
+}
+
 /** Canonicalise a post URL so the two id spaces join reliably: drop protocol,
  *  a leading www., any query/hash, and a trailing slash; lowercase the host.
  *  YouTube is special-cased to its video id (see youtubeVideoKey) because its
@@ -87,7 +111,8 @@ export function normalizeUrl(raw: string | null | undefined): string {
         const ytId = youtubeVideoKey(host, u);
         if (ytId) return `youtube.com/video/${ytId}`;
         const path = u.pathname.replace(/\/+$/, '');
-        return `${host}${path}`;
+        const fbQuery = facebookIdentityQuery(host, path, u);
+        return `${host}${path}${fbQuery}`;
     } catch {
         return raw
             .replace(/^https?:\/\//, '')
@@ -293,10 +318,12 @@ export async function snapshotMatchedMetrics(
     accounts?: AccountResolver,
 ): Promise<SnapshotResult> {
     const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0, youtubeSkipped: 0, matchedUrls: new Set() };
-    // Second key: a publish record whose post_url never resolved still carries
-    // the Blotato post id, so the piece tie does not depend on the URL alone.
-    const keyById = new Map<string, string>();
-    for (const [key, hit] of index) if (hit.id) keyById.set(hit.id, key);
+    // The tie is by URL only. published_platforms.post_id is the submission
+    // UUID, and no Blotato response maps it to the numeric analytics id:
+    // GET /v2/posts/{uuid} returns postSubmissionId, status and publicUrl, and
+    // /v2/posts items carry no submission id (checked live 2026-11-06). An
+    // entry whose URL is not resolved yet is picked up by resolvePostUrls on a
+    // later run.
 
     for (const piece of pieces) {
         const platforms = piece.published_platforms;
@@ -304,13 +331,11 @@ export async function snapshotMatchedMetrics(
 
         for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
             if (!entry || entry.status !== 'published') continue;
-            const idKey = entry.post_id ? keyById.get(entry.post_id) : undefined;
-            if (!entry.post_url && !idKey) continue;
+            if (!entry.post_url) continue;
             if (BLOTATO_EXCLUDED_PLATFORMS.has(platform)) { out.youtubeSkipped++; continue; }
-            const urlKey = entry.post_url ? normalizeUrl(entry.post_url) : undefined;
-            const key = urlKey && index.has(urlKey) ? urlKey : idKey;
-            const hit = key ? index.get(key) : undefined;
-            if (!key || !hit) {
+            const key = normalizeUrl(entry.post_url);
+            const hit = index.get(key);
+            if (!hit) {
                 out.unmatched++;
                 if (!out.sampleUnmatchedUrl) out.sampleUnmatchedUrl = entry.post_url;
                 continue;
@@ -319,7 +344,7 @@ export async function snapshotMatchedMetrics(
             const mapped = mapMetrics(hit.metrics);
             if (!hasSignal(mapped)) out.matchedNoSignal++;
             const handle = handleFromUrl(hit.url)
-                ?? (accounts ? resolveHandle(accounts.keyByUrl.get(key) ?? null, accounts.handles) : null);
+                ?? (accounts ? resolveHandle(accounts.keyByPostId.get(hit.id) ?? null, accounts.handles) : null);
 
             const { error: insertError } = await supabase.from('performance_metrics').insert({
                 content_piece_id: piece.id,
@@ -349,32 +374,38 @@ export function accountKey(account: { id: string; subaccount?: { id: string } | 
     return account.subaccount?.id ? `${account.id}/${account.subaccount.id}` : account.id;
 }
 
-/** Resolve a post to its registered handle: the page-level key first, then the
- *  bare account id. Null when the account is not in blotato_accounts. */
+/** Resolve a post to its registered handle by its exact key. A page-level key
+ *  (`<account>/<page id>`) does NOT fall back to the bare account row: that
+ *  row names the person who connected the account ("Adam Pierce (pages)"), so
+ *  a page missing from blotato_accounts would be filed under the wrong name.
+ *  It stays null until the page is registered (decided 2026-11-06, qcheck r1).
+ *  Null when the key is not in blotato_accounts. */
 export function resolveHandle(
     keyOf: string | null,
     handles: Map<string, string>,
 ): string | null {
     if (!keyOf) return null;
-    return handles.get(keyOf) ?? handles.get(keyOf.split('/')[0]) ?? null;
+    return handles.get(keyOf) ?? null;
 }
 
 export interface AccountResolver {
-    /** normalized post URL → account key, from GET /v2/posts */
-    keyByUrl: Map<string, string>;
+    /** Blotato published-post id (GET /v2/posts item id, the same id as the
+     *  analytics item id) → account key. Keyed by id, not URL, so two posts
+     *  can never share an entry. */
+    keyByPostId: Map<string, string>;
     /** account key → handle, from blotato_accounts */
     handles: Map<string, string>;
 }
 
 /** Analytics items carry no account, so Instagram and Facebook posts (whose
- *  URLs carry no handle) are attributed by joining on the post URL to
+ *  URLs carry no handle) are attributed by joining on the published-post id to
  *  GET /v2/posts, which does. Bounded to one page walk per run; a failure
  *  leaves the resolver empty and the rows null-handled, as before. */
 export async function buildAccountResolver(
     supabase: AdminClient,
     sinceIso: string,
 ): Promise<AccountResolver> {
-    const keyByUrl = new Map<string, string>();
+    const keyByPostId = new Map<string, string>();
     const handles = new Map<string, string>();
     try {
         // blotato_accounts is not in the generated Database types, so go through
@@ -391,8 +422,7 @@ export async function buildAccountResolver(
             const res = await blotato.listPublishedPosts(sinceIso, cursor);
             for (const item of res.items ?? []) {
                 const key = accountKey(item.account);
-                const url = normalizeUrl(item.state?.postUrl);
-                if (key && url) keyByUrl.set(url, key);
+                if (key && item.id) keyByPostId.set(String(item.id), key);
             }
             cursor = res.cursor;
             if (!cursor) break;
@@ -401,7 +431,7 @@ export async function buildAccountResolver(
     } catch (e) {
         console.error('[analytics-pull] buildAccountResolver failed:', (e as Error).message);
     }
-    return { keyByUrl, handles };
+    return { keyByPostId, handles };
 }
 
 /** Step 4: snapshot analytics items that matched no content_piece — the
@@ -423,7 +453,7 @@ export async function snapshotUnmatchedAccounts(
         if (matchedUrls.has(key)) continue;
         if (BLOTATO_EXCLUDED_PLATFORMS.has(hit.platform)) continue;
         const handle = handleFromUrl(hit.url)
-            ?? (accounts ? resolveHandle(accounts.keyByUrl.get(key) ?? null, accounts.handles) : null);
+            ?? (accounts ? resolveHandle(accounts.keyByPostId.get(hit.id) ?? null, accounts.handles) : null);
         const mapped = mapMetrics(hit.metrics);
 
         const { error } = await supabase.from('performance_metrics').insert({

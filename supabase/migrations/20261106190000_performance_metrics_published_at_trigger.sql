@@ -1,10 +1,18 @@
 -- Fill performance_metrics.published_at from content_pieces when a row is
 -- written or tied to a piece, so the collector needs no deploy for (a).
--- Additive only: a function, a trigger and a fill of null dates. Option 1 of
--- the 2026-10-09 job, chosen by the COO 2026-10-27 (draft was
+-- Adds a function and a trigger, and fills null published_at on existing rows
+-- (the final UPDATE changes rows). Option 1 of the 2026-10-09 job, chosen by
+-- the COO 2026-10-27 (draft was
 -- 20261017150000_performance_metrics_published_at_trigger.sql.proposed).
--- Undo: drop trigger if exists trg_pm_fill_published_at on public.performance_metrics;
---       drop function if exists public.pm_fill_published_at();
+-- Apply with the Supabase apply_migration tool, not `supabase db push`: live
+-- migration versions differ from some local file names (e.g. 20261009150000).
+-- Undo, all three:
+--   drop trigger if exists trg_pm_fill_published_at on public.performance_metrics;
+--   drop function if exists public.pm_fill_published_at();
+--   update public.performance_metrics pm set published_at = null
+--   from public.performance_metrics_bak_20261106 b
+--   where b.id = pm.id and b.published_at is null and pm.published_at is not null;
+--   (rows inserted after the backup keep their filled date; that is the trigger's job)
 create or replace function public.pm_fill_published_at() returns trigger
 language plpgsql
 set search_path = public
