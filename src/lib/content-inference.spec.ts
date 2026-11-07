@@ -63,6 +63,14 @@ describe('content provider routing', () => {
         expect(mocks.text).toHaveBeenCalledTimes(1);
         expect(mocks.read.mock.calls[1][0]).toBe(key);
     });
+    it('falls back to a fresh draft when the cache read errors', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        mocks.read.mockRejectedValueOnce(new Error('Draft cache read failed (57014)'));
+        mocks.text.mockResolvedValue({ text: 'fresh', inputTokens: 2, outputTokens: 1 });
+        expect(await generateQueuedContent(request)).toEqual({ text: 'fresh', inputTokens: 2, outputTokens: 1, provider: 'claude' });
+        expect(mocks.text).toHaveBeenCalledTimes(1);
+    });
     it('keys the cached draft on topic, retry and prompt', async () => {
         const { draftCacheKey } = await vi.importActual<typeof import('@/lib/draft-cache')>('@/lib/draft-cache');
         const base = draftCacheKey('content:t:pieces:0', 's', 'u', 100);

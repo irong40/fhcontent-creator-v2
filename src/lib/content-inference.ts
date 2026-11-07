@@ -30,7 +30,9 @@ export async function generateQueuedContent(request: {
     if (provider !== 'claude') throw new Error('Invalid CONTENT_INFERENCE_PROVIDER');
     // Same topic, retry and prompt reuse one stored draft, so the judge queued for it can be consumed.
     const cacheKey = draftCacheKey(request.requestKey, request.system, request.user, request.maxTokens, request.schema);
-    const cached = await readCachedDraft(cacheKey);
+    // A cache read error must not fail the topic: fall back to a fresh draft, as a cache miss does.
+    let cached: Awaited<ReturnType<typeof readCachedDraft>> = null;
+    try { cached = await readCachedDraft(cacheKey); } catch (e) { console.error(e instanceof Error ? e.message : 'Draft cache read failed'); }
     if (cached) return { ...cached, provider: 'claude' as const };
     let fresh: { text: string; inputTokens: number; outputTokens: number };
     if (request.schema) {
