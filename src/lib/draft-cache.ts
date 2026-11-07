@@ -24,14 +24,31 @@ export async function readCachedDraft(key: string): Promise<CachedDraft | null> 
     return { text: data.result_text, inputTokens: data.input_tokens, outputTokens: data.output_tokens };
 }
 
-/** Stores the draft and returns the one that is stored: when two passes overlap the first write wins and both use it. */
+// A row that exists but cannot be served (not succeeded, empty text, missing token counts). readCachedDraft treats it
+// as a miss, so the write must be allowed to replace it or that key pays for a new draft on every pass.
+const UNUSABLE_ROW = 'status.neq.succeeded,result_text.is.null,result_text.eq.,input_tokens.is.null,output_tokens.is.null';
+
+/**
+ * Stores the draft and returns the one that is stored: when two passes overlap the first write wins and both use it.
+ * If the stored draft cannot be read back this throws rather than hand back a draft the cache may not hold, because
+ * the claim judge is keyed on the returned text; the next pass finds the stored draft and reuses it.
+ */
 export async function writeCachedDraft(key: string, draft: CachedDraft): Promise<CachedDraft> {
     const db = createAdminClient() as unknown as SupabaseClient<CacheDb>;
-    const { error } = await db.from('local_inference_jobs').upsert({
+    const row = {
         request_key: key, system_prompt: 'hosted draft cache', user_prompt: 'hosted draft cache', max_tokens: 1, model: 'qwen3:8b',
         status: 'succeeded', result_text: draft.text, input_tokens: draft.inputTokens, output_tokens: draft.outputTokens,
-    }, { onConflict: 'request_key', ignoreDuplicates: true });
+    };
+    const { error } = await db.from('local_inference_jobs').upsert(row, { onConflict: 'request_key', ignoreDuplicates: true });
     // A failed write only costs a second paid draft on the next pass; it must not lose the draft in hand.
     if (error) { console.error(`Draft cache write failed (${error.code ?? 'database'})`); return draft; }
-    return (await readCachedDraft(key).catch(() => null)) ?? draft;
+    let stored = await readCachedDraft(key).catch((e) => { console.error(e instanceof Error ? e.message : 'Draft cache re-read failed'); return undefined; });
+    if (stored === undefined) throw new Error('Draft cache re-read failed after write');
+    if (stored) return stored;
+    // The upsert kept an unusable row: replace it, only while it is still unusable, then take whatever is stored.
+    const { error: fixError } = await db.from('local_inference_jobs').update(row).eq('request_key', key).or(UNUSABLE_ROW);
+    if (fixError) { console.error(`Draft cache repair failed (${fixError.code ?? 'database'})`); return draft; }
+    stored = await readCachedDraft(key).catch(() => undefined);
+    if (stored === undefined) throw new Error('Draft cache re-read failed after repair');
+    return stored ?? draft;
 }
