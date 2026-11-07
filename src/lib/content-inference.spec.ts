@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ queue: vi.fn(), text: vi.fn(), structured: vi.fn() }));
+const mocks = vi.hoisted(() => ({ queue: vi.fn(), text: vi.fn(), structured: vi.fn(), read: vi.fn(), write: vi.fn() }));
+vi.mock('@/lib/draft-cache', async (orig) => ({ ...(await orig<typeof import('@/lib/draft-cache')>()), readCachedDraft: mocks.read, writeCachedDraft: mocks.write }));
 vi.mock('@/lib/local-inference-queue', () => ({ getOrEnqueueLocalInference: mocks.queue }));
 vi.mock('@/lib/claude', () => ({ claude: { generateContent: mocks.text, generateStructured: mocks.structured } }));
 import { generateQueuedContent, localContentResponseSchema } from './content-inference';
@@ -44,5 +45,28 @@ describe('content provider routing', () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
         mocks.structured.mockResolvedValue({ data: { captionLong: 'draft' }, inputTokens: 3, outputTokens: 1 });
         expect((await generateQueuedContent({ ...request, schema: { type: 'object' } })).text).toBe('{"captionLong":"draft"}');
+    });
+    it('stores a fresh hosted draft and reuses it on the next pass instead of paying for a different one', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
+        mocks.read.mockResolvedValueOnce(null);
+        mocks.text.mockResolvedValue({ text: 'draft A', inputTokens: 3, outputTokens: 1 });
+        const first = await generateQueuedContent(request);
+        expect(first.text).toBe('draft A');
+        expect(mocks.write).toHaveBeenCalledTimes(1);
+        const [key, stored] = mocks.write.mock.calls[0];
+        expect(stored).toEqual({ text: 'draft A', inputTokens: 3, outputTokens: 1 });
+        mocks.read.mockResolvedValueOnce(stored);
+        const second = await generateQueuedContent(request);
+        expect(second).toEqual({ text: 'draft A', inputTokens: 3, outputTokens: 1, provider: 'claude' });
+        expect(mocks.text).toHaveBeenCalledTimes(1);
+        expect(mocks.read.mock.calls[1][0]).toBe(key);
+    });
+    it('keys the cached draft on topic, retry and prompt', async () => {
+        const { draftCacheKey } = await vi.importActual<typeof import('@/lib/draft-cache')>('@/lib/draft-cache');
+        const base = draftCacheKey('content:t:pieces:0', 's', 'u');
+        expect(base).toMatch(/^[0-9a-f]{64}$/);
+        expect(draftCacheKey('content:t:pieces:0', 's', 'u')).toBe(base);
+        expect(draftCacheKey('content:t:pieces:1', 's', 'u')).not.toBe(base);
+        expect(draftCacheKey('content:t:pieces:0', 's', 'u2')).not.toBe(base);
     });
 });
