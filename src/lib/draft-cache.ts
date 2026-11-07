@@ -47,15 +47,20 @@ export async function writeCachedDraft(key: string, draft: CachedDraft): Promise
     try {
         const stored = await readCachedDraft(key);
         if (stored) return stored;
-        // The upsert kept an unusable row: replace it, matching the exact text it holds so a concurrent repair wins.
+        // The upsert kept an unusable row: replace it, matching the exact values it holds so a concurrent repair wins.
         const { data: old, error: oldError } = await db.from('local_inference_jobs').select('status,result_text,input_tokens,output_tokens').eq('request_key', key).maybeSingle();
         if (oldError) throw new Error(`Draft cache repair read failed (${oldError.code ?? 'database'})`);
         // Another pass may have repaired the row since the first read: its draft wins, never overwrite it.
         if (!old) return draft;
         const winner = servable(old as StoredRow);
         if (winner) return winner;
-        const q = db.from('local_inference_jobs').update(row).eq('request_key', key);
-        const { error: fixError } = await ((old as StoredRow).result_text === null ? q.is('result_text', null) : q.eq('result_text', (old as StoredRow).result_text as string));
+        // Match every field that made the row unusable, so a repair by another pass (any field changed) is never overwritten.
+        const stale = old as StoredRow;
+        let q = db.from('local_inference_jobs').update(row).eq('request_key', key).eq('status', stale.status);
+        q = stale.result_text === null ? q.is('result_text', null) : q.eq('result_text', stale.result_text);
+        q = stale.input_tokens === null ? q.is('input_tokens', null) : q.eq('input_tokens', stale.input_tokens);
+        q = stale.output_tokens === null ? q.is('output_tokens', null) : q.eq('output_tokens', stale.output_tokens);
+        const { error: fixError } = await q;
         if (fixError) throw new Error(`Draft cache repair failed (${fixError.code ?? 'database'})`);
         return (await readCachedDraft(key)) ?? draft;
     } catch (e) {
