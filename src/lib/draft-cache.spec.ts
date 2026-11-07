@@ -12,7 +12,10 @@ vi.mock('./supabase/server', () => ({
             if (!h.rows.has(row.request_key)) h.rows.set(row.request_key, row);
             return { error: null };
         },
-        update: (row: { request_key: string }) => ({ eq: () => ({ or: async () => { h.updates++; h.rows.set(row.request_key, row); return { error: null }; } }) }),
+        update: (row: { request_key: string }) => ({ eq: () => {
+            const apply = (col: string, val: unknown) => { const cur = h.rows.get(row.request_key); if (!cur || cur[col] !== val) return Promise.resolve({ error: null }); h.updates++; h.rows.set(row.request_key, row); return Promise.resolve({ error: null }); };
+            return { eq: async (c: string, v: unknown) => apply(c, v), is: async (c: string, v: unknown) => apply(c, v) };
+        } }),
     }) }),
 }));
 import { draftCacheKey, readCachedDraft, writeCachedDraft } from './draft-cache';
@@ -32,14 +35,19 @@ describe('draft cache', () => {
         await writeCachedDraft('k', { text: 'winner', inputTokens: 3, outputTokens: 4 });
         expect((await writeCachedDraft('k', mine)).text).toBe('winner');
     });
-    it('throws, not a different draft, when the stored draft cannot be read back', async () => {
+    it('returns the draft in hand, without throwing, when the stored draft cannot be read back', async () => {
         h.failSelect = 1;
-        await expect(writeCachedDraft('k', mine)).rejects.toThrow('re-read');
+        expect(await writeCachedDraft('k', mine)).toEqual(mine);
         expect(h.rows.get('k')).toBeDefined();
     });
     it('replaces an unusable stored row', async () => {
         h.rows.set('k', { request_key: 'k', status: 'succeeded', result_text: '  ', input_tokens: null, output_tokens: null });
         expect(await readCachedDraft('k')).toBeNull();
+        expect(await writeCachedDraft('k', mine)).toEqual(mine);
+        expect(h.updates).toBe(1);
+    });
+    it('replaces a null-text stored row', async () => {
+        h.rows.set('k', { request_key: 'k', status: 'queued', result_text: null, input_tokens: null, output_tokens: null });
         expect(await writeCachedDraft('k', mine)).toEqual(mine);
         expect(h.updates).toBe(1);
     });
