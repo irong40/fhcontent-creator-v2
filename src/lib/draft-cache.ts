@@ -12,8 +12,8 @@ type CacheRow = { request_key: string; system_prompt: string; user_prompt: strin
 type CacheDb = { public: { Tables: { local_inference_jobs: { Row: CacheRow; Insert: Partial<CacheRow>; Update: Partial<CacheRow>; Relationships: [] } }; Views: Record<string, never>; Functions: Record<string, never> } };
 export type CachedDraft = { text: string; inputTokens: number; outputTokens: number };
 
-export function draftCacheKey(requestKey: string, system: string, user: string, schema?: Record<string, unknown>): string {
-    return createHash('sha256').update(JSON.stringify(['claude-draft', 1, requestKey, system, user, schema ?? null])).digest('hex');
+export function draftCacheKey(requestKey: string, system: string, user: string, maxTokens: number, schema?: Record<string, unknown>): string {
+    return createHash('sha256').update(JSON.stringify(['claude-draft', 1, requestKey, system, user, maxTokens, schema ?? null])).digest('hex');
 }
 
 export async function readCachedDraft(key: string): Promise<CachedDraft | null> {
@@ -24,12 +24,14 @@ export async function readCachedDraft(key: string): Promise<CachedDraft | null> 
     return { text: data.result_text, inputTokens: data.input_tokens, outputTokens: data.output_tokens };
 }
 
-export async function writeCachedDraft(key: string, draft: CachedDraft): Promise<void> {
+/** Stores the draft and returns the one that is stored: when two passes overlap the first write wins and both use it. */
+export async function writeCachedDraft(key: string, draft: CachedDraft): Promise<CachedDraft> {
     const db = createAdminClient() as unknown as SupabaseClient<CacheDb>;
     const { error } = await db.from('local_inference_jobs').upsert({
         request_key: key, system_prompt: 'hosted draft cache', user_prompt: 'hosted draft cache', max_tokens: 1, model: 'qwen3:8b',
         status: 'succeeded', result_text: draft.text, input_tokens: draft.inputTokens, output_tokens: draft.outputTokens,
     }, { onConflict: 'request_key', ignoreDuplicates: true });
     // A failed write only costs a second paid draft on the next pass; it must not lose the draft in hand.
-    if (error) console.error(`Draft cache write failed (${error.code ?? 'database'})`);
+    if (error) { console.error(`Draft cache write failed (${error.code ?? 'database'})`); return draft; }
+    return (await readCachedDraft(key).catch(() => null)) ?? draft;
 }

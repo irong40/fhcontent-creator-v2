@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ queue: vi.fn(), text: vi.fn(), structured: vi.fn(), read: vi.fn(), write: vi.fn() }));
 vi.mock('@/lib/draft-cache', async (orig) => ({ ...(await orig<typeof import('@/lib/draft-cache')>()), readCachedDraft: mocks.read, writeCachedDraft: mocks.write }));
@@ -7,6 +7,7 @@ vi.mock('@/lib/claude', () => ({ claude: { generateContent: mocks.text, generate
 import { generateQueuedContent, localContentResponseSchema } from './content-inference';
 
 const request = { requestKey: 'fixture', system: 'system', user: 'source', maxTokens: 100 };
+beforeEach(() => { mocks.write.mockImplementation(async (_k: string, d: unknown) => d); });
 afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
 describe('content provider routing', () => {
     it('bounds image prompts so repeated framing instructions cannot grow indefinitely', () => {
@@ -49,6 +50,7 @@ describe('content provider routing', () => {
     it('stores a fresh hosted draft and reuses it on the next pass instead of paying for a different one', async () => {
         vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'claude');
         mocks.read.mockResolvedValueOnce(null);
+        mocks.write.mockImplementation(async (_k: string, d: unknown) => d);
         mocks.text.mockResolvedValue({ text: 'draft A', inputTokens: 3, outputTokens: 1 });
         const first = await generateQueuedContent(request);
         expect(first.text).toBe('draft A');
@@ -63,10 +65,11 @@ describe('content provider routing', () => {
     });
     it('keys the cached draft on topic, retry and prompt', async () => {
         const { draftCacheKey } = await vi.importActual<typeof import('@/lib/draft-cache')>('@/lib/draft-cache');
-        const base = draftCacheKey('content:t:pieces:0', 's', 'u');
+        const base = draftCacheKey('content:t:pieces:0', 's', 'u', 100);
         expect(base).toMatch(/^[0-9a-f]{64}$/);
-        expect(draftCacheKey('content:t:pieces:0', 's', 'u')).toBe(base);
-        expect(draftCacheKey('content:t:pieces:1', 's', 'u')).not.toBe(base);
-        expect(draftCacheKey('content:t:pieces:0', 's', 'u2')).not.toBe(base);
+        expect(draftCacheKey('content:t:pieces:0', 's', 'u', 100)).toBe(base);
+        expect(draftCacheKey('content:t:pieces:1', 's', 'u', 100)).not.toBe(base);
+        expect(draftCacheKey('content:t:pieces:0', 's', 'u2', 100)).not.toBe(base);
+        expect(draftCacheKey('content:t:pieces:0', 's', 'u', 200)).not.toBe(base);
     });
 });
