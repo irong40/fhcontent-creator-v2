@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ rows: new Map<string, Record<string, unknown>>(), failSelect: 0, failUpsert: false, updates: 0 }));
+const h = vi.hoisted(() => ({ rows: new Map<string, Record<string, unknown>>(), failSelect: 0, failUpsert: false, updates: 0, afterFirstSelect: null as null | (() => void) }));
 vi.mock('./supabase/server', () => ({
     createAdminClient: () => ({ from: () => ({
         select: () => ({ eq: (_c: string, k: string) => ({ maybeSingle: async () => {
             if (h.failSelect > 0) { h.failSelect--; return { data: null, error: { code: 'XX' } }; }
-            return { data: h.rows.get(k) ?? null, error: null };
+            const data = h.rows.get(k) ?? null;
+            const hook = h.afterFirstSelect; h.afterFirstSelect = null; hook?.();
+            return { data, error: null };
         } }) }),
         upsert: async (row: { request_key: string }) => {
             if (h.failUpsert) return { error: { code: 'XX' } };
@@ -21,7 +23,7 @@ vi.mock('./supabase/server', () => ({
 import { draftCacheKey, readCachedDraft, writeCachedDraft } from './draft-cache';
 
 const mine = { text: 'mine', inputTokens: 1, outputTokens: 2 };
-beforeEach(() => { h.rows.clear(); h.failSelect = 0; h.failUpsert = false; h.updates = 0; vi.spyOn(console, 'error').mockImplementation(() => {}); });
+beforeEach(() => { h.rows.clear(); h.failSelect = 0; h.failUpsert = false; h.updates = 0; h.afterFirstSelect = null; vi.spyOn(console, 'error').mockImplementation(() => {}); });
 describe('draft cache', () => {
     it('keys on maxTokens and schema', () => {
         expect(draftCacheKey('a', 's', 'u', 1)).not.toBe(draftCacheKey('a', 's', 'u', 2));
@@ -50,6 +52,12 @@ describe('draft cache', () => {
         h.rows.set('k', { request_key: 'k', status: 'queued', result_text: null, input_tokens: null, output_tokens: null });
         expect(await writeCachedDraft('k', mine)).toEqual(mine);
         expect(h.updates).toBe(1);
+    });
+    it('does not overwrite a row another pass repaired between the miss and the repair read', async () => {
+        h.rows.set('k', { request_key: 'k', status: 'succeeded', result_text: ' ', input_tokens: 1, output_tokens: 1 });
+        h.afterFirstSelect = () => h.rows.set('k', { request_key: 'k', status: 'succeeded', result_text: 'other', input_tokens: 5, output_tokens: 6 });
+        expect((await writeCachedDraft('k', mine)).text).toBe('other');
+        expect(h.updates).toBe(0);
     });
     it('keeps the draft in hand when the write fails', async () => {
         h.failUpsert = true;

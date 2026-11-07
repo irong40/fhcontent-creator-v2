@@ -10,6 +10,7 @@ import { createAdminClient } from './supabase/server';
 // never sees it.
 type CacheRow = { request_key: string; system_prompt: string; user_prompt: string; max_tokens: number; model: string; status: string; result_text: string | null; input_tokens: number | null; output_tokens: number | null };
 type CacheDb = { public: { Tables: { local_inference_jobs: { Row: CacheRow; Insert: Partial<CacheRow>; Update: Partial<CacheRow>; Relationships: [] } }; Views: Record<string, never>; Functions: Record<string, never> } };
+type StoredRow = Pick<CacheRow, 'status' | 'result_text' | 'input_tokens' | 'output_tokens'>;
 export type CachedDraft = { text: string; inputTokens: number; outputTokens: number };
 
 export function draftCacheKey(requestKey: string, system: string, user: string, maxTokens: number, schema?: Record<string, unknown>): string {
@@ -20,11 +21,13 @@ export async function readCachedDraft(key: string): Promise<CachedDraft | null> 
     const db = createAdminClient() as unknown as SupabaseClient<CacheDb>;
     const { data, error } = await db.from('local_inference_jobs').select('status,result_text,input_tokens,output_tokens').eq('request_key', key).maybeSingle();
     if (error) throw new Error(`Draft cache read failed (${error.code ?? 'database'})`);
+    return servable(data);
+}
+
+function servable(data: StoredRow | null): CachedDraft | null {
     if (!data || data.status !== 'succeeded' || !data.result_text?.trim() || data.input_tokens == null || data.output_tokens == null) return null;
     return { text: data.result_text, inputTokens: data.input_tokens, outputTokens: data.output_tokens };
 }
-
-type StoredRow = Pick<CacheRow, 'status' | 'result_text' | 'input_tokens' | 'output_tokens'>;
 
 /**
  * Stores the draft and returns the one that is stored: when two passes overlap the first write wins and both use it.
@@ -47,7 +50,10 @@ export async function writeCachedDraft(key: string, draft: CachedDraft): Promise
         // The upsert kept an unusable row: replace it, matching the exact text it holds so a concurrent repair wins.
         const { data: old, error: oldError } = await db.from('local_inference_jobs').select('status,result_text,input_tokens,output_tokens').eq('request_key', key).maybeSingle();
         if (oldError) throw new Error(`Draft cache repair read failed (${oldError.code ?? 'database'})`);
+        // Another pass may have repaired the row since the first read: its draft wins, never overwrite it.
         if (!old) return draft;
+        const winner = servable(old as StoredRow);
+        if (winner) return winner;
         const q = db.from('local_inference_jobs').update(row).eq('request_key', key);
         const { error: fixError } = await ((old as StoredRow).result_text === null ? q.is('result_text', null) : q.eq('result_text', (old as StoredRow).result_text as string));
         if (fixError) throw new Error(`Draft cache repair failed (${fixError.code ?? 'database'})`);
