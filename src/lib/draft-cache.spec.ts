@@ -19,10 +19,10 @@ vi.mock('./supabase/server', () => ({
             const filters: Array<['eq' | 'is', string, unknown]> = [];
             const chain = {
                 eq: (c: string, v: unknown) => { filters.push(['eq', c, v]); return chain; },
-                is: (c: string, v: unknown) => { filters.push(['is', c, v]); return chain; },
+                is: (c: string, v: unknown) => { if (v !== null && typeof v !== 'boolean') throw new Error(`PostgREST rejects is.${String(v)}`); filters.push(['is', c, v]); return chain; },
                 then: (res: (v: { error: null }) => void) => {
                     const cur = h.rows.get(row.request_key);
-                    if (cur && filters.every(([op, c, v]) => op === 'is' ? cur[c] === v : cur[c] != null && v != null && cur[c] === v)) { h.updates++; h.rows.set(row.request_key, row); }
+                    if (cur && filters.some(([op, c, v]) => op === 'eq' && c === 'request_key' && v === row.request_key) && filters.every(([op, c, v]) => op === 'is' ? cur[c] === v : cur[c] != null && v != null && cur[c] === v)) { h.updates++; h.rows.set(row.request_key, row); }
                     res({ error: null });
                 },
             };
