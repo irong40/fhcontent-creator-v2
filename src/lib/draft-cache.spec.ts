@@ -16,13 +16,13 @@ vi.mock('./supabase/server', () => ({
             return { error: null };
         },
         update: (row: { request_key: string }) => {
-            const filters: Array<[string, unknown]> = [];
+            const filters: Array<['eq' | 'is', string, unknown]> = [];
             const chain = {
-                eq: (c: string, v: unknown) => { filters.push([c, v]); return chain; },
-                is: (c: string, v: unknown) => { filters.push([c, v]); return chain; },
+                eq: (c: string, v: unknown) => { filters.push(['eq', c, v]); return chain; },
+                is: (c: string, v: unknown) => { filters.push(['is', c, v]); return chain; },
                 then: (res: (v: { error: null }) => void) => {
                     const cur = h.rows.get(row.request_key);
-                    if (cur && filters.every(([c, v]) => c === 'request_key' || cur[c] === v)) { h.updates++; h.rows.set(row.request_key, row); }
+                    if (cur && filters.every(([op, c, v]) => op === 'is' ? cur[c] === v : cur[c] != null && v != null && cur[c] === v)) { h.updates++; h.rows.set(row.request_key, row); }
                     res({ error: null });
                 },
             };
@@ -73,6 +73,19 @@ describe('draft cache', () => {
         h.rows.set('k', { request_key: 'k', status: 'succeeded', result_text: 'stale', input_tokens: null, output_tokens: null });
         h.afterSecondSelect = () => h.rows.set('k', { request_key: 'k', status: 'succeeded', result_text: 'stale', input_tokens: 5, output_tokens: 6 });
         expect(await writeCachedDraft('k', mine)).toEqual({ text: 'stale', inputTokens: 5, outputTokens: 6 });
+        expect(h.updates).toBe(0);
+    });
+    it.each([
+        ['status', { status: 'queued', result_text: 'winner', input_tokens: 5, output_tokens: 6 }],
+        ['result_text', { status: 'succeeded', result_text: ' ', input_tokens: 5, output_tokens: 6 }],
+        ['input_tokens', { status: 'succeeded', result_text: 'winner', input_tokens: null, output_tokens: 6 }],
+        ['output_tokens', { status: 'succeeded', result_text: 'winner', input_tokens: 5, output_tokens: null }],
+    ])('preserves a concurrent repair changing only %s', async (_field, stale) => {
+        h.rows.set('k', { request_key: 'k', ...stale });
+        const winner = { request_key: 'k', status: 'succeeded', result_text: 'winner', input_tokens: 5, output_tokens: 6 };
+        h.afterSecondSelect = () => h.rows.set('k', winner);
+        expect(await writeCachedDraft('k', mine)).toEqual({ text: 'winner', inputTokens: 5, outputTokens: 6 });
+        expect(h.rows.get('k')).toEqual(winner);
         expect(h.updates).toBe(0);
     });
     it('keeps the draft in hand when the write fails', async () => {
