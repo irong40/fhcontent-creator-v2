@@ -16,6 +16,10 @@ import crypto from 'crypto';
 // margin without holding the function open.
 export const maxDuration = 300;
 
+// Days past its publish date that a review-held draft with no text is spared
+// before the sweep fails it and releases its sourced candidate.
+const HELD_DRAFT_GRACE_DAYS = 7;
+
 export async function GET(request: Request) {
     if (!validateCronSecret(request)) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -98,22 +102,30 @@ export async function GET(request: Request) {
             // (2026-10-12: the local worker was down a week and this sweep
             // failed every sourced draft before it got its text).
             const todayDate = new Date(nowMs).toISOString().split('T')[0];
-            const { data: staleDrafts } = await supabase
+            const { data: staleDrafts, error: staleError } = await supabase
                 .from('topics')
-                .select('id, title, status, requires_review, content_pieces(id)')
+                .select('id, title, status, requires_review, publish_date, created_at, content_pieces(id)')
                 .eq('persona_id', persona.id)
                 .in('status', ['draft', 'content_generating'])
                 .lt('created_at', oneDayAgo)
                 .or(`publish_date.is.null,publish_date.lt.${todayDate}`);
+            if (staleError) personaResult.errors.push(`Stale-draft sweep: ${staleError.message}`);
+            // A held draft with no text gets a week past its day for Adam to act;
+            // then it fails and gives its candidate back like any stuck draft.
+            const heldGraceCutoff = new Date(nowMs - HELD_DRAFT_GRACE_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
             if (staleDrafts && staleDrafts.length > 0) {
                 for (const stale of staleDrafts) {
-                    // A text that was written, or a topic held for Adam's review,
-                    // is waiting on a person, not stuck. Never auto-fail it.
+                    // A text that was written is waiting on a person, not stuck.
+                    // Never auto-fail it.
                     const hasText = Array.isArray(stale.content_pieces) && stale.content_pieces.length > 0;
-                    if (hasText || stale.requires_review) continue;
+                    if (hasText) continue;
+                    const dueDate = (stale.publish_date ?? stale.created_at ?? '').slice(0, 10);
+                    if (stale.requires_review && dueDate >= heldGraceCutoff) continue;
                     await supabase.from('topics').update({
                         status: 'failed',
-                        error_message: `Auto-failed by daily-topic: stuck in ${stale.status} >24h`,
+                        error_message: stale.requires_review
+                            ? `Auto-failed by daily-topic: held for review with no text over ${HELD_DRAFT_GRACE_DAYS} days past its date`
+                            : `Auto-failed by daily-topic: stuck in ${stale.status} >24h`,
                     }).eq('id', stale.id);
                     // A sourced topic that never got its text gives its candidate
                     // back, so the sourced work is used next week instead of lost.
