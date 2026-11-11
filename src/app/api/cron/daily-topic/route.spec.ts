@@ -29,11 +29,26 @@ async function sweep(stale: Record<string, unknown>[]) {
     return (await GET(new Request('https://fixture/api/cron/daily-topic'))).json();
 }
 describe('stale draft sweep', () => {
-    it('fails a draft with no text and no review hold', async () => {
-        await sweep([{ id: 't1', status: 'draft', requires_review: false, content_pieces: [] }]);
+    it('fails a draft with no text and no review hold as soon as its day has passed', async () => {
+        // Dated inside the grace week, so only the missing hold can fail it.
+        await sweep([{ id: 't1', status: 'draft', requires_review: false, publish_date: daysAgo(1), created_at: `${daysAgo(3)}T09:00:00Z`, content_pieces: [] }]);
         expect(state.updates).toHaveLength(1);
         expect(state.updates[0]).toMatchObject({ status: 'failed' });
+        expect(state.updates[0].error_message).toContain('stuck in draft >24h');
         expect(state.released).toEqual(['t1']);
+    });
+    it('grants the grace week only to the held draft of two drafts with the same date', async () => {
+        await sweep([
+            { id: 't8', status: 'draft', requires_review: false, publish_date: daysAgo(2), created_at: `${daysAgo(4)}T09:00:00Z`, content_pieces: [] },
+            { id: 't9', status: 'draft', requires_review: true, publish_date: daysAgo(2), created_at: `${daysAgo(4)}T09:00:00Z`, content_pieces: [] },
+        ]);
+        expect(state.updates).toHaveLength(1);
+        expect(state.released).toEqual(['t8']);
+    });
+    it('still spares a held draft on the seventh day past its date', async () => {
+        await sweep([{ id: 't10', status: 'draft', requires_review: true, publish_date: daysAgo(7), created_at: `${daysAgo(9)}T09:00:00Z`, content_pieces: [] }]);
+        expect(state.updates).toHaveLength(0);
+        expect(state.released).toHaveLength(0);
     });
     it('spares a topic that already has content pieces', async () => {
         await sweep([{ id: 't2', status: 'draft', requires_review: false, content_pieces: [{ id: 'c1' }] }]);
