@@ -100,13 +100,17 @@ export async function GET(request: Request) {
             const todayDate = new Date(nowMs).toISOString().split('T')[0];
             const { data: staleDrafts } = await supabase
                 .from('topics')
-                .select('id, title, status')
+                .select('id, title, status, requires_review, content_pieces(id)')
                 .eq('persona_id', persona.id)
                 .in('status', ['draft', 'content_generating'])
                 .lt('created_at', oneDayAgo)
                 .or(`publish_date.is.null,publish_date.lt.${todayDate}`);
             if (staleDrafts && staleDrafts.length > 0) {
                 for (const stale of staleDrafts) {
+                    // A text that was written, or a topic held for Adam's review,
+                    // is waiting on a person, not stuck. Never auto-fail it.
+                    const hasText = Array.isArray(stale.content_pieces) && stale.content_pieces.length > 0;
+                    if (hasText || stale.requires_review) continue;
                     await supabase.from('topics').update({
                         status: 'failed',
                         error_message: `Auto-failed by daily-topic: stuck in ${stale.status} >24h`,
