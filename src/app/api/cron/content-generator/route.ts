@@ -113,6 +113,7 @@ export async function GET(request: Request) {
                 // Provider/approval is uncertain, so recovery always requires review.
                 await supabase.from('topics').update({
                     status: 'content_ready',
+                    error_message: null, // the pieces are in; an earlier attempt's fault must not ride along
                     requires_review: true,
                     review_reason: 'Recovered existing content; review before approval',
                     content_ready_at: new Date().toISOString(),

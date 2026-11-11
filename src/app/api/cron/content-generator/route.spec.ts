@@ -147,4 +147,19 @@ describe('local content consumption', () => {
         expect(state.generate).not.toHaveBeenCalled();
         expect(state.updates[0]).toMatchObject({ status: 'content_ready', requires_review: true, coo_auto_approved_at: null });
     });
+    it('clears an earlier unsupported-claim fault when the retry passes', async () => {
+        vi.stubEnv('CONTENT_INFERENCE_PROVIDER', 'ollama');
+        state.topic = { historical_points: [lafayettePoint], retry_count: 1, error_message: "Content-generator: Unsupported claim: short_1: 'double agent for the British' (he only pretended)" };
+        gen();
+        state.judge.mockResolvedValue('{"unsupported":[]}');
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.inserts).toHaveLength(1);
+        expect(state.updates.at(-1)).toMatchObject({ status: 'content_ready', error_message: null });
+    });
+    it('clears an earlier fault when it recovers existing pieces', async () => {
+        state.existing = 6;
+        state.topic = { error_message: 'Content-generator: status update timed out' };
+        await GET(new Request('https://fixture/api/cron/content-generator'));
+        expect(state.updates[0]).toMatchObject({ status: 'content_ready', error_message: null });
+    });
 });
