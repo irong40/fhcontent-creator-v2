@@ -299,6 +299,7 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                 // paid call. The source check and the text review come first.
                 const { error: statusError } = await supabase.from('topics').update({
                     status: 'content_ready',
+                    error_message: null, // a text that passed must not carry an earlier attempt's fault
                     requires_review: true,
                     review_reason: provider === 'ollama'
                         ? 'Local model draft requires human factual review'
