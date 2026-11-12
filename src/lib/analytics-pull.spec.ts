@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/blotato', () => ({
     blotato: {
         listTopPosts: vi.fn(),
+        listPublishedPosts: vi.fn(),
         getPostStatus: vi.fn(),
     },
 }));
@@ -19,10 +20,14 @@ import {
     buildAnalyticsIndex,
     snapshotMatchedMetrics,
     snapshotUnmatchedAccounts,
+    accountKey,
+    resolveHandle,
+    buildAccountResolver,
 } from './analytics-pull';
 
 const listTopPosts = vi.mocked(blotato.listTopPosts);
 const getPostStatus = vi.mocked(blotato.getPostStatus);
+const listPublishedPosts = vi.mocked(blotato.listPublishedPosts);
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -220,9 +225,110 @@ describe('snapshotMatchedMetrics', () => {
         expect(res.sampleUnmatchedUrl).toBe('https://instagram.com/reel/zzz');
         expect(res.matchedUrls.has('tiktok.com/@x/video/1')).toBe(true);
         expect(inserts).toEqual([
-            { content_piece_id: 'p1', platform: 'tiktok', blotato_post_id: '901', published_at: null, views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
-            { content_piece_id: 'p1', platform: 'twitter', blotato_post_id: '902', published_at: null, views: 0, likes: 0, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'tiktok', handle: '@x', blotato_post_id: '901', published_at: null, views: 100, likes: 4, comments: 0, shares: 0, saves: 0 },
+            { content_piece_id: 'p1', platform: 'twitter', handle: '@x', blotato_post_id: '902', published_at: null, views: 0, likes: 0, comments: 0, shares: 0, saves: 0 },
         ]);
+    });
+
+    it('ties a piece with a submission UUID post_id by its URL, and leaves an unresolved one for a later run', async () => {
+        // Live contract: post_id is the POST /posts submission UUID, never the
+        // numeric analytics id, so only the resolved post_url can tie a piece.
+        const pieces = [
+            { id: 'p9', published_platforms: { instagram: { status: 'published', post_id: '336e9842-f040-4a53-9e4d-4d7324a8308b', post_url: 'https://www.instagram.com/reel/q9/' } } },
+            { id: 'p10', published_platforms: { instagram: { status: 'published', post_id: '8c45119e-e5b2-4f45-aa8e-2659cf40e08f' } } },
+        ] as never[];
+        const index = idx([
+            ['https://instagram.com/reel/q9', { viewsCount: '12' }, 'instagram', '977'],
+            ['https://instagram.com/reel/q10', { viewsCount: '5' }, 'instagram', '978'],
+        ]);
+        const { supabase, inserts } = fakeClient();
+
+        const res = await snapshotMatchedMetrics(supabase, pieces, index);
+
+        expect(res.snapshots).toBe(1);
+        expect(res.matchedUrls.has(normalizeUrl('https://instagram.com/reel/q9'))).toBe(true);
+        expect(inserts).toHaveLength(1);
+        expect(inserts[0]).toMatchObject({ content_piece_id: 'p9', blotato_post_id: '977', views: 12 });
+    });
+
+    it('keeps Facebook permalink.php posts from two pages apart', async () => {
+        const a = 'https://www.facebook.com/permalink.php?story_fbid=111&id=101';
+        const b = 'https://www.facebook.com/permalink.php?story_fbid=222&id=202';
+        expect(normalizeUrl(a)).not.toBe(normalizeUrl(b));
+        expect(normalizeUrl(a)).toBe('facebook.com/permalink.php?story_fbid=111&id=101');
+        expect(normalizeUrl('https://facebook.com/permalink.php?id=101&story_fbid=111&ref=share')).toBe(normalizeUrl(a));
+        expect(normalizeUrl('https://facebook.com/reel/42/?s=1')).toBe('facebook.com/reel/42');
+
+        const pieces = [
+            { id: 'pa', published_platforms: { facebook: { status: 'published', post_id: 'uuid-a', post_url: a } } },
+            { id: 'pb', published_platforms: { facebook: { status: 'published', post_id: 'uuid-b', post_url: b } } },
+        ] as never[];
+        const index = idx([
+            [a, { likesCount: '7' }, 'facebook', '1'],
+            [b, { likesCount: '9' }, 'facebook', '2'],
+        ]);
+        const keyByPostId = new Map([['1', '3684/101'], ['2', '3684/202']]);
+        const handles = new Map([['3684/101', 'Page A (facebook)'], ['3684/202', 'Page B (facebook)']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByPostId, handles });
+
+        expect(inserts.map((r) => [r.content_piece_id, r.blotato_post_id, r.handle, r.likes])).toEqual([
+            ['pa', '1', 'Page A (facebook)', 7],
+            ['pb', '2', 'Page B (facebook)', 9],
+        ]);
+    });
+
+    it.each([
+        ['photo/?fbid=', 'https://www.facebook.com/photo/?fbid=111&set=a.9', 'https://www.facebook.com/photo/?fbid=222&set=a.9', 'facebook.com/photo?fbid=111'],
+        ['photo.php?fbid=', 'https://facebook.com/photo.php?fbid=111&ref=share', 'https://facebook.com/photo.php?fbid=222', 'facebook.com/photo.php?fbid=111'],
+        ['video.php?v=', 'https://www.facebook.com/video.php?v=111', 'https://www.facebook.com/video.php?v=222', 'facebook.com/video.php?v=111'],
+        ['watch/?v=', 'https://www.facebook.com/watch/?v=111&mibextid=x', 'https://www.facebook.com/watch/?v=222', 'facebook.com/watch?v=111'],
+        ['story.php?story_fbid=', 'https://m.facebook.com/story.php?story_fbid=111&id=101', 'https://m.facebook.com/story.php?story_fbid=222&id=101', 'm.facebook.com/story.php?story_fbid=111&id=101'],
+    ])('keeps two Facebook %s posts apart', async (_shape, a, b, keyA) => {
+        expect(normalizeUrl(a)).toBe(keyA);
+        expect(normalizeUrl(a)).not.toBe(normalizeUrl(b));
+
+        const pieces = [
+            { id: 'pa', published_platforms: { facebook: { status: 'published', post_id: 'uuid-a', post_url: a } } },
+            { id: 'pb', published_platforms: { facebook: { status: 'published', post_id: 'uuid-b', post_url: b } } },
+        ] as never[];
+        const index = idx([
+            [a, { likesCount: '7' }, 'facebook', '1'],
+            [b, { likesCount: '9' }, 'facebook', '2'],
+        ]);
+        const keyByPostId = new Map([['1', '3684/101'], ['2', '3684/202']]);
+        const handles = new Map([['3684/101', 'Page A (facebook)'], ['3684/202', 'Page B (facebook)']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByPostId, handles });
+
+        expect(inserts.map((r) => [r.content_piece_id, r.blotato_post_id, r.handle, r.likes])).toEqual([
+            ['pa', '1', 'Page A (facebook)', 7],
+            ['pb', '2', 'Page B (facebook)', 9],
+        ]);
+    });
+
+    it('writes the handle on piece-tied rows, from the URL or the Blotato account', async () => {
+        const pieces = [{
+            id: 'p1',
+            published_platforms: {
+                tiktok: { status: 'published', post_url: 'https://www.tiktok.com/@necorner/video/5' },
+                facebook: { status: 'published', post_url: 'https://facebook.com/posts/6' },
+            },
+        }] as never[];
+        const index = idx([
+            ['https://www.tiktok.com/@necorner/video/5', { viewsCount: '3' }, 'tiktok', '905'],
+            ['https://facebook.com/posts/6', { viewsCount: '4' }, 'facebook', '906'],
+        ]);
+        const keyByPostId = new Map([['906', 'acct1/page7']]);
+        const handles = new Map([['acct1/page7', '@northeastcorner']]);
+        const { supabase, inserts } = fakeClient();
+
+        await snapshotMatchedMetrics(supabase, pieces, index, { keyByPostId, handles });
+
+        expect(inserts[0]).toMatchObject({ platform: 'tiktok', handle: '@necorner' });
+        expect(inserts[1]).toMatchObject({ platform: 'facebook', handle: '@northeastcorner' });
     });
 
     it('writes published_at from Blotato postedAt', async () => {
@@ -330,6 +436,92 @@ describe('snapshotUnmatchedAccounts', () => {
             { content_piece_id: null, platform: 'tiktok', handle: '@x', blotato_post_id: '905', published_at: null, views: 0, likes: 0, ...zero },
             { content_piece_id: null, platform: 'instagram', handle: null, blotato_post_id: '906', published_at: null, views: 40, likes: 0, ...zero },
             { content_piece_id: null, platform: 'facebook', handle: null, blotato_post_id: '907', published_at: null, views: 0, likes: 0, ...zero },
+        ]);
+    });
+});
+
+describe('account attribution', () => {
+    const handles = new Map([
+        ['59689', '@sentinelaerialinspector'],
+        ['4346', '@faithharmony4045'],
+        ['3684', 'Adam Pierce (pages)'],
+        ['3684/1063375450183829', 'The North East Corner (facebook)'],
+        ['3684/899526466587385', 'Sentinel Aerial Inspections (facebook)'],
+    ]);
+
+    it('keys a page-level post by account/page and everything else by account', () => {
+        expect(accountKey({ id: '3684', subaccount: { id: '1063375450183829' } })).toBe('3684/1063375450183829');
+        expect(accountKey({ id: '59689', subaccount: null })).toBe('59689');
+        expect(accountKey(null)).toBeNull();
+    });
+
+    it('lets the page id decide the handle; an unregistered page stays null', () => {
+        expect(resolveHandle('3684/1063375450183829', handles)).toBe('The North East Corner (facebook)');
+        expect(resolveHandle('3684/899526466587385', handles)).toBe('Sentinel Aerial Inspections (facebook)');
+        expect(resolveHandle('3684/777', handles)).toBeNull();
+        expect(resolveHandle('3684', handles)).toBe('Adam Pierce (pages)');
+        expect(resolveHandle('59689', handles)).toBe('@sentinelaerialinspector');
+        expect(resolveHandle('99999', handles)).toBeNull();
+        expect(resolveHandle(null, handles)).toBeNull();
+    });
+
+    it('buildAccountResolver walks cursors and keys accounts by published-post id', async () => {
+        const supabase = {
+            from: () => ({ select: () => Promise.resolve({ data: [
+                { account_id: '59689', handle: '@sentinelaerialinspector' },
+                { account_id: '3684/1063375450183829', handle: 'The North East Corner (facebook)' },
+            ], error: null }) }),
+        } as never;
+        listPublishedPosts
+            .mockResolvedValueOnce({ items: [
+                { id: '1', account: { id: '59689', subaccount: null }, platform: 'instagram', state: { type: 'published', postUrl: 'https://www.instagram.com/reel/IGabc/' } },
+            ], cursor: 'c2' } as never)
+            .mockResolvedValueOnce({ items: [
+                { id: '2', account: { id: '3684', subaccount: { id: '1063375450183829' } }, platform: 'facebook', state: { type: 'published', postUrl: 'https://facebook.com/reel/42/' } },
+            ] } as never);
+
+        const r = await buildAccountResolver(supabase, '2026-08-01T00:00:00Z');
+
+        expect(listPublishedPosts).toHaveBeenCalledTimes(2);
+        expect(listPublishedPosts.mock.calls[1][1]).toBe('c2');
+        expect(r.keyByPostId.get('1')).toBe('59689');
+        expect(r.keyByPostId.get('2')).toBe('3684/1063375450183829');
+        expect(r.handles.get('59689')).toBe('@sentinelaerialinspector');
+    });
+
+    it('buildAccountResolver returns an empty resolver when Blotato fails', async () => {
+        const supabase = { from: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) } as never;
+        listPublishedPosts.mockRejectedValueOnce(new Error('boom'));
+        const r = await buildAccountResolver(supabase, '2026-08-01T00:00:00Z');
+        expect(r.keyByPostId.size).toBe(0);
+    });
+
+    it('snapshotUnmatchedAccounts stores Instagram and Facebook rows under their account handle', async () => {
+        const inserts: Array<Record<string, unknown>> = [];
+        const supabase = {
+            from: () => ({ insert: (row: Record<string, unknown>) => { inserts.push(row); return Promise.resolve({ error: null }); } }),
+        } as never;
+        const e = (url: string, platform: string, id: string) =>
+            [normalizeUrl(url), { metrics: { viewsCount: '5' }, platform, id, url, postedAt: null }] as const;
+        const index = new Map([
+            e('https://www.instagram.com/reel/A/', 'instagram', '1'),
+            e('https://facebook.com/reel/B/', 'facebook', '2'),
+            e('https://facebook.com/reel/C/', 'facebook', '3'),
+            e('https://www.instagram.com/reel/D/', 'instagram', '4'), // not in /v2/posts
+        ]) as never;
+        const keyByPostId = new Map([
+            ['1', '59689'],
+            ['2', '3684/1063375450183829'],
+            ['3', '3684/899526466587385'],
+        ]);
+
+        await snapshotUnmatchedAccounts(supabase, index, new Set(), { keyByPostId, handles });
+
+        expect(inserts.map((r) => [r.blotato_post_id, r.handle])).toEqual([
+            ['1', '@sentinelaerialinspector'],
+            ['2', 'The North East Corner (facebook)'],
+            ['3', 'Sentinel Aerial Inspections (facebook)'],
+            ['4', null],
         ]);
     });
 });

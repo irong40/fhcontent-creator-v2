@@ -89,7 +89,9 @@ const DEFAULT_PER_CHANNEL = 50;
 const DEFAULT_DETAIL = 15;
 const PIECE_PAGE_SIZE = 1000;
 const MAX_PIECE_PAGES = 20;
-const ENGAGEMENT_SCAN_LIMIT = 5000;
+/** performance_metrics scans page at the PostgREST row cap (1000 per call). */
+const METRICS_PAGE_SIZE = 1000;
+const MAX_METRICS_PAGES = 50;
 const RESOLVE_ATTEMPTS = 3;
 /** yt-dlp child-process kill timers — execFileSync without a timeout waits
  *  FOREVER, so one hung yt-dlp (throttled response that trickles bytes) would
@@ -215,6 +217,8 @@ export function toMetricRow(input: {
     views: number | null | undefined;
     likes: number | null | undefined;
     comments: number | null | undefined;
+    /** From Blotato /v2/analytics; yt-dlp has no share count. */
+    shares?: number | null;
 }): MetricRow {
     return {
         content_piece_id: input.pieceId,
@@ -224,15 +228,19 @@ export function toMetricRow(input: {
         views: nMetric(input.views),
         likes: nMetric(input.likes),
         comments: nMetric(input.comments),
-        // YouTube exposes neither share nor save counts publicly — always 0.
-        shares: 0,
+        // yt-dlp has no shares; Blotato's YouTube analytics does. Saves do
+        // not exist on YouTube — always 0.
+        shares: nMetric(input.shares),
         saves: 0,
     };
 }
 
 export interface PriorEngagement {
-    likes: number;
-    comments: number;
+    /** Absent when the only prior rows with engagement had shares alone. */
+    likes?: number;
+    comments?: number;
+    /** Latest prior shares > 0; absent when no snapshot ever had shares. */
+    shares?: number;
 }
 
 /** Fill likes/comments the flat tabs don't provide (null/undefined = NOT
@@ -253,6 +261,121 @@ export function carryForwardEngagement(
         comments: fresh.comments ?? prior.comments,
         carried,
     };
+}
+
+/** null = Blotato's item did not carry the field. Never 0 for absent: a
+ *  0 here would be written and would skip carry-forward. */
+export interface BlotatoYouTubeEngagement {
+    likes: number | null;
+    comments: number | null;
+    shares: number | null;
+}
+
+/** A Blotato metric that is present and numeric, else null (unlike nMetric,
+ *  which turns an absent field into 0). */
+function presentMetric(v: unknown): number | null {
+    const x = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+    return typeof x === 'number' && Number.isFinite(x) ? x : null;
+}
+
+/** Larger of two values, ignoring absent ones; null when both are absent. */
+function maxPresent(a: number | null | undefined, b: number | null | undefined): number | null {
+    if (a == null) return b ?? null;
+    if (b == null) return a;
+    return Math.max(a, b);
+}
+
+/** Index Blotato GET /v2/analytics items by YouTube video id. Blotato reads
+ *  the channel through its own YouTube connection, so it carries likes,
+ *  comments and shares for videos beyond the yt-dlp --detail budget (and
+ *  shares, which yt-dlp never has). Items from several sort keys overlap, so
+ *  keep the largest value per field. A field Blotato did not send stays null. */
+export function blotatoYouTubeEngagement(
+    items: Array<{ platform: string; postUrl: string | null; latestMetrics: { metrics: Record<string, unknown> | null } | null }>,
+): Map<string, BlotatoYouTubeEngagement> {
+    const out = new Map<string, BlotatoYouTubeEngagement>();
+    for (const it of items) {
+        if (it.platform !== 'youtube') continue;
+        const id = extractVideoId(it.postUrl);
+        const m = it.latestMetrics?.metrics;
+        if (!id || !m) continue;
+        const next = {
+            likes: presentMetric(m.likesCount),
+            comments: presentMetric(m.commentsCount),
+            shares: presentMetric(m.sharesCount),
+        };
+        const prev = out.get(id);
+        out.set(id, prev ? {
+            likes: maxPresent(prev.likes, next.likes),
+            comments: maxPresent(prev.comments, next.comments),
+            shares: maxPresent(prev.shares, next.shares),
+        } : next);
+    }
+    return out;
+}
+
+/** Fill what yt-dlp did not fetch (null/undefined) from Blotato and the
+ *  latest prior real snapshot. Blotato counts are stored snapshots of unknown
+ *  age (fetchedAt is not read), so where both exist the larger wins: a stale
+ *  Blotato count must never undercut the prior baseline. A field neither
+ *  source has stays null and carryForwardEngagement's rules apply. Shares
+ *  come only from Blotato and prior rows, so a video that drops out of
+ *  Blotato's top-100 lists or its 30-day window keeps its prior shares
+ *  instead of falling to 0. Fetched yt-dlp values (a real 0 too) always win. */
+export function fillEngagement(
+    fresh: { likes: number | null | undefined; comments: number | null | undefined },
+    bl: BlotatoYouTubeEngagement | undefined,
+    prior: PriorEngagement | undefined,
+): { likes: number | null; comments: number | null; shares: number | null; carried: boolean } {
+    let carried = false;
+    const fill = (v: number | null | undefined, b: number | null | undefined, p: number | undefined): number | null => {
+        if (v != null) return v;
+        const out = maxPresent(b, p);
+        if (p != null && out === p && (b == null || p > b)) carried = true;
+        return out;
+    };
+    const likes = fill(fresh.likes, bl?.likes, prior?.likes);
+    const comments = fill(fresh.comments, bl?.comments, prior?.comments);
+    const shares = fill(null, bl?.shares, prior?.shares);
+    return { likes, comments, shares, carried };
+}
+
+/** Per-video carry-forward baseline from performance_metrics rows ordered
+ *  newest first. Each field comes from its own latest row with that field
+ *  > 0: a newer {likes 50, comments 0} must not hide an older {comments 12},
+ *  or the next views-only snapshot would write comments 0. */
+export function priorEngagementFromRows(
+    rows: ReadonlyArray<{ blotato_post_id: string; likes: number | null; comments: number | null; shares: number | null }>,
+): Map<string, PriorEngagement> {
+    const out = new Map<string, PriorEngagement>();
+    for (const r of rows) {
+        const prior = out.get(r.blotato_post_id) ?? {};
+        for (const field of ['likes', 'comments', 'shares'] as const) {
+            if (prior[field] === undefined && nMetric(r[field]) > 0) prior[field] = nMetric(r[field]);
+        }
+        if (Object.keys(prior).length > 0) out.set(r.blotato_post_id, prior);
+    }
+    return out;
+}
+
+/** Read every row of a query, page by page. PostgREST caps one response at
+ *  1000 rows whatever .limit() asks for, so a single call silently drops the
+ *  rest. Stops on a short page; `capped` = maxPages full pages were read. */
+export async function fetchAllPages<T>(
+    fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+    pageSize: number,
+    maxPages: number,
+): Promise<{ rows: T[]; error: string | null; capped: boolean }> {
+    const rows: T[] = [];
+    for (let page = 0; page < maxPages; page++) {
+        const from = page * pageSize;
+        const { data, error } = await fetchPage(from, from + pageSize - 1);
+        if (error) return { rows, error: `page ${page}: ${error.message}`, capped: false };
+        const batch = data ?? [];
+        rows.push(...batch);
+        if (batch.length < pageSize) return { rows, error: null, capped: false };
+    }
+    return { rows, error: null, capped: true };
 }
 
 /** analytics-pull skips zero-signal rows (matchedNoSignal); mirror it. */
@@ -595,57 +718,87 @@ async function main() {
     }
 
     // 4. Same-day dedupe sets from today's stored snapshots (both collectors).
-    const { data: todayRows, error: todayErr } = await sb
-        .from('performance_metrics')
-        .select('content_piece_id, blotato_post_id, handle')
-        .eq('platform', 'youtube')
-        .gte('captured_at', todayUtcStartIso());
-    if (todayErr) {
-        console.error(`[ERR] today's performance_metrics query failed: ${todayErr.message} — refusing to write without dedupe data`);
+    const today = await fetchAllPages<{ content_piece_id: string | null; blotato_post_id: string | null; handle: string | null }>(
+        (from, to) => sb
+            .from('performance_metrics')
+            .select('content_piece_id, blotato_post_id, handle')
+            .eq('platform', 'youtube')
+            .gte('captured_at', todayUtcStartIso())
+            .order('id', { ascending: true })
+            .range(from, to),
+        METRICS_PAGE_SIZE, MAX_METRICS_PAGES,
+    );
+    if (today.error || today.capped) {
+        console.error(`[ERR] today's performance_metrics query failed: ${today.error ?? `hit the ${MAX_METRICS_PAGES * METRICS_PAGE_SIZE}-row cap`} — refusing to write without dedupe data`);
         process.exit(1);
     }
+    const todayRows = today.rows;
     const piecesToday = new Set<string>();
     const videoKeysToday = new Set<string>();
-    for (const r of (todayRows ?? []) as Array<{ content_piece_id: string | null; blotato_post_id: string | null; handle: string | null }>) {
+    for (const r of todayRows) {
         if (r.content_piece_id) piecesToday.add(r.content_piece_id);
         if (r.handle && r.blotato_post_id) videoKeysToday.add(videoDupKey(r.handle, r.blotato_post_id));
     }
-    console.log(`[ok] ${(todayRows ?? []).length} youtube snapshot(s) already captured today (dedupe baseline)\n`);
+    console.log(`[ok] ${todayRows.length} youtube snapshot(s) already captured today (dedupe baseline)\n`);
 
     // Historic piece-less rows, for re-attribution when a video now matches.
-    const { data: orphanRows } = await sb
-        .from('performance_metrics')
-        .select('blotato_post_id')
-        .eq('platform', 'youtube')
-        .is('content_piece_id', null)
-        .not('blotato_post_id', 'is', null);
-    const orphanVideoIds = new Set(
-        ((orphanRows ?? []) as Array<{ blotato_post_id: string }>).map((r) => r.blotato_post_id),
+    // Optional, as before: a failed read only skips healing.
+    const orphans = await fetchAllPages<{ blotato_post_id: string }>(
+        (from, to) => sb
+            .from('performance_metrics')
+            .select('blotato_post_id')
+            .eq('platform', 'youtube')
+            .is('content_piece_id', null)
+            .not('blotato_post_id', 'is', null)
+            .order('id', { ascending: true })
+            .range(from, to),
+        METRICS_PAGE_SIZE, MAX_METRICS_PAGES,
     );
+    if (orphans.error) console.warn(`[WARN] piece-less row scan failed, healing only what was read: ${orphans.error}`);
+    if (orphans.capped) console.warn(`[WARN] piece-less row scan hit the ${MAX_METRICS_PAGES * METRICS_PAGE_SIZE}-row cap — older orphans are not healed this run`);
+    const orphanVideoIds = new Set(orphans.rows.map((r) => r.blotato_post_id));
 
     // Latest known REAL engagement per video id — the carry-forward source for
-    // Shorts beyond the --detail budget (see carryForwardEngagement). Newest
-    // first + first-wins = latest positive engagement; zeroed views-only rows
-    // are excluded by the or-filter so they can never poison the baseline.
-    const { data: engData, error: engErr } = await sb
-        .from('performance_metrics')
-        .select('blotato_post_id, likes, comments')
-        .eq('platform', 'youtube')
-        .not('blotato_post_id', 'is', null)
-        .or('likes.gt.0,comments.gt.0')
-        .order('captured_at', { ascending: false })
-        .limit(ENGAGEMENT_SCAN_LIMIT);
-    if (engErr) {
-        console.error(`[ERR] prior-engagement query failed: ${engErr.message} — refusing to write snapshots that could zero-overwrite engagement`);
+    // Shorts beyond the --detail budget (see fillEngagement). Newest first,
+    // each field from its own latest row > 0 (priorEngagementFromRows); zeroed
+    // views-only rows are excluded by the or-filter so they can never poison
+    // the baseline. Paged: one PostgREST call returns at most 1000 rows, and a
+    // video past that window would get no baseline and be zero-overwritten.
+    const eng = await fetchAllPages<{ blotato_post_id: string; likes: number | null; comments: number | null; shares: number | null }>(
+        (from, to) => sb
+            .from('performance_metrics')
+            .select('blotato_post_id, likes, comments, shares')
+            .eq('platform', 'youtube')
+            .not('blotato_post_id', 'is', null)
+            .or('likes.gt.0,comments.gt.0,shares.gt.0')
+            .order('captured_at', { ascending: false })
+            .order('id', { ascending: true }) // stable page order on captured_at ties
+            .range(from, to),
+        METRICS_PAGE_SIZE, MAX_METRICS_PAGES,
+    );
+    if (eng.error || eng.capped) {
+        console.error(`[ERR] prior-engagement query failed: ${eng.error ?? `hit the ${MAX_METRICS_PAGES * METRICS_PAGE_SIZE}-row cap`} — refusing to write snapshots that could zero-overwrite engagement`);
         process.exit(1);
     }
-    const priorEngagement = new Map<string, PriorEngagement>();
-    for (const r of (engData ?? []) as Array<{ blotato_post_id: string; likes: number | null; comments: number | null }>) {
-        if (!priorEngagement.has(r.blotato_post_id)) {
-            priorEngagement.set(r.blotato_post_id, { likes: nMetric(r.likes), comments: nMetric(r.comments) });
-        }
-    }
+    const priorEngagement = priorEngagementFromRows(eng.rows);
     console.log(`[ok] ${priorEngagement.size} video(s) with prior engagement (carry-forward baseline)`);
+
+    // Blotato's YouTube engagement, the source for shares and for likes and
+    // comments on videos past the --detail budget. Read-only and optional: if
+    // Blotato fails, the run continues on yt-dlp and carry-forward alone.
+    let blotatoEngagement = new Map<string, BlotatoYouTubeEngagement>();
+    try {
+        const { blotato } = await import('../lib/blotato');
+        const items = [];
+        for (const sortBy of ['views_count', 'likes_count', 'comments_count'] as const) {
+            const res = await blotato.listTopPosts({ sortBy, limit: 100 });
+            items.push(...(res.items ?? []));
+        }
+        blotatoEngagement = blotatoYouTubeEngagement(items);
+        console.log(`[ok] ${blotatoEngagement.size} video(s) with Blotato engagement`);
+    } catch (err) {
+        console.warn(`[WARN] Blotato analytics read failed, continuing without it: ${(err as Error).message}`);
+    }
 
     // 5. Per channel: enumerate, detail-fetch, map, dedupe, write.
     const summaries: ChannelSummary[] = [];
@@ -711,14 +864,12 @@ async function main() {
             // a detail fetch) inherit the latest prior REAL engagement — a
             // views-only snapshot must never zero-overwrite engagement in the
             // latest-snapshot-wins winners RPCs.
-            if (likes == null || comments == null) {
-                const cf = carryForwardEngagement({ likes, comments }, priorEngagement.get(entry.id));
-                if (cf.carried) {
-                    likes = cf.likes;
-                    comments = cf.comments;
-                    s.carried++;
-                }
-            }
+            // Blotato fills only fields it actually sent, and never below the
+            // prior baseline; shares carry forward the same way.
+            const filled = fillEngagement({ likes, comments }, blotatoEngagement.get(entry.id), priorEngagement.get(entry.id));
+            likes = filled.likes;
+            comments = filled.comments;
+            if (filled.carried) s.carried++;
 
             const pieceId = videoToPiece.get(entry.id) ?? null;
             if (pieceId) s.matched++;
@@ -727,6 +878,7 @@ async function main() {
                 handle: account.handle,
                 pieceId,
                 views, likes, comments,
+                shares: filled.shares,
             });
 
             // Re-attribution: this video has historic piece-less snapshots and

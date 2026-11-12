@@ -12,6 +12,10 @@ import {
     todayUtcStartIso,
     nMetric,
     carryForwardEngagement,
+    blotatoYouTubeEngagement,
+    fillEngagement,
+    priorEngagementFromRows,
+    fetchAllPages,
 } from './pull-youtube-metrics';
 
 describe('parseCliArgs', () => {
@@ -205,5 +209,153 @@ describe('todayUtcStartIso', () => {
     it('returns midnight UTC of the given instant', () => {
         expect(todayUtcStartIso(new Date('2026-07-24T20:30:15.123Z'))).toBe('2026-07-24T00:00:00.000Z');
         expect(todayUtcStartIso(new Date('2026-07-24T00:00:00.000Z'))).toBe('2026-07-24T00:00:00.000Z');
+    });
+});
+
+describe('blotatoYouTubeEngagement', () => {
+    const item = (platform: string, postUrl: string | null, metrics: Record<string, unknown> | null) =>
+        ({ platform, postUrl, latestMetrics: metrics ? { metrics } : null });
+
+    it('indexes YouTube items by video id with likes, comments and shares', () => {
+        const m = blotatoYouTubeEngagement([
+            item('youtube', 'https://www.youtube.com/shorts/abcDEF12345', { likesCount: 7, commentsCount: 2, sharesCount: 3, viewsCount: 900 }),
+            item('instagram', 'https://www.instagram.com/p/xyz/', { likesCount: 50 }),
+            item('youtube', null, { likesCount: 1 }),
+            item('youtube', 'https://youtu.be/zzzzzz99999', null),
+        ]);
+        expect([...m.keys()]).toEqual(['abcDEF12345']);
+        expect(m.get('abcDEF12345')).toEqual({ likes: 7, comments: 2, shares: 3 });
+    });
+
+    it('keeps the largest value per field when sort keys return the same video', () => {
+        const m = blotatoYouTubeEngagement([
+            item('youtube', 'https://www.youtube.com/watch?v=abcDEF12345', { likesCount: 7, commentsCount: 0, sharesCount: '4' }),
+            item('youtube', 'https://youtu.be/abcDEF12345', { likesCount: 5, commentsCount: 1, sharesCount: 'junk' }),
+        ]);
+        expect(m.get('abcDEF12345')).toEqual({ likes: 7, comments: 1, shares: 4 });
+    });
+
+    it('keeps null for fields Blotato did not send, never 0', () => {
+        const m = blotatoYouTubeEngagement([
+            item('youtube', 'https://www.youtube.com/shorts/abcDEF12345', { viewsCount: 900 }),
+        ]);
+        expect(m.get('abcDEF12345')).toEqual({ likes: null, comments: null, shares: null });
+    });
+});
+
+describe('fillEngagement', () => {
+    const blFor = (metrics: Record<string, unknown>) => blotatoYouTubeEngagement([
+        { platform: 'youtube', postUrl: 'https://youtu.be/abcDEF12345', latestMetrics: { metrics } },
+    ]).get('abcDEF12345');
+    const base = { videoId: 'abcDEF12345', handle: 'Faith Harmony (SAI)', pieceId: null, views: 10 };
+
+    it('carries prior likes and comments when Blotato sent views only', () => {
+        const f = fillEngagement({ likes: null, comments: null }, blFor({ viewsCount: '900' }), { likes: 40, comments: 12 });
+        expect(f).toMatchObject({ likes: 40, comments: 12, carried: true });
+        expect(toMetricRow({ ...base, ...f })).toMatchObject({ likes: 40, comments: 12 });
+    });
+
+    it('carries prior shares when Blotato no longer returns the video', () => {
+        const f = fillEngagement({ likes: 5, comments: 1 }, undefined, { likes: 4, comments: 1, shares: 9 });
+        expect(f.shares).toBe(9);
+        expect(toMetricRow({ ...base, ...f }).shares).toBe(9);
+    });
+
+    it('never lets a stale Blotato count undercut the prior baseline', () => {
+        const f = fillEngagement({ likes: null, comments: null }, blFor({ likesCount: 30, commentsCount: 20, sharesCount: 2 }), { likes: 40, comments: 12, shares: 5 });
+        expect(f).toMatchObject({ likes: 40, comments: 20, shares: 5, carried: true });
+    });
+
+    it('fills from Blotato when it is ahead of the prior baseline', () => {
+        const f = fillEngagement({ likes: null, comments: null }, blFor({ likesCount: 50, commentsCount: 13, sharesCount: 6 }), { likes: 40, comments: 12, shares: 5 });
+        expect(f).toEqual({ likes: 50, comments: 13, shares: 6, carried: false });
+    });
+
+    it('keeps fetched yt-dlp values, a real 0 included', () => {
+        const f = fillEngagement({ likes: 0, comments: 3 }, blFor({ likesCount: 50, commentsCount: 13 }), { likes: 40, comments: 12 });
+        expect(f).toMatchObject({ likes: 0, comments: 3 });
+    });
+
+    it('leaves null when neither source has a value', () => {
+        expect(fillEngagement({ likes: null, comments: null }, undefined, undefined))
+            .toEqual({ likes: null, comments: null, shares: null, carried: false });
+        expect(toMetricRow(base).saves).toBe(0);
+    });
+});
+
+describe('priorEngagementFromRows', () => {
+    const row = (likes: number | null, comments: number | null, shares: number | null, id = 'vid1') =>
+        ({ blotato_post_id: id, likes, comments, shares });
+
+    it('takes each field from its own latest row > 0 (newer {50,0} does not hide older comments 12)', () => {
+        const m = priorEngagementFromRows([row(50, 0, null), row(40, 12, null)]);
+        expect(m.get('vid1')).toEqual({ likes: 50, comments: 12 });
+    });
+
+    it('takes shares from its own latest row, apart from likes/comments', () => {
+        const m = priorEngagementFromRows([row(9, 2, 0), row(5, 1, 3), row(4, 0, 7)]);
+        expect(m.get('vid1')).toEqual({ likes: 9, comments: 2, shares: 3 });
+    });
+
+    it('leaves a field absent when no row has it > 0, and keeps videos apart', () => {
+        const m = priorEngagementFromRows([row(0, 0, 4, 'a'), row(6, null, null, 'b')]);
+        expect(m.get('a')).toEqual({ shares: 4 });
+        expect(m.get('b')).toEqual({ likes: 6 });
+    });
+
+    it('skips a video whose rows carry no engagement at all', () => {
+        expect(priorEngagementFromRows([row(0, null, 0)]).has('vid1')).toBe(false);
+    });
+});
+
+describe('fetchAllPages', () => {
+    // Fake PostgREST: never returns more than 1000 rows per call, whatever is asked.
+    const API_CAP = 1000;
+    const fakeTable = (n: number) => Array.from({ length: n }, (_, i) => ({ i }));
+    const fakeClient = (table: Array<{ i: number }>, calls: Array<[number, number]>) =>
+        async (from: number, to: number) => {
+            calls.push([from, to]);
+            return { data: table.slice(from, Math.min(to + 1, from + API_CAP)), error: null };
+        };
+
+    it('reads past the 1000-row API cap until a short page', async () => {
+        const calls: Array<[number, number]> = [];
+        const res = await fetchAllPages(fakeClient(fakeTable(2285), calls), 1000, 50);
+        expect(res.rows).toHaveLength(2285);
+        expect(res.rows[2284]).toEqual({ i: 2284 });
+        expect(res.error).toBeNull();
+        expect(res.capped).toBe(false);
+        expect(calls).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+    });
+
+    it('a baseline row past row 1000 still reaches priorEngagementFromRows', async () => {
+        const rows = Array.from({ length: 1500 }, (_, i) => ({
+            blotato_post_id: `v${i}`, likes: 1, comments: 0, shares: null as number | null,
+        }));
+        const res = await fetchAllPages(async (from, to) => ({ data: rows.slice(from, Math.min(to + 1, from + API_CAP)), error: null }), 1000, 50);
+        expect(priorEngagementFromRows(res.rows).get('v1499')).toEqual({ likes: 1 });
+    });
+
+    it('reads one extra call when the total is an exact multiple of the page size', async () => {
+        const calls: Array<[number, number]> = [];
+        const res = await fetchAllPages(fakeClient(fakeTable(2000), calls), 1000, 50);
+        expect(res.rows).toHaveLength(2000);
+        expect(calls).toHaveLength(3);
+        expect(res.capped).toBe(false);
+    });
+
+    it('reports capped when maxPages full pages were read', async () => {
+        const res = await fetchAllPages(fakeClient(fakeTable(5000), []), 1000, 2);
+        expect(res.rows).toHaveLength(2000);
+        expect(res.capped).toBe(true);
+    });
+
+    it('returns the error with the page it failed on', async () => {
+        let n = 0;
+        const res = await fetchAllPages(async () => (n++ === 0
+            ? { data: fakeTable(1000), error: null }
+            : { data: null, error: { message: 'boom' } }), 1000, 50);
+        expect(res.error).toBe('page 1: boom');
+        expect(res.rows).toHaveLength(1000);
     });
 });

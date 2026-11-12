@@ -43,6 +43,8 @@ const ANALYTICS_SORT_KEYS: BlotatoAnalyticsSortBy[] = [
     'reach_count',
 ];
 const ANALYTICS_PAGE_LIMIT = 100;
+/** Bound on GET /v2/posts pages (250 each) walked per run to attribute accounts. */
+const MAX_POST_PAGES = 8;
 
 function sleep(ms: number) {
     return new Promise((r) => setTimeout(r, ms));
@@ -73,6 +75,27 @@ export function youtubeVideoKey(host: string, u: URL): string | null {
     return m ? m[1] : null;
 }
 
+const FB_HOSTS = new Set(['facebook.com', 'm.facebook.com', 'web.facebook.com']);
+/** Query params that carry a Facebook post's identity, in key order. Checked
+ *  on EVERY Facebook path, not a path list: a list missed /photo/?fbid= and
+ *  /video.php?v=, and two such posts took each other's id and metrics.
+ *  Tracking params (ref, __cft__, __tn__, mibextid, s) are not in it. */
+const FB_IDENTITY_PARAMS = ['story_fbid', 'fbid', 'v', 'id'];
+
+/** Facebook, like YouTube, keeps some post identities in the QUERY STRING
+ *  (permalink.php?story_fbid=..&id=.., photo/?fbid=.., video.php?v=..).
+ *  Dropping it collapsed every such post onto one key, so the last page's
+ *  handle and metrics won. Keep only the identifying params, in a fixed
+ *  order. Empty for non-Facebook hosts and for URLs without them. */
+function facebookIdentityQuery(host: string, u: URL): string {
+    if (!FB_HOSTS.has(host)) return '';
+    const parts = FB_IDENTITY_PARAMS
+        .map((n) => [n, u.searchParams.get(n)] as const)
+        .filter(([, v]) => v)
+        .map(([n, v]) => `${n}=${v}`);
+    return parts.length ? `?${parts.join('&')}` : '';
+}
+
 /** Canonicalise a post URL so the two id spaces join reliably: drop protocol,
  *  a leading www., any query/hash, and a trailing slash; lowercase the host.
  *  YouTube is special-cased to its video id (see youtubeVideoKey) because its
@@ -85,7 +108,8 @@ export function normalizeUrl(raw: string | null | undefined): string {
         const ytId = youtubeVideoKey(host, u);
         if (ytId) return `youtube.com/video/${ytId}`;
         const path = u.pathname.replace(/\/+$/, '');
-        return `${host}${path}`;
+        const fbQuery = facebookIdentityQuery(host, u);
+        return `${host}${path}${fbQuery}`;
     } catch {
         return raw
             .replace(/^https?:\/\//, '')
@@ -288,15 +312,23 @@ export async function snapshotMatchedMetrics(
     supabase: AdminClient,
     pieces: PieceRow[],
     index: Map<string, AnalyticsIndexEntry>,
+    accounts?: AccountResolver,
 ): Promise<SnapshotResult> {
     const out: SnapshotResult = { snapshots: 0, matchedNoSignal: 0, unmatched: 0, insertErrors: 0, youtubeSkipped: 0, matchedUrls: new Set() };
+    // The tie is by URL only. published_platforms.post_id is the submission
+    // UUID, and no Blotato response maps it to the numeric analytics id:
+    // GET /v2/posts/{uuid} returns postSubmissionId, status and publicUrl, and
+    // /v2/posts items carry no submission id (checked live 2026-11-06). An
+    // entry whose URL is not resolved yet is picked up by resolvePostUrls on a
+    // later run.
 
     for (const piece of pieces) {
         const platforms = piece.published_platforms;
         if (!platforms) continue;
 
         for (const [platform, entry] of Object.entries(platforms) as Array<[string, PlatformStatus | undefined]>) {
-            if (!entry || entry.status !== 'published' || !entry.post_url) continue;
+            if (!entry || entry.status !== 'published') continue;
+            if (!entry.post_url) continue;
             if (BLOTATO_EXCLUDED_PLATFORMS.has(platform)) { out.youtubeSkipped++; continue; }
             const key = normalizeUrl(entry.post_url);
             const hit = index.get(key);
@@ -308,10 +340,13 @@ export async function snapshotMatchedMetrics(
             out.matchedUrls.add(key);
             const mapped = mapMetrics(hit.metrics);
             if (!hasSignal(mapped)) out.matchedNoSignal++;
+            const handle = handleFromUrl(hit.url)
+                ?? (accounts ? resolveHandle(accounts.keyByPostId.get(hit.id) ?? null, accounts.handles) : null);
 
             const { error: insertError } = await supabase.from('performance_metrics').insert({
                 content_piece_id: piece.id,
                 platform,
+                handle,
                 blotato_post_id: hit.id,
                 published_at: hit.postedAt,
                 ...mapped,
@@ -328,15 +363,85 @@ export async function snapshotMatchedMetrics(
     return out;
 }
 
+/** Registry key for a Blotato account. A Facebook connection carries several
+ *  pages, so a page-level post is keyed `<account>/<page id>` and the page id
+ *  decides the handle; everything else is keyed by the bare account id. */
+export function accountKey(account: { id: string; subaccount?: { id: string } | null } | null | undefined): string | null {
+    if (!account?.id) return null;
+    return account.subaccount?.id ? `${account.id}/${account.subaccount.id}` : account.id;
+}
+
+/** Resolve a post to its registered handle by its exact key. A page-level key
+ *  (`<account>/<page id>`) does NOT fall back to the bare account row: that
+ *  row names the person who connected the account ("Adam Pierce (pages)"), so
+ *  a page missing from blotato_accounts would be filed under the wrong name.
+ *  It stays null until the page is registered (decided 2026-11-06, qcheck r1).
+ *  Null when the key is not in blotato_accounts. */
+export function resolveHandle(
+    keyOf: string | null,
+    handles: Map<string, string>,
+): string | null {
+    if (!keyOf) return null;
+    return handles.get(keyOf) ?? null;
+}
+
+export interface AccountResolver {
+    /** Blotato published-post id (GET /v2/posts item id, the same id as the
+     *  analytics item id) → account key. Keyed by id, not URL, so two posts
+     *  can never share an entry. */
+    keyByPostId: Map<string, string>;
+    /** account key → handle, from blotato_accounts */
+    handles: Map<string, string>;
+}
+
+/** Analytics items carry no account, so Instagram and Facebook posts (whose
+ *  URLs carry no handle) are attributed by joining on the published-post id to
+ *  GET /v2/posts, which does. Bounded to one page walk per run; a failure
+ *  leaves the resolver empty and the rows null-handled, as before. */
+export async function buildAccountResolver(
+    supabase: AdminClient,
+    sinceIso: string,
+): Promise<AccountResolver> {
+    const keyByPostId = new Map<string, string>();
+    const handles = new Map<string, string>();
+    try {
+        // blotato_accounts is not in the generated Database types, so go through
+        // a minimal structural type rather than the typed client.
+        const registry = supabase as unknown as {
+            from: (t: string) => { select: (c: string) => PromiseLike<{ data: Array<{ account_id: string; handle: string }> | null }> };
+        };
+        const { data } = await registry.from('blotato_accounts').select('account_id, handle');
+        for (const r of data ?? []) {
+            if (r.account_id && r.handle) handles.set(r.account_id, r.handle);
+        }
+        let cursor: string | undefined;
+        for (let page = 0; page < MAX_POST_PAGES; page++) {
+            const res = await blotato.listPublishedPosts(sinceIso, cursor);
+            for (const item of res.items ?? []) {
+                const key = accountKey(item.account);
+                if (key && item.id) keyByPostId.set(String(item.id), key);
+            }
+            cursor = res.cursor;
+            if (!cursor) break;
+            await sleep(150);
+        }
+    } catch (e) {
+        console.error('[analytics-pull] buildAccountResolver failed:', (e as Error).message);
+    }
+    return { keyByPostId, handles };
+}
+
 /** Step 4: snapshot analytics items that matched no content_piece — the
  *  separate-pipeline accounts (e.g. Sentinel's Part 107 TikTok, NorthEast Corner
  *  Instagram/Facebook). Attributed by the @handle in the URL when it has one;
- *  Instagram/Facebook URLs carry none, so they are stored with a null handle and
- *  identified by blotato_post_id. YouTube stays with the yt-dlp collector. */
+ *  Instagram/Facebook URLs carry none, so they are attributed through the
+ *  Blotato account (see buildAccountResolver) and fall back to a null handle,
+ *  identified by blotato_post_id, only when the account is not registered. YouTube stays with the yt-dlp collector. */
 export async function snapshotUnmatchedAccounts(
     supabase: AdminClient,
     index: Map<string, AnalyticsIndexEntry>,
     matchedUrls: Set<string>,
+    accounts?: AccountResolver,
 ): Promise<{ capturedAccounts: number; insertErrors: number }> {
     let capturedAccounts = 0;
     let insertErrors = 0;
@@ -344,7 +449,8 @@ export async function snapshotUnmatchedAccounts(
     for (const [key, hit] of index) {
         if (matchedUrls.has(key)) continue;
         if (BLOTATO_EXCLUDED_PLATFORMS.has(hit.platform)) continue;
-        const handle = handleFromUrl(hit.url);
+        const handle = handleFromUrl(hit.url)
+            ?? (accounts ? resolveHandle(accounts.keyByPostId.get(hit.id) ?? null, accounts.handles) : null);
         const mapped = mapMetrics(hit.metrics);
 
         const { error } = await supabase.from('performance_metrics').insert({
@@ -398,8 +504,9 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
     const rows = pieces as PieceRow[];
     const resolved = await resolvePostUrls(supabase, rows);
     const index = await buildAnalyticsIndex(sinceIso);
-    const snap = await snapshotMatchedMetrics(supabase, rows, index);
-    const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls);
+    const accounts = await buildAccountResolver(supabase, sinceIso);
+    const snap = await snapshotMatchedMetrics(supabase, rows, index, accounts);
+    const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls, accounts);
 
     // Attribute the just-inserted content_piece snapshots to their account
     // (via persona → platform_accounts → blotato_accounts). Non-fatal.
