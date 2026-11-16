@@ -12,6 +12,11 @@ describe('unsupportedSpecifics', () => {
     it('flags a year or number no passage holds', () => {
         expect(unsupportedSpecifics(lafayette, bad)).toEqual(['short_1 script states "1781", which no source passage holds']);
     });
+    it('accepts a year held in the year field of a point', () => {
+        const pts = [{ claim: 'There is no deficit in human resources.', quote: 'There is no deficit in human resources.', year: '1967' }];
+        expect(unsupportedSpecifics(pts, [{ pieceType: 'short_1', script: 'In 1967 he said so.' }])).toEqual([]);
+        expect(unsupportedSpecifics(pts, [{ pieceType: 'short_1', script: 'In 1968 he said so.' }])).toHaveLength(1);
+    });
     it('reads carousel slides', () => {
         expect(unsupportedSpecifics(lafayette, [{ pieceType: 'carousel', carouselSlides: [{ text: 'In 1799 he left.' }] }])).toHaveLength(1);
     });

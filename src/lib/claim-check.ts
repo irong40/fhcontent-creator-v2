@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 import { getOrEnqueueLocalInference } from '@/lib/local-inference-queue';
 
-type Point = { claim?: string | null; quote?: string | null };
+type Point = { claim?: string | null; quote?: string | null; year?: string | number | null };
 type Piece = Record<string, unknown>;
 
 const FIELDS = ['script', 'captionLong', 'captionShort', 'title'];
@@ -57,7 +57,10 @@ function textFields(piece: Piece): Array<[string, string]> {
 export function unsupportedSpecifics(points: Point[] | null | undefined, pieces: Piece[]): string[] {
     const sources = sourcesOf(points);
     if (!sources) return [];
-    const held = new Set(sources.join(' ').match(/\d[\d,.]*\d|\d/g) ?? []);
+    // A point's own year field is part of the source record (2026-11-16: five Freedom Voices topics
+    // held at retry 3 because the year sat only there). The judge still checks what the text says about it.
+    const years = (points ?? []).map(p => p?.year).filter((y): y is string | number => y != null).map(String);
+    const held = new Set([...sources, ...years].join(' ').match(/\d[\d,.]*\d|\d/g) ?? []);
     const faults: string[] = [];
     for (const piece of pieces) {
         for (const [field, text] of textFields(piece)) {
