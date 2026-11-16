@@ -17,6 +17,11 @@ describe('unsupportedSpecifics', () => {
         expect(unsupportedSpecifics(pts, [{ pieceType: 'short_1', script: 'In 1967 he said so.' }])).toEqual([]);
         expect(unsupportedSpecifics(pts, [{ pieceType: 'short_1', script: 'In 1968 he said so.' }])).toHaveLength(1);
     });
+    it('accepts a numeric year field', () => {
+        const pts = [{ claim: 'There is no deficit in human resources.', quote: 'There is no deficit in human resources.', year: 1967 }];
+        expect(unsupportedSpecifics(pts, [{ pieceType: 'short_1', script: 'In 1967 and 1968 he said so.' }]))
+            .toEqual(['short_1 script states "1968", which no source passage holds']);
+    });
     it('reads carousel slides', () => {
         expect(unsupportedSpecifics(lafayette, [{ pieceType: 'carousel', carouselSlides: [{ text: 'In 1799 he left.' }] }])).toHaveLength(1);
     });
@@ -32,6 +37,18 @@ describe('claim judge', () => {
         expect(p.user).toContain('[1] James was a double agent who pretended');
         expect(p.user).toContain('(short_1 script) James Lafayette was a double agent for the British');
         expect(p.system).toContain('Never use outside knowledge');
+    });
+    it('dates each passage with its own point\'s year, so the judge sees what the number check holds', () => {
+        const pts = [
+            { claim: 'Hurst shot Herbert Lee.', quote: 'Hurst shot and killed Herbert Lee.', year: 1961 },
+            { claim: 'The grand jury found no basis to indict.', quote: 'a grand jury found no basis to indict Hurst', year: '1962' },
+        ];
+        const { user } = claimJudgePrompt(pts, [{ pieceType: 'short_1', script: 'In 1961 the grand jury found no basis to indict Hurst.' }]);
+        expect(user).toContain('[1] (1961) Hurst shot Herbert Lee.');
+        expect(user).toContain('[2] (1961) Hurst shot and killed Herbert Lee.');
+        expect(user).toContain('[3] (1962) The grand jury found no basis to indict.');
+        expect(user).toContain('[4] (1962) a grand jury found no basis to indict Hurst');
+        expect(claimJudgePrompt(lafayette, bad).user).toContain('[1] James was a double agent');
     });
     it('turns a verdict into faults', () => {
         expect(parseClaimVerdict('```json\n{"unsupported":[{"claim":"double agent for the British","reason":"he only pretended"}]}\n```'))

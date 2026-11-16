@@ -39,10 +39,21 @@ export const CLAIM_JUDGE_TOOL_SCHEMA = {
     required: ['unsupported'],
 } as Record<string, unknown>;
 
+/**
+ * The passages both layers read. A point's year field is part of its source record (2026-11-16:
+ * five Freedom Voices topics held at retry 3 because the year sat only there), so each of the
+ * point's passages carries it as a "(1961) " prefix: the number check holds the year, and the
+ * judge sees which event it dates.
+ */
 function sourcesOf(points: Point[] | null | undefined): string[] | null {
     const list = Array.isArray(points) ? points : [];
     if (!list.some(p => typeof p?.quote === 'string' && p.quote.trim())) return null; // unsourced persona: not checked
-    return list.flatMap(p => [p.claim, p.quote ?? '']).filter((t): t is string => typeof t === 'string' && t.length > 0);
+    return list.flatMap(p => {
+        const year = p?.year == null ? '' : String(p.year).trim();
+        return [p.claim, p.quote ?? '']
+            .filter((t): t is string => typeof t === 'string' && t.length > 0)
+            .map(t => (year ? `(${year}) ${t}` : t));
+    });
 }
 
 function textFields(piece: Piece): Array<[string, string]> {
@@ -57,10 +68,7 @@ function textFields(piece: Piece): Array<[string, string]> {
 export function unsupportedSpecifics(points: Point[] | null | undefined, pieces: Piece[]): string[] {
     const sources = sourcesOf(points);
     if (!sources) return [];
-    // A point's own year field is part of the source record (2026-11-16: five Freedom Voices topics
-    // held at retry 3 because the year sat only there). The judge still checks what the text says about it.
-    const years = (points ?? []).map(p => p?.year).filter((y): y is string | number => y != null).map(String);
-    const held = new Set([...sources, ...years].join(' ').match(/\d[\d,.]*\d|\d/g) ?? []);
+    const held = new Set(sources.join(' ').match(/\d[\d,.]*\d|\d/g) ?? []);
     const faults: string[] = [];
     for (const piece of pieces) {
         for (const [field, text] of textFields(piece)) {
