@@ -73,15 +73,34 @@ export async function logPublishReport(
 }
 
 /**
- * Get today's publish report for COO standup consumption.
+ * The UTC date the daily report covers: the day before `now`.
+ * The cron runs at 10:00 UTC and publish_reports rows land at 11:10 or 17:10 UTC,
+ * so reading the run's own date always found nothing.
  */
-export async function getTodaysPublishReport(supabase: SupabaseClient) {
-    const today = new Date().toISOString().split('T')[0];
+export function reportDateFor(now: Date): string {
+    return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+}
 
+/** Subject for the daily email; names the scope so a zero is not read as "nothing posted anywhere". */
+export function buildReportSubject(
+    dateKey: string,
+    counts: { total: number; published: number; failed: number; reviewNeeded: number },
+): string {
+    const scope = 'fh-content app only, UTC; Part 107, NE Corner and music not counted';
+    const body = counts.total > 0
+        ? `${counts.published} published, ${counts.failed} failed${counts.reviewNeeded > 0 ? `, ${counts.reviewNeeded} need review` : ''}`
+        : 'No content published';
+    return `[COO Report] ${dateKey} — ${body} (${scope})`;
+}
+
+/**
+ * Get the publish report for one UTC date (default: yesterday UTC) for COO standup consumption.
+ */
+export async function getPublishReport(supabase: SupabaseClient, reportDate: string = reportDateFor(new Date())) {
     const { data, error } = await supabase
         .from('publish_reports')
         .select('*, personas(name)')
-        .eq('report_date', today)
+        .eq('report_date', reportDate)
         .order('created_at', { ascending: true });
 
     if (error) {
@@ -93,15 +112,15 @@ export async function getTodaysPublishReport(supabase: SupabaseClient) {
 }
 
 /**
- * Get today's total cost from cost_tracking.
+ * Get one UTC date's total cost from cost_tracking (midnight to next midnight).
  */
-async function getTodaysCost(supabase: SupabaseClient): Promise<number> {
-    const today = new Date().toISOString().split('T')[0];
+async function getDayCost(supabase: SupabaseClient, dateKey: string): Promise<number> {
+    const next = new Date(Date.parse(`${dateKey}T00:00:00Z`) + 24 * 60 * 60 * 1000).toISOString();
     const { data } = await supabase
         .from('cost_tracking')
         .select('cost_usd')
-        .gte('created_at', `${today}T00:00:00Z`)
-        .lt('created_at', `${today}T23:59:59Z`);
+        .gte('created_at', `${dateKey}T00:00:00Z`)
+        .lt('created_at', next);
 
     if (!data) return 0;
     return data.reduce((sum, row) => sum + (row.cost_usd || 0), 0);
@@ -111,7 +130,7 @@ async function getTodaysCost(supabase: SupabaseClient): Promise<number> {
  * Build and send the COO Daily Publish Report email via Resend.
  * Called once per day after the overnight pipeline resolves.
  */
-export async function sendCooPublishReport(supabase: SupabaseClient): Promise<boolean> {
+export async function sendCooPublishReport(supabase: SupabaseClient, now: Date = new Date()): Promise<boolean> {
     const apiKey = process.env.RESEND_API_KEY;
     const to = process.env.NOTIFICATION_EMAIL;
     if (!apiKey || !to) {
@@ -119,10 +138,10 @@ export async function sendCooPublishReport(supabase: SupabaseClient): Promise<bo
         return false;
     }
 
-    const reports = await getTodaysPublishReport(supabase);
-    const todayCost = await getTodaysCost(supabase);
-    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    const dateKey = new Date().toISOString().split('T')[0];
+    const dateKey = reportDateFor(now);
+    const reports = await getPublishReport(supabase, dateKey);
+    const todayCost = await getDayCost(supabase, dateKey);
+    const today = new Date(`${dateKey}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
 
     const published = reports.filter(r => r.platforms_published && r.platforms_published.length > 0);
     const failed = reports.filter(r => r.platforms_failed && r.platforms_failed.length > 0 && (!r.platforms_published || r.platforms_published.length === 0));
@@ -160,7 +179,7 @@ export async function sendCooPublishReport(supabase: SupabaseClient): Promise<bo
 
     const noContentSection = reports.length === 0 ? `
     <div style="background:#fff0ef;border-left:4px solid #c44a1a;padding:12px 16px;margin:16px 0;">
-      <strong style="color:#c44a1a;">No content published today.</strong> Check the pipeline — daily-media or daily-publish may have stalled.
+      <strong style="color:#c44a1a;">No content published on this UTC date.</strong> Check the pipeline — daily-media or daily-publish may have stalled.
     </div>` : '';
 
     const html = `
@@ -184,7 +203,7 @@ export async function sendCooPublishReport(supabase: SupabaseClient): Promise<bo
 
   <!-- META -->
   <div style="display:flex;justify-content:space-between;margin-bottom:16px;font-size:9.5pt;color:#64607a;">
-    <div><strong>Document:</strong> COO Daily Publish Report<br><strong>Date:</strong> ${today}<br><strong>Prepared by:</strong> Content Command Center</div>
+    <div><strong>Document:</strong> COO Daily Publish Report<br><strong>Date:</strong> ${today}<br><strong>Prepared by:</strong> Content Command Center<br><strong>Scope:</strong> fh-content app only, UTC day ${dateKey}. Part 107, NE Corner and music are not counted.</div>
     <div style="text-align:right;"><strong>Classification:</strong> <span style="color:#c44a1a;font-weight:600;text-transform:uppercase;">Internal</span><br><strong>Report ID:</strong> CPR-${dateKey}</div>
   </div>
   <div style="font-size:14pt;font-weight:700;color:#2b0a3d;text-transform:uppercase;letter-spacing:1px;margin-bottom:20px;">COO Daily Publish Report — ${dateKey}</div>
@@ -205,7 +224,7 @@ export async function sendCooPublishReport(supabase: SupabaseClient): Promise<bo
     </div>
     <div style="flex:1;background:#f0faf4;border-radius:6px;padding:12px 16px;text-align:center;">
       <div style="font-size:22pt;font-weight:700;color:#2d7a3a;">$${todayCost.toFixed(2)}</div>
-      <div style="font-size:9pt;color:#2d7a3a;">Today's AI Cost</div>
+      <div style="font-size:9pt;color:#2d7a3a;">AI Cost (UTC day)</div>
     </div>
   </div>
 
@@ -241,9 +260,12 @@ export async function sendCooPublishReport(supabase: SupabaseClient): Promise<bo
 </html>`;
 
     try {
-        const subject = reports.length > 0
-            ? `[COO Report] ${dateKey} — ${published.length} published, ${failed.length} failed${reviewNeeded.length > 0 ? `, ${reviewNeeded.length} need review` : ''}`
-            : `[COO Report] ${dateKey} — No content published today`;
+        const subject = buildReportSubject(dateKey, {
+            total: reports.length,
+            published: published.length,
+            failed: failed.length,
+            reviewNeeded: reviewNeeded.length,
+        });
 
         const response = await fetch('https://api.resend.com/emails', {
             method: 'POST',
