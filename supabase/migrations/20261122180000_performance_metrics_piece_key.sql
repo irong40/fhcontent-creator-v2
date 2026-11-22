@@ -3,8 +3,12 @@
 -- content_pieces row (NEC clip ids such as NEC-B20-07 from the loader ledger).
 -- Nothing is changed or removed on existing rows.
 --
--- Apply only after qcheck clears branch fix/nec-tiktok-piece-link, and before the
--- collector code that writes piece_key is deployed.
+-- Apply only after qcheck clears branch fix/nec-tiktok-piece-link.
+-- Run order: 1. this migration, 2. the backfill with --apply
+-- (src/scripts/nec-tiktok-link-backfill.ts, which fills piece_key and the
+-- missing video_id), 3. deploy the collector. 2 and 3 may swap. The collector
+-- carries a link only from rows holding both video_id and piece_key; the
+-- backfill fills both, so links carry from the first pull after 2 and 3.
 --
 -- Undo:
 --   drop index if exists public.performance_metrics_piece_key_idx;

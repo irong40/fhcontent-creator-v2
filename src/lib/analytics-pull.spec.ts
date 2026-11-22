@@ -23,6 +23,9 @@ import {
     accountKey,
     resolveHandle,
     buildAccountResolver,
+    loadTikTokPieceLinks,
+    snapshotUnmatchedWithLinks,
+    TIKTOK_LINK_ROWS,
 } from './analytics-pull';
 
 const listTopPosts = vi.mocked(blotato.listTopPosts);
@@ -543,5 +546,74 @@ describe('account attribution', () => {
             ['3', 'Sentinel Aerial Inspections (facebook)'],
             ['4', null],
         ]);
+    });
+});
+
+// Fake for the link loader's select chain: records every call, honours limit,
+// and inserts go to a list. `rows` is what the table holds; `error` makes the
+// select fail the way PostgREST does before the piece_key column exists.
+function linkClient(rows: Array<Record<string, unknown>>, opts: { error?: { message: string }; throws?: boolean } = {}) {
+    const calls: Array<[string, ...unknown[]]> = [];
+    const inserts: Array<Record<string, unknown>> = [];
+    const chain = {
+        select: (...a: unknown[]) => { calls.push(['select', ...a]); return chain; },
+        eq: (...a: unknown[]) => { calls.push(['eq', ...a]); return chain; },
+        not: (...a: unknown[]) => { calls.push(['not', ...a]); return chain; },
+        order: (...a: unknown[]) => { calls.push(['order', ...a]); return chain; },
+        limit: (n: number) => {
+            calls.push(['limit', n]);
+            if (opts.throws) return Promise.reject(new Error('network down'));
+            return Promise.resolve(opts.error ? { data: null, error: opts.error } : { data: rows.slice(0, n), error: null });
+        },
+        insert: (row: Record<string, unknown>) => { inserts.push(row); return Promise.resolve({ error: null }); },
+    };
+    const supabase = { from: (t: string) => { calls.push(['from', t]); return chain; } } as never;
+    return { supabase, calls, inserts };
+}
+
+describe('loadTikTokPieceLinks', () => {
+    it('reads only linked TikTok rows that carry a video id, newest first, one full page', async () => {
+        const rows = Array.from({ length: 3 }, (_, i) => ({ video_id: `766314012646528129${i}`, piece_key: `NEC-B20-0${i}` }));
+        const { supabase, calls } = linkClient(rows);
+
+        const links = await loadTikTokPieceLinks(supabase);
+
+        expect(calls).toEqual([
+            ['from', 'performance_metrics'],
+            ['select', 'video_id, piece_key'],
+            ['eq', 'platform', 'tiktok'],
+            ['not', 'piece_key', 'is', null],
+            ['not', 'video_id', 'is', null],
+            ['order', 'captured_at', { ascending: false }],
+            ['limit', TIKTOK_LINK_ROWS],
+        ]);
+        expect(TIKTOK_LINK_ROWS).toBe(1000);
+        expect(links).toEqual(new Map(rows.map((r) => [r.video_id, r.piece_key])));
+    });
+
+    it('returns an empty map when the select fails (piece_key column missing) or throws', async () => {
+        const missing = linkClient([{ video_id: '7663140126465281294', piece_key: 'NEC-B20-07' }], {
+            error: { message: 'column performance_metrics.piece_key does not exist' },
+        });
+        expect(await loadTikTokPieceLinks(missing.supabase)).toEqual(new Map());
+
+        const down = linkClient([], { throws: true });
+        expect(await loadTikTokPieceLinks(down.supabase)).toEqual(new Map());
+    });
+});
+
+describe('snapshotUnmatchedWithLinks', () => {
+    it('puts the piece_key loaded from earlier rows on the new TikTok row', async () => {
+        const url = 'https://www.tiktok.com/@northeastcorner1/video/7663140126465281294';
+        const { supabase, inserts } = linkClient([{ video_id: '7663140126465281294', piece_key: 'NEC-B20-07' }]);
+        const index = new Map([
+            [normalizeUrl(url), { metrics: { viewsCount: '10' }, platform: 'tiktok', id: '9647749', url, postedAt: null }],
+        ]) as never;
+
+        const res = await snapshotUnmatchedWithLinks(supabase, index, new Set());
+
+        expect(res).toEqual({ capturedAccounts: 1, insertErrors: 0 });
+        expect(inserts).toHaveLength(1);
+        expect(inserts[0]).toMatchObject({ blotato_post_id: '9647749', video_id: '7663140126465281294', piece_key: 'NEC-B20-07' });
     });
 });

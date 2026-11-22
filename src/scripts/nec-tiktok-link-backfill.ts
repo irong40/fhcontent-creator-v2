@@ -10,10 +10,20 @@
  *   nec-tiktok-link-backup.json  the full current content of every row that would change (the backup)
  * It writes nothing to the database.
  *
- * --apply (only after qcheck and the piece_key migration) fills piece_key on
- * exactly the planned rows, only where piece_key is still null. It changes no
- * other field. Undo: update performance_metrics set piece_key = null where id in
- * (ids in nec-tiktok-link-backup.json).
+ * --apply (only after qcheck and the piece_key migration) fills, on exactly the
+ * planned rows, piece_key where it is still null and video_id (the matched
+ * TikTok video id) where it is still null. It changes no other field. Rows
+ * written before the collector kept the TikTok URL have video_id null, and
+ * analytics-pull carries a link forward only from rows holding both video_id
+ * and piece_key, so filling video_id here is what lets links carry.
+ * Undo, from nec-tiktok-link-backup.json (it holds every changed row as it was):
+ *   update performance_metrics set piece_key = null where id in (all backup ids);
+ *   update performance_metrics set video_id = null where id in (backup ids whose video_id is null);
+ *
+ * Run order: 1. the piece_key migration (20261122180000), 2. this command with
+ * --apply, 3. deploy the collector. Steps 2 and 3 may also run the other way
+ * round. Either way, every later pull carries the links, because the rows the
+ * backfill fills hold both video_id and piece_key.
  *
  * Match rule: src/lib/nec-tiktok-link.ts (TikTok video id first, normalized URL
  * second, two ledger clips for one post refused).
@@ -46,6 +56,13 @@ export interface MetricRow {
     [k: string]: unknown;
 }
 
+export interface LinkChange {
+    id: string;
+    piece_key: string;
+    /** Set only when the row has no video_id and the match found one. */
+    video_id?: string;
+}
+
 export interface PostPlan {
     postKey: string; // blotato_post_id, or video id for rows without one
     blotatoPostId: string | null;
@@ -60,7 +77,7 @@ export function planLinks(
     rows: MetricRow[],
     urlByPostId: Map<string, string>,
     index: ReturnType<typeof buildNecLinkIndex>,
-): { posts: PostPlan[]; changes: Array<{ id: string; piece_key: string }> } {
+): { posts: PostPlan[]; changes: LinkChange[] } {
     const groups = new Map<string, MetricRow[]>();
     for (const r of rows) {
         if (r.piece_key) continue; // already linked, never overwritten
@@ -70,7 +87,7 @@ export function planLinks(
         groups.set(key, g);
     }
     const posts: PostPlan[] = [];
-    const changes: Array<{ id: string; piece_key: string }> = [];
+    const changes: LinkChange[] = [];
     for (const [postKey, g] of groups) {
         const withUrl = g.find((r) => r.post_url || r.video_id);
         const bpid = g[0].blotato_post_id;
@@ -85,11 +102,45 @@ export function planLinks(
             result = { ...result, reason: `Blotato published-post list returned no URL for post ${bpid ?? postKey}` };
         }
         if (result.status === 'linked') {
-            for (const r of g) changes.push({ id: r.id, piece_key: result.pieceKey });
+            const vid = result.videoId;
+            for (const r of g) changes.push({ id: r.id, piece_key: result.pieceKey, ...(vid && !r.video_id ? { video_id: vid } : {}) });
         }
         posts.push({ postKey, blotatoPostId: bpid, url, urlSource, rows: g.length, result });
     }
     return { posts, changes };
+}
+
+type UpdateClient = {
+    from: (t: string) => {
+        update: (v: Record<string, unknown>) => {
+            in: (c: string, ids: string[]) => {
+                is: (c: string, v: null) => { select: (c: string) => PromiseLike<{ data: Array<{ id: string }> | null; error: { message: string } | null }> };
+            };
+        };
+    };
+};
+
+/** Write the planned links: piece_key per key, then video_id per video, each
+ *  only where the field is still null. Returns the rows each write changed. */
+export async function applyLinkChanges(supabase: UpdateClient, changes: LinkChange[]): Promise<{ pieceKeys: number; videoIds: number }> {
+    const done = { pieceKeys: 0, videoIds: 0 };
+    const write = async (field: 'piece_key' | 'video_id', value: string, ids: string[]) => {
+        const { data, error } = await supabase
+            .from('performance_metrics')
+            .update({ [field]: value })
+            .in('id', ids)
+            .is(field, null)
+            .select('id');
+        if (error) throw new Error(`${field} update for ${value} failed after ${done.pieceKeys} piece_key and ${done.videoIds} video_id rows: ${error.message}`);
+        return data?.length ?? 0;
+    };
+    for (const pk of new Set(changes.map((c) => c.piece_key))) {
+        done.pieceKeys += await write('piece_key', pk, changes.filter((c) => c.piece_key === pk).map((c) => c.id));
+    }
+    for (const vid of new Set(changes.flatMap((c) => (c.video_id ? [c.video_id] : [])))) {
+        done.videoIds += await write('video_id', vid, changes.filter((c) => c.video_id === vid).map((c) => c.id));
+    }
+    return done;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -176,6 +227,7 @@ async function main() {
         postsUnlinked: count('unlinked'),
         postsRefused: count('refused'),
         rowsToChange: changes.length,
+        rowsGettingVideoId: changes.filter((c) => c.video_id).length,
         changes,
         postResults: posts,
         clips: resolved,
@@ -185,19 +237,9 @@ async function main() {
     console.log(JSON.stringify({ ...plan, changes: undefined, postResults: undefined, clips: undefined }, null, 1));
 
     if (!apply) return;
-    let updated = 0;
-    for (const pk of new Set(changes.map((c) => c.piece_key))) {
-        const ids = changes.filter((c) => c.piece_key === pk).map((c) => c.id);
-        const { data, error } = await supabase
-            .from('performance_metrics')
-            .update({ piece_key: pk })
-            .in('id', ids)
-            .is('piece_key', null)
-            .select('id');
-        if (error) throw new Error(`update for ${pk} failed after ${updated} rows: ${error.message}`);
-        updated += data?.length ?? 0;
-    }
-    console.log(`applied: ${updated} of ${changes.length} rows`);
+    const done = await applyLinkChanges(supabase as unknown as UpdateClient, changes);
+    const videoTargets = changes.filter((c) => c.video_id).length;
+    console.log(`applied: piece_key on ${done.pieceKeys} of ${changes.length} rows, video_id on ${done.videoIds} of ${videoTargets} rows`);
 }
 
 const invokedDirectly = (() => {

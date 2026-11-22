@@ -479,9 +479,16 @@ export async function snapshotUnmatchedAccounts(
     return { capturedAccounts, insertErrors };
 }
 
+/** PostgREST max-rows cap on this project; the link loader reads one page. */
+export const TIKTOK_LINK_ROWS = 1000;
+
 /** TikTok video id -> piece_key already set on earlier rows (by the NEC link
- *  backfill, src/scripts/nec-tiktok-link-backfill.ts). Empty map on any error,
- *  including before the piece_key column exists, so the pull never fails on it. */
+ *  backfill, src/scripts/nec-tiktok-link-backfill.ts, which fills video_id too).
+ *  Empty map on any error, including before the piece_key column exists, so the
+ *  pull never fails on it. Reads the newest 1,000 linked rows: 1,000 is the
+ *  PostgREST max-rows cap on this project (a larger limit still returns 1,000).
+ *  Each pull carries every link forward, so 1,000 rows hold about 12 days of
+ *  pulls at about 80 linked NEC posts a pull. */
 export async function loadTikTokPieceLinks(supabase: AdminClient): Promise<Map<string, string>> {
     const links = new Map<string, string>();
     try {
@@ -492,7 +499,7 @@ export async function loadTikTokPieceLinks(supabase: AdminClient): Promise<Map<s
             .not('piece_key', 'is', null)
             .not('video_id', 'is', null)
             .order('captured_at', { ascending: false })
-            .limit(5000);
+            .limit(TIKTOK_LINK_ROWS);
         if (error || !data) return links;
         for (const r of data as unknown as Array<{ video_id: string | null; piece_key: string | null }>) {
             if (r.video_id && r.piece_key) links.set(r.video_id, r.piece_key);
@@ -501,6 +508,18 @@ export async function loadTikTokPieceLinks(supabase: AdminClient): Promise<Map<s
         // non-fatal
     }
     return links;
+}
+
+/** Load the carried TikTok links and snapshot the unmatched account posts with
+ *  them, so each new TikTok row keeps the piece_key its video already has. */
+export async function snapshotUnmatchedWithLinks(
+    supabase: AdminClient,
+    index: Map<string, AnalyticsIndexEntry>,
+    matchedUrls: Set<string>,
+    accounts?: AccountResolver,
+): Promise<{ capturedAccounts: number; insertErrors: number }> {
+    const tiktokLinks = await loadTikTokPieceLinks(supabase);
+    return snapshotUnmatchedAccounts(supabase, index, matchedUrls, accounts, tiktokLinks);
 }
 
 export async function runAnalyticsPull(): Promise<{ status: number; body: AnalyticsPullResult }> {
@@ -541,8 +560,7 @@ export async function runAnalyticsPull(): Promise<{ status: number; body: Analyt
     const index = await buildAnalyticsIndex(sinceIso);
     const accounts = await buildAccountResolver(supabase, sinceIso);
     const snap = await snapshotMatchedMetrics(supabase, rows, index, accounts);
-    const tiktokLinks = await loadTikTokPieceLinks(supabase);
-    const extra = await snapshotUnmatchedAccounts(supabase, index, snap.matchedUrls, accounts, tiktokLinks);
+    const extra = await snapshotUnmatchedWithLinks(supabase, index, snap.matchedUrls, accounts);
 
     // Attribute the just-inserted content_piece snapshots to their account
     // (via persona → platform_accounts → blotato_accounts). Non-fatal.
