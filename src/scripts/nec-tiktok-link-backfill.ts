@@ -58,7 +58,8 @@ export interface MetricRow {
 
 export interface LinkChange {
     id: string;
-    piece_key: string;
+    /** Absent when the row already holds this key and only needs its video_id. */
+    piece_key?: string;
     /** Set only when the row has no video_id and the match found one. */
     video_id?: string;
 }
@@ -72,7 +73,10 @@ export interface PostPlan {
     result: NecLinkResult;
 }
 
-/** Pure planning step: group rows by post, find each post's URL, match it. */
+/** Pure planning step: group rows by post, find each post's URL, match it.
+ *  A row keyed but still without video_id (an --apply that stopped between its
+ *  key and video writes) is planned again for the video_id alone, so a rerun
+ *  finishes it; its key is never changed. */
 export function planLinks(
     rows: MetricRow[],
     urlByPostId: Map<string, string>,
@@ -80,7 +84,7 @@ export function planLinks(
 ): { posts: PostPlan[]; changes: LinkChange[] } {
     const groups = new Map<string, MetricRow[]>();
     for (const r of rows) {
-        if (r.piece_key) continue; // already linked, never overwritten
+        if (r.piece_key && r.video_id) continue; // linked and carrying: never touched
         const key = r.blotato_post_id ?? (r.video_id ? `video:${r.video_id}` : r.post_url ? `url:${r.post_url}` : `row:${r.id}`);
         const g = groups.get(key) ?? [];
         g.push(r);
@@ -103,7 +107,11 @@ export function planLinks(
         }
         if (result.status === 'linked') {
             const vid = result.videoId;
-            for (const r of g) changes.push({ id: r.id, piece_key: result.pieceKey, ...(vid && !r.video_id ? { video_id: vid } : {}) });
+            for (const r of g) {
+                const addVideo = vid && !r.video_id ? { video_id: vid } : {};
+                if (!r.piece_key) changes.push({ id: r.id, piece_key: result.pieceKey, ...addVideo });
+                else if (r.piece_key === result.pieceKey && 'video_id' in addVideo) changes.push({ id: r.id, ...addVideo });
+            }
         }
         posts.push({ postKey, blotatoPostId: bpid, url, urlSource, rows: g.length, result });
     }
@@ -134,7 +142,7 @@ export async function applyLinkChanges(supabase: UpdateClient, changes: LinkChan
         if (error) throw new Error(`${field} update for ${value} failed after ${done.pieceKeys} piece_key and ${done.videoIds} video_id rows: ${error.message}`);
         return data?.length ?? 0;
     };
-    for (const pk of new Set(changes.map((c) => c.piece_key))) {
+    for (const pk of new Set(changes.flatMap((c) => (c.piece_key ? [c.piece_key] : [])))) {
         done.pieceKeys += await write('piece_key', pk, changes.filter((c) => c.piece_key === pk).map((c) => c.id));
     }
     for (const vid of new Set(changes.flatMap((c) => (c.video_id ? [c.video_id] : [])))) {
@@ -227,6 +235,7 @@ async function main() {
         postsUnlinked: count('unlinked'),
         postsRefused: count('refused'),
         rowsToChange: changes.length,
+        rowsGettingPieceKey: changes.filter((c) => c.piece_key).length,
         rowsGettingVideoId: changes.filter((c) => c.video_id).length,
         changes,
         postResults: posts,
@@ -238,8 +247,9 @@ async function main() {
 
     if (!apply) return;
     const done = await applyLinkChanges(supabase as unknown as UpdateClient, changes);
+    const keyTargets = changes.filter((c) => c.piece_key).length;
     const videoTargets = changes.filter((c) => c.video_id).length;
-    console.log(`applied: piece_key on ${done.pieceKeys} of ${changes.length} rows, video_id on ${done.videoIds} of ${videoTargets} rows`);
+    console.log(`applied: piece_key on ${done.pieceKeys} of ${keyTargets} rows, video_id on ${done.videoIds} of ${videoTargets} rows`);
 }
 
 const invokedDirectly = (() => {

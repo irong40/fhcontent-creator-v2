@@ -11,7 +11,12 @@ vi.mock('@/lib/blotato', () => ({
     },
 }));
 
+// runAnalyticsPull builds its own client; the wiring test below hands it a fake.
+vi.mock('@/lib/supabase/server', () => ({ createAdminClient: vi.fn() }));
+vi.mock('@/lib/notifications', () => ({ notifyError: vi.fn(async () => undefined) }));
+
 import { blotato } from '@/lib/blotato';
+import { createAdminClient } from '@/lib/supabase/server';
 import {
     mapMetrics,
     normalizeUrl,
@@ -26,6 +31,7 @@ import {
     loadTikTokPieceLinks,
     snapshotUnmatchedWithLinks,
     TIKTOK_LINK_ROWS,
+    runAnalyticsPull,
 } from './analytics-pull';
 
 const listTopPosts = vi.mocked(blotato.listTopPosts);
@@ -616,4 +622,41 @@ describe('snapshotUnmatchedWithLinks', () => {
         expect(inserts).toHaveLength(1);
         expect(inserts[0]).toMatchObject({ blotato_post_id: '9647749', video_id: '7663140126465281294', piece_key: 'NEC-B20-07' });
     });
+});
+
+describe('runAnalyticsPull', () => {
+    it('carries the piece_key of a linked TikTok video onto the row the pull inserts', async () => {
+        const vid = '7663140126465281294';
+        const url = `https://www.tiktok.com/@northeastcorner1/video/${vid}`;
+        const inserts: Array<Record<string, unknown>> = [];
+        // Fake client by table: one published piece (no URL yet), no accounts,
+        // one earlier linked TikTok row.
+        const chain = (result: unknown) => {
+            const q: Record<string, unknown> = {};
+            for (const m of ['select', 'eq', 'gte', 'not', 'order', 'limit']) q[m] = () => q;
+            q.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) => Promise.resolve(result).then(ok, bad);
+            return q;
+        };
+        const supabase = {
+            from: (t: string) => {
+                if (t === 'content_pieces') return chain({ data: [{ id: 'p1', published_platforms: { youtube: { status: 'published' } } }], error: null });
+                if (t === 'blotato_accounts') return chain({ data: [] });
+                return {
+                    ...chain({ data: [{ video_id: vid, piece_key: 'NEC-B20-07' }], error: null }),
+                    insert: async (row: Record<string, unknown>) => { inserts.push(row); return { error: null }; },
+                };
+            },
+            rpc: async () => ({ error: null }),
+        };
+        vi.mocked(createAdminClient).mockReturnValue(supabase as never);
+        listTopPosts.mockResolvedValue({ items: [{ id: '9647749', platform: 'tiktok', postUrl: url, postedAt: null, latestMetrics: { metrics: { viewsCount: '10' } } }] } as never);
+        listPublishedPosts.mockResolvedValue({ items: [] } as never);
+
+        const res = await runAnalyticsPull();
+
+        expect(res.status).toBe(200);
+        expect(res.body.capturedAccounts).toBe(1);
+        expect(inserts).toHaveLength(1);
+        expect(inserts[0]).toMatchObject({ platform: 'tiktok', blotato_post_id: '9647749', video_id: vid, piece_key: 'NEC-B20-07' });
+    }, 10000);
 });

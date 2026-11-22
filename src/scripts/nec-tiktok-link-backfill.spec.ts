@@ -39,7 +39,18 @@ describe('planLinks', () => {
         const byKey = Object.fromEntries(posts.map((p) => [p.postKey, p]));
         expect(byKey['200'].result.status).toBe('refused');
         expect(byKey['300'].result).toMatchObject({ status: 'unlinked', reason: expect.stringMatching(/no URL for post 300/) });
-        expect(byKey['400']).toBeUndefined();
+        // r6 is keyed but its post has no URL: reported, never changed.
+        expect(byKey['400'].result.status).toBe('unlinked');
+    });
+
+    it('plans only the video_id for a row keyed by a stopped --apply, and never changes a key', () => {
+        const rows = [
+            { id: 'k1', blotato_post_id: '100', video_id: null, post_url: null, piece_key: 'NEC-B10-01' }, // stopped run
+            { id: 'k2', blotato_post_id: '100', video_id: V1, post_url: null, piece_key: 'NEC-B10-01' }, // finished
+            { id: 'k3', blotato_post_id: '100', video_id: null, post_url: null, piece_key: 'NEC-OTHER' }, // other key
+        ];
+        const { changes } = planLinks(rows, new Map([['100', u(V1)]]), index);
+        expect(changes).toEqual([{ id: 'k1', video_id: V1 }]);
     });
 });
 
@@ -55,7 +66,7 @@ describe('withRateLimit', () => {
 
 describe('applyLinkChanges', () => {
     // Fake table: update().in().is(field, null) changes only listed rows whose field is null.
-    function table(rows: Array<Record<string, unknown>>) {
+    function table(rows: Array<Record<string, unknown>>, failField?: string) {
         const writes: Array<{ value: Record<string, unknown>; ids: string[]; nullField: string }> = [];
         const supabase = {
             from: () => ({
@@ -63,6 +74,7 @@ describe('applyLinkChanges', () => {
                     in: (_c: string, ids: string[]) => ({
                         is: (nullField: string) => ({
                             select: async () => {
+                                if (failField && failField in value) return { data: null, error: { message: '503 Service Unavailable' } };
                                 writes.push({ value, ids, nullField });
                                 const hit = rows.filter((r) => ids.includes(r.id as string) && r[nullField] == null);
                                 for (const r of hit) Object.assign(r, value);
@@ -110,6 +122,25 @@ describe('applyLinkChanges', () => {
         ]);
         // Backfill run before any new pull: the collector's loader now finds the link.
         expect((await loadTikTokPieceLinks(supabase as never)).get(V1)).toBeDefined();
+    });
+
+    it('a rerun after an --apply stopped on its video_id writes leaves every row with both fields', async () => {
+        const rows: Array<Record<string, unknown>> = [
+            { id: 'r1', platform: 'tiktok', blotato_post_id: '100', post_url: null, video_id: null, piece_key: null },
+            { id: 'r2', platform: 'tiktok', blotato_post_id: '100', post_url: null, video_id: null, piece_key: null },
+            { id: 'r3', platform: 'tiktok', blotato_post_id: null, post_url: u(V1), video_id: V1, piece_key: null },
+        ];
+        const urls = new Map([['100', u(V1)]]);
+        const plan = () => planLinks(rows as never, urls, index).changes;
+
+        const stopped = table(rows, 'video_id');
+        await expect(applyLinkChanges(stopped.supabase as never, plan())).rejects.toThrow(/video_id update .* failed after 3 piece_key and 0 video_id rows/);
+        expect(rows.map((r) => [r.piece_key, r.video_id])).toEqual([['NEC-B10-01', null], ['NEC-B10-01', null], ['NEC-B10-01', V1]]);
+
+        const rerun = table(rows);
+        expect(await applyLinkChanges(rerun.supabase as never, plan())).toEqual({ pieceKeys: 0, videoIds: 2 });
+        expect(rows.map((r) => [r.piece_key, r.video_id])).toEqual([['NEC-B10-01', V1], ['NEC-B10-01', V1], ['NEC-B10-01', V1]]);
+        expect(plan()).toEqual([]); // a third run has nothing left to do
     });
 
     it('stops with the field and value named when a write fails', async () => {
