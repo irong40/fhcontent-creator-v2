@@ -345,6 +345,29 @@ OUTPUT VIA TOOL: The on-screen script is assembled separately — you do NOT wri
                     continue;
                 }
                 const errMsg = e instanceof Error ? e.message : 'unknown';
+                const failedFactCheck = errMsg.startsWith(`${UNSUPPORTED_CLAIM_ERROR}:`)
+                    || errMsg.startsWith(`${UNSOURCED_QUOTE_ERROR}:`);
+                if (failedFactCheck) {
+                    const { error: discardError } = await supabase.from('topics').update({
+                        status: 'failed',
+                        retry_count: (topic.retry_count ?? 0) + 1,
+                        requires_review: false,
+                        review_reason: null,
+                        error_message: `Content-generator: ${errMsg}`,
+                    }).eq('id', topic.id);
+                    if (discardError) throw new Error(discardError.message);
+
+                    const topicVersion = (topic as { text_version?: string | null }).text_version ?? 'unversioned';
+                    await recordTrail(supabase, {
+                        correlation_id: topicCorrelationId(topic.id, topicVersion),
+                        stage: 'state_changed',
+                        topic_id: topic.id,
+                        topic_version: topicVersion,
+                        detail: { advanced: false, to: 'failed', reason: 'failed_fact_check' },
+                    });
+                    results.push({ ...topicResult, error: errMsg, discarded: true });
+                    continue;
+                }
                 // Circuit-breaker: count the attempt; once retries are exhausted
                 // hold the topic for manual review (requires_review excludes it
                 // from the draft-selection query) instead of resetting to
