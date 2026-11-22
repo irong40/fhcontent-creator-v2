@@ -432,11 +432,31 @@ describe('snapshotUnmatchedAccounts', () => {
         expect(res).toEqual({ capturedAccounts: 4, insertErrors: 0 });
         const zero = { comments: 0, shares: 0, saves: 0 };
         expect(inserts).toEqual([
-            { content_piece_id: null, platform: 'tiktok', handle: '@sentinelaerialinspector', blotato_post_id: '5410406', published_at: '2026-10-01T12:00:00.000Z', views: 1049, likes: 3, ...zero },
-            { content_piece_id: null, platform: 'tiktok', handle: '@x', blotato_post_id: '905', published_at: null, views: 0, likes: 0, ...zero },
+            { content_piece_id: null, platform: 'tiktok', handle: '@sentinelaerialinspector', blotato_post_id: '5410406', published_at: '2026-10-01T12:00:00.000Z', post_url: 'https://www.tiktok.com/@sentinelaerialinspector/video/9', video_id: null, views: 1049, likes: 3, ...zero },
+            { content_piece_id: null, platform: 'tiktok', handle: '@x', blotato_post_id: '905', published_at: null, post_url: 'https://www.tiktok.com/@x/video/5', video_id: null, views: 0, likes: 0, ...zero },
             { content_piece_id: null, platform: 'instagram', handle: null, blotato_post_id: '906', published_at: null, views: 40, likes: 0, ...zero },
             { content_piece_id: null, platform: 'facebook', handle: null, blotato_post_id: '907', published_at: null, views: 0, likes: 0, ...zero },
         ]);
+    });
+
+    it('keeps the TikTok URL and video id, and carries a known NEC piece_key', async () => {
+        const inserts: Array<Record<string, unknown>> = [];
+        const supabase = {
+            from: () => ({ insert: (row: Record<string, unknown>) => { inserts.push(row); return Promise.resolve({ error: null }); } }),
+        } as never;
+        const linked = 'https://www.tiktok.com/@northeastcorner1/video/7663140126465281294';
+        const notYet = 'https://www.tiktok.com/@northeastcorner1/video/7663140126465281299';
+        const index = new Map([
+            [normalizeUrl(linked), { metrics: { viewsCount: '10' }, platform: 'tiktok', id: '9647749', url: linked, postedAt: null }],
+            [normalizeUrl(notYet), { metrics: { viewsCount: '5' }, platform: 'tiktok', id: '9647750', url: notYet, postedAt: null }],
+        ]) as never;
+        const links = new Map([['7663140126465281294', 'NEC-B20-07']]);
+
+        await snapshotUnmatchedAccounts(supabase, index, new Set(), undefined, links);
+
+        expect(inserts[0]).toMatchObject({ handle: '@northeastcorner1', blotato_post_id: '9647749', post_url: linked, video_id: '7663140126465281294', piece_key: 'NEC-B20-07' });
+        expect(inserts[1]).toMatchObject({ blotato_post_id: '9647750', post_url: notYet, video_id: '7663140126465281299' });
+        expect(inserts[1]).not.toHaveProperty('piece_key');
     });
 });
 
