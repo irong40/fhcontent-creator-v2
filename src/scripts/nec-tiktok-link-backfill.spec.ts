@@ -40,3 +40,13 @@ describe('planLinks', () => {
         expect(byKey['400']).toBeUndefined();
     });
 });
+
+import { withRateLimit } from './nec-tiktok-link-backfill';
+describe('withRateLimit', () => {
+    it('retries a 429 after the named wait and gives up on other errors', async () => {
+        let n = 0;
+        const ok = await withRateLimit(async () => { n++; if (n === 1) throw new Error('Blotato API error (429): retry in 0 seconds'); return 'x'; }, 0);
+        expect(ok).toBe('x');
+        await expect(withRateLimit(async () => { throw new Error('Blotato API error (500)'); }, 0)).rejects.toThrow('(500)');
+    }, 10000);
+});

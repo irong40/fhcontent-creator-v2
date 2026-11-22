@@ -92,6 +92,24 @@ export function planLinks(
     return { posts, changes };
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Blotato read with pacing: wait between calls, and on HTTP 429 wait the
+ *  seconds Blotato names (default 60) and retry, up to 4 tries. */
+export async function withRateLimit<T>(call: () => Promise<T>, pauseMs = 700, tries = 4): Promise<T> {
+    for (let attempt = 1; ; attempt++) {
+        await sleep(pauseMs);
+        try {
+            return await call();
+        } catch (e) {
+            const msg = (e as Error).message ?? '';
+            if (!/\(429\)/.test(msg) || attempt >= tries) throw e;
+            const secs = Number(msg.match(/retry in (\d+) seconds/)?.[1] ?? 60);
+            await sleep((secs + 2) * 1000);
+        }
+    }
+}
+
 function arg(name: string): string | undefined {
     const i = process.argv.indexOf(name);
     return i >= 0 ? process.argv[i + 1] : undefined;
@@ -106,14 +124,14 @@ async function main() {
 
     // 1. Ledger clips, resolved to live TikTok URLs (Blotato GET /v2/posts/{uuid}).
     const clips = readLedgerClips(JSON.parse(fs.readFileSync(ledgerPath, 'utf8')));
-    const { clips: resolved, errors: resolveErrors } = await resolveLedgerPublicUrls(clips, (id) => blotato.getPostStatus(id));
+    const { clips: resolved, errors: resolveErrors } = await resolveLedgerPublicUrls(clips, (id) => withRateLimit(() => blotato.getPostStatus(id)));
     const index = buildNecLinkIndex(resolved);
 
     // 2. Blotato numeric post id -> URL (GET /v2/posts?status=published, paginated).
     const urlByPostId = new Map<string, string>();
     let cursor: string | undefined;
     do {
-        const res = await blotato.listPublishedPosts(POSTS_SINCE, cursor);
+        const res = await withRateLimit(() => blotato.listPublishedPosts(POSTS_SINCE, cursor));
         for (const p of res.items ?? []) if (p.state?.postUrl) urlByPostId.set(String(p.id), p.state.postUrl);
         cursor = res.cursor;
     } while (cursor);
