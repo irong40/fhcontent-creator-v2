@@ -494,7 +494,7 @@ export async function loadTikTokPieceLinks(supabase: AdminClient): Promise<Map<s
             .order('captured_at', { ascending: false })
             .limit(5000);
         if (error || !data) return links;
-        for (const r of data as Array<{ video_id: string | null; piece_key: string | null }>) {
+        for (const r of data as unknown as Array<{ video_id: string | null; piece_key: string | null }>) {
             if (r.video_id && r.piece_key) links.set(r.video_id, r.piece_key);
         }
     } catch {
