@@ -130,9 +130,13 @@ async function main() {
     // 2. Blotato numeric post id -> URL (GET /v2/posts?status=published, paginated).
     const urlByPostId = new Map<string, string>();
     let cursor: string | undefined;
+    let publishedWithoutUrl = 0; // counted, printed in the plan
     do {
         const res = await withRateLimit(() => blotato.listPublishedPosts(POSTS_SINCE, cursor));
-        for (const p of res.items ?? []) if (p.state?.postUrl) urlByPostId.set(String(p.id), p.state.postUrl);
+        for (const p of res.items ?? []) {
+            if (p.state?.postUrl) urlByPostId.set(String(p.id), p.state.postUrl);
+            else publishedWithoutUrl++;
+        }
         cursor = res.cursor;
     } while (cursor);
 
@@ -165,6 +169,7 @@ async function main() {
         ledgerClipsResolved: resolved.filter((c) => c.publicUrl).length,
         resolveErrors,
         blotatoPublishedPostsWithUrl: urlByPostId.size,
+        blotatoPublishedPostsWithoutUrl: publishedWithoutUrl,
         rowsRead: rows.length,
         posts: posts.length,
         postsLinked: count('linked'),
