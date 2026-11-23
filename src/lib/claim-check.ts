@@ -66,7 +66,42 @@ export function unsupportedSpecifics(points: Point[] | null | undefined, pieces:
             }
         }
     }
-    return faults;
+    return [...faults, ...unqualifiedNumbers(points, pieces)];
+}
+
+/**
+ * Words that make a number approximate. 2026-11-23 gate FAIL fh-647162ef: the source said "About
+ * 115 students" and the short caption said "the 115 students". The digit check above passed it,
+ * because the digits match.
+ */
+const QUALIFIER = String.raw`(?:about|around|roughly|nearly|almost|over|more than|at least|up to|approximately|some|an estimated|estimated|fewer than|less than)`;
+const QUALIFIED_BEFORE = new RegExp(String.raw`\b${QUALIFIER}\s+$`, 'i');
+const NUMBER = /\d[\d,.]*\d|\d/g;
+
+/** Each number in `text` with whether a qualifier stands right before it. */
+function numbersWithQualifier(text: string): Array<[string, boolean]> {
+    return [...text.matchAll(NUMBER)].map(m => [m[0], QUALIFIED_BEFORE.test(text.slice(0, m.index))]);
+}
+
+/**
+ * Numbers a piece states as exact where the sources give them only with a qualifier. A number
+ * the sources also state bare somewhere is not counted: that passage supports the bare use.
+ */
+export function unqualifiedNumbers(points: Point[] | null | undefined, pieces: Piece[]): string[] {
+    const sources = sourcesOf(points);
+    if (!sources) return [];
+    const qualified = new Set<string>();
+    const bare = new Set<string>();
+    for (const s of sources) for (const [n, q] of numbersWithQualifier(s)) (q ? qualified : bare).add(n);
+    const faults: string[] = [];
+    for (const piece of pieces) {
+        for (const [field, text] of textFields(piece)) {
+            for (const [n, q] of numbersWithQualifier(text)) {
+                if (!q && qualified.has(n) && !bare.has(n)) faults.push(`${String(piece.pieceType)} ${field} states "${n}" as exact, but the source gives it only with a qualifier (about, nearly, over...)`);
+            }
+        }
+    }
+    return [...new Set(faults)];
 }
 
 /** The prompt for the judge model. Points only: it must not use what it knows. */

@@ -1,4 +1,4 @@
-import { pointLines, sourceDiscipline } from './sourced-topics';
+import { pointLines, sourceDiscipline, QUALIFIER_RULE } from './sourced-topics';
 import type { Persona, Topic, HistoricalPoint, PieceType } from '@/types/database';
 
 export type RemixField = 'script' | 'caption_long' | 'caption_short' | 'thumbnail_prompt' | 'carousel_slides';
@@ -272,7 +272,7 @@ ${sourceDiscipline(points)}
 Generate content for 1 piece — a short looping quote video:
 
 - CAPTION SOURCE RULE: every sentence in captionLong and captionShort, apart from the follow CTA and hashtags, must restate something the TOPIC, CONTEXT, THE QUOTE or a SUPPORTING FACT above states. Add no chapter, book section, speech title, date, place or other detail that is not written above, even if you remember it. Say less rather than add a line the sources do not state.
-- QUALIFIER RULE: when a source states a number or amount with a qualifier (about, around, roughly, nearly, almost, over, more than, at least, up to), carry the same qualifier into every caption line that uses that number, captionShort included. Never turn an approximate figure into an exact count, and never write "the 115 students" where the source says "about 115 students".
+- ${QUALIFIER_RULE}
 
 FOR THE PIECE, PROVIDE:
 - script: The exact on-screen text — the verbatim quote, then a line break, then the attribution line (figure name, source, year). Do not add anything else.

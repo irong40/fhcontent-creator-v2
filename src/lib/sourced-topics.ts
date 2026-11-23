@@ -177,11 +177,18 @@ export async function releaseCandidateOfTopic(supabase: Db, topicId: string): Pr
  * The rule a script writer gets when its points came from the loop. Returns '' for a topic
  * with no source passages, so an unsourced persona's prompt is unchanged.
  */
+/**
+ * Every writer of sourced text gets this: the first draft, the quote prompt, remix and
+ * regenerate. claim-check.ts unqualifiedNumbers enforces it in code on the first draft.
+ */
+export const QUALIFIER_RULE = 'QUALIFIER RULE: when a source states a number or amount with a qualifier (about, around, roughly, nearly, almost, over, more than, at least, up to, approximately, some, an estimated, fewer than, less than), carry the same qualifier into every script, caption and title line that uses that number, captionShort included. Never turn an approximate figure into an exact count, and never write "the 115 students" where the source says "about 115 students".';
+
 export function sourceDiscipline(points: Array<{ quote?: string | null }>): string {
     if (!points.some(p => p.quote && p.quote.trim())) return '';
     return `
 SOURCE DISCIPLINE (these points were written from real source passages, and a fact checker reads your text against them):
 - Every fact, name, number, date and place in every script, caption and title must come from the points above. Add none from memory.
+- ${QUALIFIER_RULE}
 - You may explain, connect and react. You may not add an event, a statistic, a quotation, a cause, or a "first", "only" or "largest" that the points do not state.
 - Do not put words in anyone's mouth. Quote a person only with words that appear in a point or a source passage.
 - Quotation marks are for exact source text only. Text inside quotation marks (a person's words, a speech title, a phrase) must be copied word for word from a point or a SOURCE PASSAGE above, including the small words. If you are not copying exactly, write it without quotation marks. A title, a summary or a paraphrase never goes inside quotation marks.
