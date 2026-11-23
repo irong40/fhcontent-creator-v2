@@ -54,7 +54,10 @@ describe('planLinks', () => {
     });
 });
 
-import { withRateLimit } from './nec-tiktok-link-backfill';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { withRateLimit, assertFreshOut, BACKUP_FILE, PLAN_FILE } from './nec-tiktok-link-backfill';
 describe('withRateLimit', () => {
     it('retries a 429 after the named wait and gives up on other errors', async () => {
         let n = 0;
@@ -62,6 +65,37 @@ describe('withRateLimit', () => {
         expect(ok).toBe('x');
         await expect(withRateLimit(async () => { throw new Error('Blotato API error (500)'); }, 0)).rejects.toThrow('(500)');
     }, 10000);
+});
+
+describe('withRateLimit wait length', () => {
+    const run = async (msg: string) => {
+        const waits: number[] = [];
+        let n = 0;
+        await withRateLimit(async () => { n++; if (n === 1) throw new Error(msg); return 'x'; }, 5, 4, async (ms) => { waits.push(ms); });
+        return waits;
+    };
+    it('waits the named seconds plus 2 before the retry, and 60 plus 2 when none is named', async () => {
+        expect(await run('Blotato API error (429): retry in 7 seconds')).toEqual([5, 9000, 5]);
+        expect(await run('Blotato API error (429)')).toEqual([5, 62000, 5]);
+    });
+    it('does not wait for a non-429 error', async () => {
+        const waits: number[] = [];
+        await expect(withRateLimit(async () => { throw new Error('Blotato API error (500)'); }, 5, 4, async (ms) => { waits.push(ms); })).rejects.toThrow('(500)');
+        expect(waits).toEqual([5]);
+    });
+});
+
+describe('assertFreshOut', () => {
+    it('refuses a folder that already holds a backup or a plan, accepts an empty one', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'necout-'));
+        expect(() => assertFreshOut(dir)).not.toThrow();
+        fs.writeFileSync(path.join(dir, BACKUP_FILE), '[]');
+        expect(() => assertFreshOut(dir)).toThrow(/already holds nec-tiktok-link-backup\.json/);
+        fs.rmSync(path.join(dir, BACKUP_FILE));
+        fs.writeFileSync(path.join(dir, PLAN_FILE), '{}');
+        expect(() => assertFreshOut(dir)).toThrow(/already holds nec-tiktok-link-plan\.json/);
+        fs.rmSync(dir, { recursive: true });
+    });
 });
 
 describe('applyLinkChanges', () => {

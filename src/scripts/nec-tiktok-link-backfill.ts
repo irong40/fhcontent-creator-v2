@@ -153,18 +153,29 @@ export async function applyLinkChanges(supabase: UpdateClient, changes: LinkChan
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export const BACKUP_FILE = 'nec-tiktok-link-backup.json';
+export const PLAN_FILE = 'nec-tiktok-link-plan.json';
+
+/** Refuse an --out folder that already holds a backup or plan. A rerun into the
+ *  same folder would overwrite the first run's backup with rows already changed. */
+export function assertFreshOut(out: string): void {
+    for (const f of [BACKUP_FILE, PLAN_FILE]) {
+        if (fs.existsSync(path.join(out, f))) throw new Error(`--out ${out} already holds ${f}; use a new folder so the earlier backup is kept`);
+    }
+}
+
 /** Blotato read with pacing: wait between calls, and on HTTP 429 wait the
  *  seconds Blotato names (default 60) and retry, up to 4 tries. */
-export async function withRateLimit<T>(call: () => Promise<T>, pauseMs = 700, tries = 4): Promise<T> {
+export async function withRateLimit<T>(call: () => Promise<T>, pauseMs = 700, tries = 4, wait: (ms: number) => Promise<unknown> = sleep): Promise<T> {
     for (let attempt = 1; ; attempt++) {
-        await sleep(pauseMs);
+        await wait(pauseMs);
         try {
             return await call();
         } catch (e) {
             const msg = (e as Error).message ?? '';
             if (!/\(429\)/.test(msg) || attempt >= tries) throw e;
             const secs = Number(msg.match(/retry in (\d+) seconds/)?.[1] ?? 60);
-            await sleep((secs + 2) * 1000);
+            await wait((secs + 2) * 1000);
         }
     }
 }
@@ -180,6 +191,7 @@ async function main() {
     const ledgerPath = arg('--ledger') ?? DEFAULT_LEDGER;
     const apply = process.argv.includes('--apply');
     fs.mkdirSync(out, { recursive: true });
+    assertFreshOut(out);
 
     // 1. Ledger clips, resolved to live TikTok URLs (Blotato GET /v2/posts/{uuid}).
     const clips = readLedgerClips(JSON.parse(fs.readFileSync(ledgerPath, 'utf8')));
@@ -241,8 +253,8 @@ async function main() {
         postResults: posts,
         clips: resolved,
     };
-    fs.writeFileSync(path.join(out, 'nec-tiktok-link-backup.json'), JSON.stringify(backup, null, 1));
-    fs.writeFileSync(path.join(out, 'nec-tiktok-link-plan.json'), JSON.stringify(plan, null, 1));
+    fs.writeFileSync(path.join(out, BACKUP_FILE), JSON.stringify(backup, null, 1));
+    fs.writeFileSync(path.join(out, PLAN_FILE), JSON.stringify(plan, null, 1));
     console.log(JSON.stringify({ ...plan, changes: undefined, postResults: undefined, clips: undefined }, null, 1));
 
     if (!apply) return;
