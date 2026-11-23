@@ -191,6 +191,12 @@ describe('quote_video caption source rule', () => {
         expect(user).toContain('CAPTION SOURCE RULE');
         expect(user).toContain('Add no chapter, book section, speech title');
     });
+    it('tells the model to keep a source qualifier such as "about" on every caption line', () => {
+        const { user } = buildContentPrompt(quotePersona, mockTopic);
+        expect(user).toContain('QUALIFIER RULE');
+        expect(user).toContain('captionShort included');
+        expect(user).toContain('about 115 students');
+    });
     it('leaves the 6-piece prompt without the rule', () => {
         const { user } = buildContentPrompt(mockPersona, mockTopic);
         expect(user).not.toContain('CAPTION SOURCE RULE');
