@@ -95,3 +95,14 @@ describe('quoteVideoScript', () => {
         expect(quoteVideoScript('Ella Baker: Rally', null)).toBeNull();
     });
 });
+
+describe('spoken record "of" the speaker (live 5167b467, pass 2)', () => {
+    it('names the speaker once for "Testimony of Bob Moses"', () => {
+        expect(quoteAttributionLine('Bob Moses', 'Testimony of Bob Moses, CORE Committee of Inquiry, Washington, D.C., May 1962', '1962'))
+            .toBe('— Testimony of Bob Moses, CORE Committee of Inquiry, Washington, D.C., May 1962, 1962');
+    });
+    it('keeps the speaker for a title about them ("The Autobiography of Ida B. Wells")', () => {
+        expect(quoteAttributionLine('Ida B. Wells', 'Crusade for Justice: The Autobiography of Ida B. Wells', '1892'))
+            .toBe('— Ida B. Wells, Crusade for Justice: The Autobiography of Ida B. Wells, 1892');
+    });
+});

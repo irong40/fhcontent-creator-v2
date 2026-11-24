@@ -48,6 +48,9 @@ export function nameTokens(s: string): string[] {
     return out;
 }
 
+/** Nouns for a record of the speaker's own words, so "<noun> of <name>" credits the quote to them. */
+const SPOKEN_RECORD = new Set(['testimony', 'speech', 'address', 'remarks', 'statement', 'sermon', 'words']);
+
 function startsAt(hay: string[], needle: string[], at: number): boolean {
     if (at + needle.length > hay.length) return false;
     for (let i = 0; i < needle.length; i++) if (hay[at + i] !== needle[i]) return false;
@@ -67,6 +70,9 @@ export function sourceNamesSpeaker(speaker: string, source: string): boolean {
         // 3. The name follows "by" ("speech by Martin Luther King").
         for (let i = 0; i < f.length - 1; i++) {
             if (f[i] === 'by' && startsAt(f, name, i + 1)) return true;
+            // 4. A spoken record "of" the speaker ("Testimony of Bob Moses"), live 5167b467.
+            //    Not "Life of"/"Autobiography of": those are titles about the person.
+            if (f[i] === 'of' && i > 0 && SPOKEN_RECORD.has(f[i - 1]) && startsAt(f, name, i + 1)) return true;
         }
     }
     return false;
