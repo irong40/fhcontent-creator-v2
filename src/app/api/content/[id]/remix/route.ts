@@ -11,6 +11,7 @@ import {
     remixThumbnailPromptResponseSchema,
     remixCarouselSlidesResponseSchema,
 } from '@/lib/schemas';
+import { quoteVideoScript } from '@/lib/quote-attribution';
 import { estimateClaudeCost } from '@/lib/utils';
 import type { TopicWithPersona, PieceType } from '@/types/database';
 import type { z } from 'zod';
@@ -114,7 +115,9 @@ export async function POST(
 
         switch (field) {
             case 'script':
-                updateData.script = parsed.script;
+                // A quote script is built from the topic so the speaker is named once (cron's line).
+                updateData.script =
+                    (pieceType === 'quote_video' && quoteVideoScript(topic.title, topic.historical_points)) || parsed.script;
                 // Script change invalidates audio + video
                 updateData.heygen_job_id = null;
                 updateData.heygen_status = null;

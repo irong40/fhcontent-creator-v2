@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { claude } from '@/lib/claude';
+import { quoteVideoScript } from '@/lib/quote-attribution';
 import { contentGenerateSchema, contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas';
 import { buildContentPrompt } from '@/lib/prompts';
 import { estimateClaudeCost } from '@/lib/utils';
@@ -93,7 +94,13 @@ export async function POST(request: NextRequest) {
 
         // Insert content pieces (6 standard, 1 for quote_video personas)
         const insertedPieces = [];
+        // A quote script is built from the topic, not taken from the model, so the speaker is
+        // named once (same line as the cron generator).
+        const builtQuoteScript = persona.content_format === 'quote_video'
+            ? quoteVideoScript(topic.title, topic.historical_points)
+            : null;
         for (const piece of parsed.data.pieces as GeneratedPiece[]) {
+            if (piece.pieceType === 'quote_video' && builtQuoteScript) piece.script = builtQuoteScript;
             const { data: inserted, error: insertError } = await supabase
                 .from('content_pieces')
                 .insert({
