@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildTopicPrompt, buildContentPrompt, buildRemixPrompt } from './prompts';
+import { QUALIFIER_RULE } from './sourced-topics';
 import type { RemixField } from './prompts';
 import type { Persona, Topic, PieceType } from '@/types/database';
 
@@ -190,6 +191,18 @@ describe('quote_video caption source rule', () => {
         const { user } = buildContentPrompt(quotePersona, mockTopic);
         expect(user).toContain('CAPTION SOURCE RULE');
         expect(user).toContain('Add no chapter, book section, speech title');
+    });
+    it('tells the model to keep a source qualifier such as "about" on every caption line', () => {
+        const { user } = buildContentPrompt(quotePersona, mockTopic);
+        expect(user).toContain(QUALIFIER_RULE);
+        expect(QUALIFIER_RULE).toContain('carry the same qualifier into every script, caption and title line that uses that number');
+        expect(QUALIFIER_RULE).toContain('Never turn an approximate figure into an exact count');
+    });
+    const sourcedTopic = { ...mockTopic, historical_points: [{ point: 1, claim: 'About 115 students walked out.', source: 'Archive', year: '1960', quote: 'About 115 students walked out of class.' }] } as unknown as Topic;
+    it('gives remix the same qualifier directive for caption fields', () => {
+        for (const field of ['caption_short', 'caption_long', 'script'] as const) {
+            expect(buildRemixPrompt(quotePersona, sourcedTopic, 'quote_video', field, 'v').user).toContain(QUALIFIER_RULE);
+        }
     });
     it('leaves the 6-piece prompt without the rule', () => {
         const { user } = buildContentPrompt(mockPersona, mockTopic);

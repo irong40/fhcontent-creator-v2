@@ -225,6 +225,8 @@ describe('the script prompt for a sourced topic', () => {
         expect(sourceDiscipline([{}, { quote: '' }, { quote: null }])).toBe('');
         expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('SOURCE DISCIPLINE');
         expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('Quotation marks are for exact source text only');
+        // Regenerate and remix build their prompts on this block, so the qualifier directive reaches them too.
+        expect(sourceDiscipline([{ quote: 'A passage.' }])).toContain('carry the same qualifier into every script, caption and title line that uses that number');
     });
 });
 

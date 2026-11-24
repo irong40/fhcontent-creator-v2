@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { callJudgeDirect, claimJudgeConfig, claimJudgePrompt, judgeClaims, hasSourcePassages, parseClaimVerdict, unsupportedSpecifics } from './claim-check';
+import { callJudgeDirect, claimJudgeConfig, claimJudgePrompt, judgeClaims, hasSourcePassages, parseClaimVerdict, unqualifiedNumbers, unsupportedSpecifics } from './claim-check';
 
 // The 2026-10-18 Lafayette point and the pieces that contradicted it.
 const lafayette = [{
@@ -28,6 +28,27 @@ describe('unsupportedSpecifics', () => {
     it('does not check a topic with no source passages', () => {
         expect(unsupportedSpecifics([{ claim: 'x', quote: null }], bad)).toEqual([]);
         expect(hasSourcePassages([{ claim: 'x', quote: null }])).toBe(false);
+    });
+});
+
+describe('unqualifiedNumbers (gate FAIL fh-647162ef)', () => {
+    const walkout = [{ claim: 'About 115 students walked out.', quote: 'About 115 students walked out of class.' }];
+    it('fails a caption that drops the source qualifier, through unsupportedSpecifics', () => {
+        expect(unsupportedSpecifics(walkout, [{ pieceType: 'quote_video', captionShort: 'Remember the 115 students.' }]))
+            .toEqual(['quote_video captionShort states "115" as exact, but the source gives it only with a qualifier (about, nearly, over...)']);
+    });
+    it('passes the same caption with the qualifier kept, or another approximating word', () => {
+        expect(unsupportedSpecifics(walkout, [{ pieceType: 'quote_video', captionShort: 'Remember the about 115 students.', captionLong: 'Nearly 115 walked out.' }])).toEqual([]);
+    });
+    it('reads script, title and slides as well as captions', () => {
+        expect(unqualifiedNumbers(walkout, [{ pieceType: 'short_1', script: '115 left.', title: 'The 115', carouselSlides: [{ text: '115 students.' }] }])).toHaveLength(3);
+    });
+    it('does not flag a number some passage also states bare', () => {
+        expect(unqualifiedNumbers([...walkout, { claim: 'Exactly 115 were named.', quote: 'The list names 115 students.' }], [{ pieceType: 'short_1', script: 'The 115 students.' }])).toEqual([]);
+    });
+    it('does not read "Moreover" or "awesome" as a qualifier', () => {
+        expect(unqualifiedNumbers([{ claim: 'x', quote: 'Moreover 40 came.' }], [{ pieceType: 'short_1', script: 'The 40 came.' }])).toEqual([]);
+        expect(unqualifiedNumbers([{ claim: 'x', quote: 'Over 40 came.' }], [{ pieceType: 'short_1', script: 'The awesome 40 came.' }])).toHaveLength(1);
     });
 });
 
