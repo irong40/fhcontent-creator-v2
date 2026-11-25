@@ -4,6 +4,7 @@ import { claude } from '@/lib/claude';
 import { buildContentPrompt } from '@/lib/prompts';
 import { regeneratePieceResponseSchema } from '@/lib/schemas';
 import { estimateClaudeCost } from '@/lib/utils';
+import { quoteVideoScript } from '@/lib/quote-attribution';
 import { pointLines, sourceDiscipline, type PointLine } from '@/lib/sourced-topics';
 import type { TopicWithPersona, PieceType } from '@/types/database';
 
@@ -110,7 +111,8 @@ Provide a fresh, improved version. Output JSON:
 
         // Update the piece with new content
         const updateData: Record<string, unknown> = {
-            script: parsed.script,
+            // A quote script is built from the topic so the speaker is named once (cron's line).
+            script: (pieceType === 'quote_video' && quoteVideoScript(topic.title, topic.historical_points)) || parsed.script,
             caption_long: parsed.captionLong,
             caption_short: parsed.captionShort,
             thumbnail_prompt: parsed.thumbnailPrompt || null,

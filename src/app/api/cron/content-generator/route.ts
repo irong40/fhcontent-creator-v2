@@ -7,6 +7,7 @@ import { contentResponseSchema, quoteContentResponseSchema } from '@/lib/schemas
 import { buildContentPrompt } from '@/lib/prompts';
 import { sourcedQuoteFaults, UNSOURCED_QUOTE_ERROR, rejectedSpans, closestSourceSentence, unquoteUnsourced } from '@/lib/quote-check';
 import { UNSUPPORTED_CLAIM_ERROR, callJudge, hasSourcePassages, judgeClaims, unsupportedSpecifics } from '@/lib/claim-check';
+import { quoteAttributionLine } from '@/lib/quote-attribution';
 import { estimateClaudeCost } from '@/lib/utils';
 import { notifyError } from '@/lib/notifications';
 import { recordTrail, topicCorrelationId } from '@/lib/judge-trail';
@@ -185,7 +186,7 @@ A PREVIOUS DRAFT WAS REJECTED. ${priorClaimFault}. Write no number, year, date o
                     const points = topic.historical_points as HistoricalPoint[];
                     const quote = points[0];
                     const figureName = topic.title.split(':')[0].trim();
-                    const script = `${quote.claim}\n\n— ${figureName}, ${quote.source}, ${quote.year}`;
+                    const script = `${quote.claim}\n\n${quoteAttributionLine(figureName, quote.source, quote.year)}`;
 
                     const captionsSystem = `${system}
 
